@@ -23,8 +23,8 @@ pub use directory_browser::{
 };
 pub use empty::EmptyState;
 pub use entity::{
-    ENTITY_TITLE_FIELDS, EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer,
-    EntityList, EntityOpenButton, EntityRenderOptions, EntityTableRow, entity_title,
+    EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList,
+    EntityOpenButton, EntityRenderOptions, EntityTableRow,
 };
 pub use entity_autocomplete::{EntityAutocomplete, EntityAutocompleteProps};
 pub use error::{ErrorState, ErrorView};

@@ -10,7 +10,7 @@ use crate::{
     use_active_scope_id, use_rpc_client,
 };
 
-use super::card::{EntityLink, entity_title};
+use super::card::EntityLink;
 
 const PAGE_SIZE: usize = 10;
 const RELATION_EDGES_COLLECTION: &str = "__semantic.relationship_edges";
@@ -183,7 +183,7 @@ fn ChildRow(object: Object, collection: Option<String>) -> Element {
         .object_class(&object)
         .map(|class| class.meta.title.as_deref().unwrap_or(&class.name))
         .or_else(|| object.get("type").and_then(Value::as_str));
-    let title = entity_title(&object, Some(id), class_name);
+    let title = catalog.entity_title(&object);
     let show_id = title != id;
     rsx! {
         div { class: "semantic-entity-associations__item-main",

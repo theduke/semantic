@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::attr::{ATTR_TITLE, ATTR_URL};
-use semantic_data::filestore::{ATTR_FILE_FILENAME, ATTR_FILE_MIME_TYPE};
+use semantic_data::attr::ATTR_URL;
+use semantic_data::filestore::ATTR_FILE_MIME_TYPE;
 use semantic_data::value::{Object, Value};
 
 use crate::ui_catalog::{
@@ -69,11 +69,10 @@ pub fn register_default_playback_renderers(catalog: &mut UiCatalog) {
             media_kind,
             renderer: Rc::new(move |object, options| {
                 let source = media_source(&object, &prefix);
-                let title = media_title(&object);
                 match media_kind {
-                    MediaKind::Image => rsx! { ImagePlayback { source, title, options } },
+                    MediaKind::Image => rsx! { ImagePlayback { source, object, options } },
                     MediaKind::Audio | MediaKind::Video => rsx! {
-                        TimedMediaPlayback { source, title, media_kind, options }
+                        TimedMediaPlayback { source, object, media_kind, options }
                     },
                     _ => rsx! {},
                 }
@@ -85,9 +84,10 @@ pub fn register_default_playback_renderers(catalog: &mut UiCatalog) {
 #[component]
 fn ImagePlayback(
     source: Option<String>,
-    title: String,
+    object: Object,
     options: MediaPlaybackRenderOptions,
 ) -> Element {
+    let title = use_ui_catalog().entity_title(&object);
     let mounted_options = options.clone();
     use_effect(move || emit_playback(&mounted_options, MediaPlaybackEventKind::Mounted));
     let source_missing = source.is_none();
@@ -135,10 +135,11 @@ fn ImagePlayback(
 #[component]
 fn TimedMediaPlayback(
     source: Option<String>,
-    title: String,
+    object: Object,
     media_kind: MediaKind,
     options: MediaPlaybackRenderOptions,
 ) -> Element {
+    let title = use_ui_catalog().entity_title(&object);
     let element_id = format!("semantic-playback-media-{}", options.session_id);
     let source_missing = source.is_none();
     let missing_options = options.clone();
@@ -365,25 +366,6 @@ fn media_source(object: &Object, file_api_prefix: &str) -> Option<String> {
         .get("id")
         .and_then(Value::as_str)
         .map(|id| format!("{file_api_prefix}/{id}"))
-}
-
-fn media_title(object: &Object) -> String {
-    for key in ["title", ATTR_TITLE, "filename", ATTR_FILE_FILENAME] {
-        if let Some(value) = object
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            return value.to_string();
-        }
-    }
-    format!(
-        "Media item {}",
-        object
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-    )
 }
 
 #[cfg(test)]

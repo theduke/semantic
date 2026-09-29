@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{File, Pencil};
-use semantic_data::filestore::{ATTR_FILE_FILENAME, FILE_CLASS_ID};
+use semantic_data::filestore::FILE_CLASS_ID;
 use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
 
@@ -13,19 +13,6 @@ use crate::ui_catalog::{
 };
 
 use super::associations::EntityAssociations;
-
-/// Object fields considered, in priority order, when deriving an entity title.
-pub const ENTITY_TITLE_FIELDS: [&str; 9] = [
-    "semantic:title",
-    "semantic:base:label:name",
-    ATTR_FILE_FILENAME,
-    "title",
-    "name",
-    "display_name",
-    "semantic:base:person:display_name",
-    "semantic:base:file:filename",
-    "filename",
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityDisplayRenderer {
@@ -68,7 +55,7 @@ pub fn EntityCard(
             .clone()
             .unwrap_or_else(|| class.name.clone())
     });
-    let title = entity_title(&object, id.as_deref(), class_name.as_deref());
+    let title = catalog.entity_title(&object);
     let show_id = !compact_preview && id.as_deref().is_some_and(|id| id != title);
     let target = id
         .clone()
@@ -273,7 +260,7 @@ pub fn EntityTableRow(object: Object, collection: Option<String>) -> Element {
             .clone()
             .unwrap_or_else(|| class.name.clone())
     });
-    let title = entity_title(&object, id.as_deref(), class_name.as_deref());
+    let title = catalog.entity_title(&object);
     let type_label = class_name.unwrap_or_else(|| {
         object
             .get("type")
@@ -496,17 +483,6 @@ fn object_id(object: &Object) -> Option<String> {
     object.get("id").and_then(Value::as_str).map(str::to_string)
 }
 
-pub fn entity_title(object: &Object, id: Option<&str>, class_name: Option<&str>) -> String {
-    for field in ENTITY_TITLE_FIELDS {
-        if let Some(title) = object.get(field).and_then(Value::as_str)
-            && !title.trim().is_empty()
-        {
-            return title.to_string();
-        }
-    }
-    id.or(class_name).unwrap_or("Entity").to_string()
-}
-
 fn value_preview(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
@@ -530,29 +506,9 @@ fn value_preview(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::{
-        filestore::{ATTR_FILE_FILENAME, FILE_CLASS_ID},
-        value::{Object, Value},
-    };
+    use semantic_data::value::{Object, Value};
 
-    use super::{entity_excerpt, entity_title};
-
-    #[test]
-    fn entity_title_prefers_semantic_identity_fields_and_falls_back_to_id() {
-        let mut object = Object::new();
-        object.insert("filename", Value::String("photo.jpg".to_string()));
-        assert_eq!(entity_title(&object, Some("file-1"), None), "photo.jpg");
-
-        object.insert("name", Value::String("Summer photo".to_string()));
-        assert_eq!(entity_title(&object, Some("file-1"), None), "Summer photo");
-
-        object.insert("semantic:title", Value::String("Featured".to_string()));
-        assert_eq!(entity_title(&object, Some("file-1"), None), "Featured");
-        assert_eq!(
-            entity_title(&Object::new(), Some("entity-1"), None),
-            "entity-1"
-        );
-    }
+    use super::entity_excerpt;
 
     #[test]
     fn summary_uses_document_content_without_repeating_title() {
@@ -567,39 +523,5 @@ mod tests {
         );
         object.insert("note_content", Value::Null);
         assert_eq!(entity_excerpt(&object, "Roadmap"), None);
-    }
-
-    #[test]
-    fn file_title_prefers_explicit_semantic_title_over_canonical_filename() {
-        let mut object = Object::new();
-        object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
-        object.insert(
-            "semantic:title",
-            Value::String("Recorded interview".to_string()),
-        );
-        object.insert(
-            ATTR_FILE_FILENAME,
-            Value::String("recording.wav".to_string()),
-        );
-
-        assert_eq!(
-            entity_title(&object, Some("file-id"), Some("File")),
-            "Recorded interview"
-        );
-    }
-
-    #[test]
-    fn file_title_falls_back_to_the_canonical_filename_attribute() {
-        let mut object = Object::new();
-        object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
-        object.insert(
-            ATTR_FILE_FILENAME,
-            Value::String("recording.wav".to_string()),
-        );
-
-        assert_eq!(
-            entity_title(&object, Some("file-id"), Some("File")),
-            "recording.wav"
-        );
     }
 }

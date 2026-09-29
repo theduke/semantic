@@ -42,6 +42,29 @@ struct UiCatalogInner {
 }
 
 impl UiCatalog {
+    /// Catalog without any schema or default renderers, for unit tests.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self::builder(CatalogStorageSnapshot {
+            attributes: Vec::new(),
+            type_defs: Vec::new(),
+            record_types: Vec::new(),
+            classes: Vec::new(),
+            collections: Vec::new(),
+            indexes: Vec::new(),
+            relationships: Vec::new(),
+            packages: Vec::new(),
+            applied_migrations: Vec::new(),
+            next_field_id: 0,
+            auto_index_enabled: false,
+        })
+        .with_config(UiCatalogConfig {
+            register_default_renderers: false,
+            register_default_form_renderers: false,
+        })
+        .build()
+    }
+
     pub fn builder(snapshot: CatalogStorageSnapshot) -> UiCatalogBuilder {
         UiCatalogBuilder::new(snapshot)
     }

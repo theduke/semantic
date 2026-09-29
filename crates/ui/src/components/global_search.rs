@@ -10,8 +10,8 @@ use semantic_data::{
 };
 use semantic_rpc::RpcClient;
 use semantic_ui_core::{
-    ENTITY_TITLE_FIELDS, EntityTarget, UiCatalog, entity_title, use_active_scope_id,
-    use_rpc_client, use_ui_catalog,
+    ENTITY_TITLE_FIELDS, EntityTarget, UiCatalog, use_active_scope_id, use_rpc_client,
+    use_ui_catalog,
 };
 
 use super::{IconButton, IconButtonSize};
@@ -518,7 +518,7 @@ async fn search_entities(
                         .map(str::to_string)
                 })
                 .unwrap_or_else(|| "Unclassified".to_string());
-            let title = entity_title(&object, Some(&id), Some(&class_name));
+            let title = catalog.entity_title(&object);
             results.push(SearchResult {
                 target: EntityTarget::new(
                     (collection != DEFAULT_COLLECTION).then_some(collection.clone()),

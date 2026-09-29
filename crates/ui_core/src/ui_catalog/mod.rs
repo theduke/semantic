@@ -2,6 +2,7 @@ mod catalog;
 pub(crate) mod defaults;
 mod entity_actions;
 mod entity_navigation;
+mod entity_title;
 mod error;
 mod files;
 mod lookup;
@@ -17,6 +18,7 @@ pub use entity_actions::{EntityActionContext, EntityActionPlacement, EntityActio
 pub use entity_navigation::{
     EntityHrefBuilder, EntityLinkRenderer, EntityNavigation, EntityOpenHandler, EntityTarget,
 };
+pub use entity_title::{ENTITY_TITLE_FIELDS, UNKNOWN_ENTITY_TITLE};
 pub use error::UiCatalogError;
 pub use media::{
     MediaHandle, MediaHandleRegistration, MediaKind, MediaPlaybackEvent, MediaPlaybackEventKind,

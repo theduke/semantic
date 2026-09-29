@@ -12,6 +12,7 @@ use futures::StreamExt;
 use crate::{
     components::{EntityCard, EntityDisplayRenderer, EntityRenderOptions},
     context::{use_active_scope_id, use_rpc_client},
+    ui_catalog::{UiCatalog, use_ui_catalog, use_ui_catalog_context},
 };
 
 use super::{
@@ -185,6 +186,7 @@ enum DirectoryBrowserCommand {
 
 #[derive(Clone, Copy)]
 struct DirectoryBrowserSignals {
+    catalog: Signal<Option<UiCatalog>>,
     current_root: Signal<Option<String>>,
     hierarchy: Signal<bool>,
     location_kind: Signal<DirectoryLocationKind>,
@@ -1259,6 +1261,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
     let tree_state = use_signal(|| LoadState::<Vec<DirectoryTreeRow>>::Loading);
 
     let state = DirectoryBrowserSignals {
+        catalog: use_ui_catalog_context().catalog_signal(),
         current_root,
         hierarchy,
         location_kind,
@@ -2840,7 +2843,9 @@ fn DirectoryOperationDialog(
         Some(DirectoryDialog::AddExisting { target }) => Some(target.directory_id.clone()),
         _ => None,
     };
+    let catalog = use_ui_catalog();
     let options = use_resource(move || {
+        let catalog = catalog.clone();
         let client = client.clone();
         let scope_id = scope_id.clone();
         let parent = add_parent.clone();
@@ -2850,7 +2855,7 @@ fn DirectoryOperationDialog(
             let Some(parent) = parent else {
                 return Ok(Vec::new());
             };
-            load_addable_entity_options(client, scope_id, parent, search, 50).await
+            load_addable_entity_options(catalog, client, scope_id, parent, search, 50).await
         }
     });
     let options_state = options.read().clone();
@@ -3251,6 +3256,10 @@ async fn reload_current_content(
         );
         return;
     };
+    let Some(catalog) = state.catalog.peek().clone() else {
+        error!("directory browser content reload skipped because the UI catalog is not loaded");
+        return;
+    };
     info!(
         root = (state.current_root)().as_deref(),
         page = (state.page)(),
@@ -3268,6 +3277,7 @@ async fn reload_current_content(
     let hierarchy = (state.hierarchy)();
     let location_kind = (state.location_kind)();
     spawn(reload_content(
+        catalog,
         client,
         scope_id,
         root,
@@ -3292,6 +3302,10 @@ async fn reload_current_tree(
         error!("directory browser tree reload skipped because no active RPC client is available");
         return;
     };
+    let Some(catalog) = state.catalog.peek().clone() else {
+        error!("directory browser tree reload skipped because the UI catalog is not loaded");
+        return;
+    };
     info!(
         expanded_count = (state.expanded_tree)().len(),
         scope_id = scope_id.as_deref(),
@@ -3302,6 +3316,7 @@ async fn reload_current_tree(
     let expanded = (state.expanded_tree)();
     let hierarchy = (state.hierarchy)();
     spawn(reload_tree(
+        catalog,
         client,
         scope_id,
         expanded,
@@ -3325,6 +3340,7 @@ async fn reload_after_mutation(
 }
 
 async fn reload_content(
+    catalog: UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     root: Option<String>,
@@ -3348,6 +3364,7 @@ async fn reload_content(
     );
     content_loading.set(true);
     let next = match load_directory_page(
+        catalog,
         client,
         scope_id,
         root,
@@ -3388,6 +3405,7 @@ async fn reload_content(
 }
 
 async fn reload_tree(
+    catalog: UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     expanded: BTreeSet<String>,
@@ -3403,7 +3421,7 @@ async fn reload_tree(
         "directory browser loading tree"
     );
     tree_loading.set(true);
-    let next = match load_tree_rows(client, scope_id, expanded, hierarchy).await {
+    let next = match load_tree_rows(catalog, client, scope_id, expanded, hierarchy).await {
         Ok(rows) => {
             info!(row_count = rows.len(), "directory browser tree loaded");
             LoadState::Ready(rows)

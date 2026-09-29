@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{ChevronDown, ChevronRight, FileText, Folder};
 
 use crate::context::{use_active_scope_id, use_rpc_client};
+use crate::ui_catalog::use_ui_catalog;
 
 use super::{data::load_file_tree_rows, types::DirectoryTreeRow};
 
@@ -44,10 +45,12 @@ pub fn FileTreePicker(props: FileTreePickerProps) -> Element {
     let mut filter = use_signal(String::new);
     let expanded = use_signal(BTreeSet::<String>::new);
     let show_files = props.show_files;
+    let catalog = use_ui_catalog();
     let rows = use_resource(use_reactive(
         (&client, &scope_id, &show_files),
-        move |(client, scope_id, show_files)| async move {
-            load_file_tree_rows(client, scope_id, show_files).await
+        move |(client, scope_id, show_files)| {
+            let catalog = catalog.clone();
+            async move { load_file_tree_rows(catalog, client, scope_id, show_files).await }
         },
     ));
     let rows = rows.read().clone();

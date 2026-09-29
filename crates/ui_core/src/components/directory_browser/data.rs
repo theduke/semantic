@@ -11,6 +11,8 @@ use semantic_data::bundles::directory::{
 };
 use semantic_data::value::{DateTime, Object, Value};
 
+use crate::ui_catalog::UiCatalog;
+
 use super::{
     queries::{
         ENTITIES_COLLECTION, addable_entities_query, child_directories_query, child_ids_query,
@@ -37,6 +39,7 @@ pub(super) struct UnlinkOutcome {
 }
 
 pub(super) async fn load_directory_page(
+    catalog: UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     root: Option<String>,
@@ -64,13 +67,13 @@ pub(super) async fn load_directory_page(
         }
         let breadcrumbs = match location_kind {
             DirectoryLocationKind::Directory => {
-                load_breadcrumbs(client.clone(), scope_id.clone(), root).await?
+                load_breadcrumbs(&catalog, client.clone(), scope_id.clone(), root).await?
             }
             DirectoryLocationKind::SemanticParent => {
-                load_semantic_breadcrumbs(client.clone(), scope_id.clone(), root).await?
+                load_semantic_breadcrumbs(&catalog, client.clone(), scope_id.clone(), root).await?
             }
         };
-        (breadcrumbs, Some(row_to_item(root_object)))
+        (breadcrumbs, Some(row_to_item(&catalog, root_object)))
     } else {
         (
             BreadcrumbLoad {
@@ -112,7 +115,7 @@ pub(super) async fn load_directory_page(
             .take(page_size + 1)
             .collect::<Vec<_>>()
     };
-    let (mut items, has_next) = page_items_from_rows(rows, page_size);
+    let (mut items, has_next) = page_items_from_rows(&catalog, rows, page_size);
     if hierarchy {
         classify_semantic_parents(client, scope_id, &mut items).await?;
     }
@@ -129,6 +132,7 @@ pub(super) async fn load_directory_page(
 }
 
 pub(super) async fn load_tree_rows(
+    catalog: UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     expanded: BTreeSet<String>,
@@ -145,13 +149,17 @@ pub(super) async fn load_tree_rows(
     } else {
         load_root_directory_rows(client.clone(), scope_id.clone()).await?
     };
-    let mut roots = roots.into_iter().map(row_to_item).collect::<Vec<_>>();
+    let mut roots = roots
+        .into_iter()
+        .map(|row| row_to_item(&catalog, row))
+        .collect::<Vec<_>>();
     if hierarchy {
         classify_semantic_parents(client.clone(), scope_id.clone(), &mut roots).await?;
     }
     let mut path = BTreeSet::new();
     for item in roots.into_iter().take(DEFAULT_TREE_LIMIT) {
         push_tree_row(
+            &catalog,
             &mut rows,
             client.clone(),
             scope_id.clone(),
@@ -172,6 +180,7 @@ pub(super) async fn load_tree_rows(
 }
 
 pub(super) async fn load_file_tree_rows(
+    catalog: UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     show_files: bool,
@@ -179,13 +188,16 @@ pub(super) async fn load_file_tree_rows(
     let directory_rows = run_select_query(client.clone(), scope_id.clone(), root_query()).await?;
     let mut items = directory_rows
         .into_iter()
-        .map(row_to_item)
+        .map(|row| row_to_item(&catalog, row))
         .map(|item| (item.id.clone(), item))
         .collect::<BTreeMap<_, _>>();
     if show_files {
         let linked_items =
             run_select_query(client.clone(), scope_id.clone(), file_tree_items_query()).await?;
-        for item in linked_items.into_iter().map(row_to_item) {
+        for item in linked_items
+            .into_iter()
+            .map(|row| row_to_item(&catalog, row))
+        {
             items.entry(item.id.clone()).or_insert(item);
         }
     }
@@ -697,6 +709,7 @@ pub(super) async fn rename_directory_item(
 }
 
 pub(super) async fn load_addable_entity_options(
+    catalog: UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     parent_id: String,
@@ -710,7 +723,10 @@ pub(super) async fn load_addable_entity_options(
         addable_entities_query(&parent_id, &search, limit),
     )
     .await?;
-    Ok(rows.into_iter().map(row_to_item).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| row_to_item(&catalog, row))
+        .collect())
 }
 
 pub(super) async fn directory_parent_count(
@@ -795,6 +811,7 @@ pub(super) async fn next_directory_order(
 }
 
 async fn push_tree_row(
+    catalog: &UiCatalog,
     rows: &mut Vec<DirectoryTreeRow>,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
@@ -825,7 +842,10 @@ async fn push_tree_row(
         }
     };
     let children = run_select_query(client.clone(), scope_id.clone(), children_query).await?;
-    let mut children = children.into_iter().map(row_to_item).collect::<Vec<_>>();
+    let mut children = children
+        .into_iter()
+        .map(|row| row_to_item(catalog, row))
+        .collect::<Vec<_>>();
     if hierarchy {
         classify_semantic_parents(client.clone(), scope_id.clone(), &mut children).await?;
     }
@@ -841,6 +861,7 @@ async fn push_tree_row(
             DirectoryLocationKind::Directory
         };
         Box::pin(push_tree_row(
+            catalog,
             rows,
             client.clone(),
             scope_id.clone(),
@@ -1257,6 +1278,7 @@ struct BreadcrumbLoad {
 }
 
 async fn load_breadcrumbs(
+    catalog: &UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     root: &str,
@@ -1295,7 +1317,7 @@ async fn load_breadcrumbs(
             continue;
         }
         breadcrumbs.push(DirectoryBreadcrumb {
-            title: object_title(&object, &id),
+            title: catalog.entity_title(&object),
             id,
             kind: DirectoryLocationKind::Directory,
         });
@@ -1304,6 +1326,7 @@ async fn load_breadcrumbs(
 }
 
 async fn load_semantic_breadcrumbs(
+    catalog: &UiCatalog,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     root: &str,
@@ -1342,7 +1365,7 @@ async fn load_semantic_breadcrumbs(
         breadcrumbs: objects
             .into_iter()
             .map(|(id, object)| DirectoryBreadcrumb {
-                title: object_title(&object, &id),
+                title: catalog.entity_title(&object),
                 id,
                 kind: DirectoryLocationKind::SemanticParent,
             })
@@ -1440,6 +1463,7 @@ async fn run_select_query(
 }
 
 pub(super) fn page_items_from_rows(
+    catalog: &UiCatalog,
     rows: Vec<Object>,
     page_size: usize,
 ) -> (Vec<DirectoryBrowseItem>, bool) {
@@ -1447,12 +1471,12 @@ pub(super) fn page_items_from_rows(
     let items = rows
         .into_iter()
         .take(page_size)
-        .map(row_to_item)
+        .map(|row| row_to_item(catalog, row))
         .collect::<Vec<_>>();
     (items, has_next)
 }
 
-fn row_to_item(row: Object) -> DirectoryBrowseItem {
+fn row_to_item(catalog: &UiCatalog, row: Object) -> DirectoryBrowseItem {
     let id = row
         .get("id")
         .and_then(Value::as_str)
@@ -1460,7 +1484,7 @@ fn row_to_item(row: Object) -> DirectoryBrowseItem {
         .to_string();
     let type_id = row.get("type").and_then(Value::as_str).map(str::to_string);
     DirectoryBrowseItem {
-        title: object_title(&row, &id),
+        title: catalog.entity_title(&row),
         is_directory: is_directory_object(&row),
         has_semantic_children: false,
         order: value_as_u64(
@@ -1482,12 +1506,6 @@ pub(super) fn is_directory_object(object: &Object) -> bool {
         .get("type")
         .and_then(Value::as_str)
         .is_some_and(|type_id| type_id == DIRECTORY_CLASS_ID || type_id == "Directory")
-}
-
-fn object_title(object: &Object, fallback: &str) -> String {
-    object_string(object, ATTR_TITLE)
-        .unwrap_or(fallback)
-        .to_string()
 }
 
 fn object_string<'a>(object: &'a Object, key: &str) -> Option<&'a str> {
@@ -1539,7 +1557,7 @@ mod tests {
     #[test]
     fn page_items_detects_next_page() {
         let rows = vec![Object::new(), Object::new(), Object::new()];
-        let (items, has_next) = page_items_from_rows(rows, 2);
+        let (items, has_next) = page_items_from_rows(&UiCatalog::empty(), rows, 2);
         assert_eq!(items.len(), 2);
         assert!(has_next);
     }
@@ -1563,7 +1581,7 @@ mod tests {
             Value::String("canonical-created".to_string()),
         );
 
-        let item = row_to_item(object);
+        let item = row_to_item(&UiCatalog::empty(), object);
 
         assert_eq!(item.title, "Canonical Title");
         assert_eq!(item.created_at.as_deref(), Some("canonical-created"));
@@ -1573,9 +1591,9 @@ mod tests {
         plain_only.insert("title", Value::String("Plain Title".to_string()));
         plain_only.insert("created_at", Value::String("plain-created".to_string()));
 
-        let item = row_to_item(plain_only);
+        let item = row_to_item(&UiCatalog::empty(), plain_only);
 
-        assert_eq!(item.title, "item-2");
+        assert_eq!(item.title, "Plain Title");
         assert_eq!(item.created_at, None);
     }
 
