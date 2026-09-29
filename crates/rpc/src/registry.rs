@@ -40,6 +40,11 @@ impl<Ctx, E> RpcRegistry<Ctx, E> {
         Ok(())
     }
 
+    /// Registered commands, ordered by name.
+    pub fn commands(&self) -> impl Iterator<Item = &dyn DynCommand<Ctx, E>> + '_ {
+        self.commands.values().map(|command| command.as_ref())
+    }
+
     pub fn get(&self, command: &str) -> Option<&dyn DynCommand<Ctx, E>> {
         self.commands.get(command).map(|command| command.as_ref())
     }
@@ -149,6 +154,17 @@ mod tests {
 
         assert_eq!(response.id, 7);
         assert_eq!(response.result, RpcResult::Ok(Value::U8(42)));
+    }
+
+    #[test]
+    fn registry_enumerates_commands_by_name() {
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+        registry.register(FailCommand).expect("register command");
+        registry.register(EchoCommand).expect("register command");
+
+        let names: Vec<_> = registry.commands().map(|command| command.name()).collect();
+
+        assert_eq!(names, ["test.echo", "test.fail"]);
     }
 
     #[tokio::test]
