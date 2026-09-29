@@ -101,8 +101,8 @@ async fn batch_returning_http_modes_errors_size_and_persistence() {
             .unwrap();
         let server = SemanticServer::new(app.clone());
         let initial = output(batch(&server, vec![operation("upsert", "a", "one")], None).await);
-        assert!(initial.contains_key("semantic:db:batch:dataset"));
-        assert!(!initial.contains_key("semantic:db:batch:changes"));
+        assert!(initial.contains_key("dataset"));
+        assert!(!initial.contains_key("changes"));
         let compact = output(
             batch(
                 &server,
@@ -144,7 +144,7 @@ async fn batch_returning_http_modes_errors_size_and_persistence() {
             .await,
         );
         assert_eq!(stats.len(), 1);
-        assert!(stats.contains_key("semantic:db:batch:stats"));
+        assert!(stats.contains_key("stats"));
         let projected = output(
             batch(
                 &server,
@@ -157,8 +157,8 @@ async fn batch_returning_http_modes_errors_size_and_persistence() {
             )
             .await,
         );
-        assert!(!projected.contains_key("semantic:db:batch:dataset"));
-        let Some(Value::List(rows)) = projected.get("semantic:db:batch:rows") else {
+        assert!(!projected.contains_key("dataset"));
+        let Some(Value::List(rows)) = projected.get("rows") else {
             panic!("rows")
         };
         assert_eq!(rows.len(), 2);
@@ -167,7 +167,7 @@ async fn batch_returning_http_modes_errors_size_and_persistence() {
         };
         assert_eq!(first.get("id"), Some(&Value::String("a".into())));
         assert_eq!(
-            first.get("semantic:db:entity:object"),
+            first.get("object"),
             Some(&Value::Object(Object::from_iter([(
                 "batch_label".into(),
                 Value::String("final".into())
@@ -214,16 +214,13 @@ async fn batch_returning_http_modes_errors_size_and_persistence() {
             )
             .await,
         );
-        let Some(Value::List(rows)) = empty.get("semantic:db:batch:rows") else {
+        let Some(Value::List(rows)) = empty.get("rows") else {
             panic!("rows")
         };
         let Value::Object(row) = &rows[0] else {
             panic!("row")
         };
-        assert_eq!(
-            row.get("semantic:db:entity:object"),
-            Some(&Value::Object(Object::new()))
-        );
+        assert_eq!(row.get("object"), Some(&Value::Object(Object::new())));
         app.shutdown().await.unwrap();
     }
     let db = Db::new(semantic_db_redb::open_backend(&path, DbOpenMode::OpenExisting).unwrap());

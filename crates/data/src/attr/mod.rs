@@ -96,9 +96,15 @@ pub trait AttrDescriptorConst: AttrDescriptor {
     type Value: SemanticType;
 }
 
+/// Describes a class; implemented by `#[derive(Class)]`.
+pub trait ClassDescriptorConst {
+    /// The class id, like `semantic:jobs:job`.
+    const ID: &'static str;
+}
+
 /// Declares a unit marker struct for an attribute, implementing
-/// [`AttrDescriptor`] and [`AttrDescriptorConst`]. Fields of derived structs
-/// refer to it with `#[semantic(attr = Marker)]`.
+/// [`AttrDescriptor`] and [`AttrDescriptorConst`]. Fields of derived class
+/// structs refer to it with `#[semantic(attr = Marker)]`.
 ///
 /// ```
 /// semantic_data::attr!(

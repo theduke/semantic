@@ -134,7 +134,7 @@ async fn persisted_file_locator(server: &SemanticServer, id: &str) -> String {
         panic!("expected persisted file record: {:?}", reply.result);
     };
     assert_eq!(record.get("id").and_then(Value::as_str), Some(id));
-    let Some(Value::Object(object)) = record.get("semantic:db:entity:object") else {
+    let Some(Value::Object(object)) = record.get("object") else {
         panic!("expected file object");
     };
     object

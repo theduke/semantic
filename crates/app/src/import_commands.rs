@@ -3,13 +3,12 @@ use crate::command::ScopeParams;
 use crate::{AppError, AppRequestContext, DbScopeId};
 use semantic_data::{
     Object, Value,
-    attr::AttrId,
     import::{Operation, ProbeResult, SourceRequest},
     plugin::PluginActivation,
     value::{FromValue, IntoValue, Null, SemanticType},
 };
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{AttrScopeId, CommandDef, RpcCommand, RpcCommandSpec};
+use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
 use std::{future::Future, pin::Pin};
 
 pub(crate) fn register(
@@ -166,9 +165,7 @@ struct Configure;
 struct Uninstall;
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:plugin:configure")]
 struct ConfigurePayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     /// The plugin activation, in the `PluginActivation` value encoding.
     activation: Value,
@@ -176,10 +173,8 @@ struct ConfigurePayload {
 
 #[derive(SemanticType, IntoValue, FromValue)]
 struct UninstallPayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     /// The plugin id.
-    #[semantic(attr = AttrId)]
     id: String,
 }
 

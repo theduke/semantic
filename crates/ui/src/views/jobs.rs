@@ -1,11 +1,9 @@
 use dioxus::prelude::*;
 use semantic_data::{
     Object, Value,
-    attr::{AttrDescriptorConst, AttrId},
     jobs::*,
     value::{FromValue, IntoValue},
 };
-use semantic_rpc_core::AttrScopeId;
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 use std::time::Duration;
 
@@ -43,7 +41,7 @@ fn JobsView(scope: Option<String>) -> Element {
         async move {
             let mut payload = Object::new();
             if let Some(scope) = &scope {
-                payload.insert(AttrScopeId::ID, scope.clone());
+                payload.insert("scope_id", scope.clone());
             }
             if let Ok(kinds) = rpc
                 .invoke_value("semantic.jobs.kinds", Value::Object(payload))
@@ -61,7 +59,7 @@ fn JobsView(scope: Option<String>) -> Element {
             loop {
                 let mut payload = query.clone().into_value();
                 if let (Some(scope), Value::Object(payload)) = (&scope, &mut payload) {
-                    payload.insert(AttrScopeId::ID, scope.clone());
+                    payload.insert("scope_id", scope.clone());
                 }
                 match rpc.invoke_value("semantic.jobs.list", payload).await {
                     Ok(value) => match decode_page(value) {
@@ -83,10 +81,10 @@ fn JobsView(scope: Option<String>) -> Element {
         spawn(async move {
             let mut payload = Object::new();
             if let Some(scope) = scope {
-                payload.insert(AttrScopeId::ID, scope);
+                payload.insert("scope_id", scope);
             }
             if let Some(id) = id {
-                payload.insert(AttrId::ID, id);
+                payload.insert("id", id);
             }
             match rpc.invoke_value(command, Value::Object(payload)).await {
                 Ok(_) => refresh += 1,

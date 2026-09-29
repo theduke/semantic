@@ -3,12 +3,14 @@
 //! [`SemanticType`], [`IntoValue`] and [`FromValue`] can be derived with the
 //! macros of the same name (see `semantic_macros`).
 //!
-//! Derived records are keyed by attribute ids, so every field needs an attribute
-//! marker (see [`crate::attr!`]) or a container namespace:
+//! Derived structs are records keyed by their plain field names. Structs deriving
+//! `Class` are entities, keyed by attribute ids like DB query results: fields
+//! are keyed `<class id>:<name>`, or by an attribute marker (see
+//! [`crate::attr!`]), and the built-in `type` is the class id.
 //!
 //! ```
-//! #[derive(semantic_data::IntoValue)]
-//! #[semantic(namespace = "example:item")]
+//! #[derive(semantic_data::Class)]
+//! #[semantic(id = "example:item")]
 //! struct Item {
 //!     #[semantic(attr = semantic_data::attr::AttrId)]
 //!     id: String,
@@ -17,8 +19,21 @@
 //! }
 //! ```
 //!
+//! Records have no attribute ids, so `attr` markers are rejected outside classes:
+//!
 //! ```compile_fail
 //! #[derive(semantic_data::IntoValue)]
+//! struct Item {
+//!     #[semantic(attr = semantic_data::attr::AttrId)]
+//!     id: String,
+//! }
+//! ```
+//!
+//! Classes derive only `Class`; the value derives reject class ids:
+//!
+//! ```compile_fail
+//! #[derive(semantic_data::IntoValue)]
+//! #[semantic(id = "example:item")]
 //! struct Item {
 //!     name: String,
 //! }
@@ -572,6 +587,41 @@ pub mod __private {
 
     pub fn record_type(fields: Vec<FieldDef>, flattened: Vec<Vec<(String, Field)>>) -> Type {
         Type::new(TypeKind::Record(record(fields, flattened)))
+    }
+
+    /// A record keyed by the attribute ids of a class, plus the built-in `type`,
+    /// which defaults to the class id.
+    pub fn class_type(class: &'static str, mut fields: Vec<FieldDef>) -> Type {
+        fields.push(FieldDef {
+            name: crate::builtin::ATTR_TYPE,
+            ty: String::semantic_type(),
+            required: false,
+            default: Some(Value::String(class.to_owned())),
+            description: Some("The class id."),
+        });
+        record_type(fields, Vec::new())
+    }
+
+    /// An object with the built-in `type` set to the class id.
+    pub fn class_object(class: &'static str) -> Object {
+        let mut object = Object::new();
+        object.insert(crate::builtin::ATTR_TYPE, Value::String(class.to_owned()));
+        object
+    }
+
+    /// Remove the built-in `type`, which must be the class id if present.
+    pub fn check_class(object: &mut Object, class: &'static str) -> Result<(), FromValueError> {
+        match object.remove(crate::builtin::ATTR_TYPE) {
+            None => Ok(()),
+            Some(Value::String(ty)) if ty == class => Ok(()),
+            Some(Value::String(ty)) => Err(FromValueError::new(format!(
+                "expected class '{class}', found '{ty}'"
+            ))
+            .in_field(crate::builtin::ATTR_TYPE)),
+            Some(other) => {
+                Err(FromValueError::expected("string", &other).in_field(crate::builtin::ATTR_TYPE))
+            }
+        }
     }
 
     pub fn enum_type(variants: Vec<(&'static str, Option<&'static str>)>) -> Type {

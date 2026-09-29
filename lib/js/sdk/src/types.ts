@@ -82,11 +82,7 @@ export type TaggedValue =
 export type PathSegment = { field: string } | { index: number };
 export type FieldPath = PathSegment[];
 export type ValidationError = import("./generated/core.js").ValidationError;
-export type ValidationViolation = {
-  "semantic:db:entity:collection": string;
-  id: string;
-  "semantic:db:entity:error": import("./generated/core.js").ValidationViolation["error"];
-};
+export type ValidationViolation = import("./generated/core.js").ValidationViolation;
 export type BinaryOp =
   | "add"
   | "sub"
@@ -644,39 +640,25 @@ export interface Package {
   meta: Meta;
 }
 
-// Command outputs are keyed by qualified attribute ids, like query results.
-// Payloads may use either the qualified ids or the plain names.
 export interface EntityRecord<T extends object = SemanticObject> {
   id: string;
-  "semantic:db:entity:collection": string;
-  "semantic:db:entity:object": T;
+  collection: string;
+  object: T;
 }
 export type QueryResult<T extends object = SemanticObject> =
-  | { "semantic:db:query:kind": "select"; "semantic:db:query:rows": T[] }
-  | {
-      "semantic:db:query:kind": "insert";
-      "semantic:db:query:inserted": number | bigint;
-      "semantic:db:query:returning": T[];
-    }
-  | {
-      "semantic:db:query:kind": "update";
-      "semantic:db:query:stats": MutationStats;
-      "semantic:db:query:returning": T[];
-    }
-  | {
-      "semantic:db:query:kind": "delete";
-      "semantic:db:query:deleted": number | bigint;
-      "semantic:db:query:returning": T[];
-    }
-  | { "semantic:db:query:kind": "ddl" };
+  | { kind: "select"; rows: T[] }
+  | { kind: "insert"; inserted: number | bigint; returning: T[] }
+  | { kind: "update"; stats: MutationStats; returning: T[] }
+  | { kind: "delete"; deleted: number | bigint; returning: T[] }
+  | { kind: "ddl" };
 export interface MutationStats {
-  "semantic:db:query:matched": number | bigint;
-  "semantic:db:query:affected": number | bigint;
+  matched: number | bigint;
+  affected: number | bigint;
 }
 export interface BatchStats {
-  "semantic:db:batch:upserted": number | bigint;
-  "semantic:db:batch:deleted": number | bigint;
-  "semantic:db:batch:updated": number | bigint;
+  upserted: number | bigint;
+  deleted: number | bigint;
+  updated: number | bigint;
 }
 export interface BatchOutcome {
   /**
@@ -685,8 +667,8 @@ export interface BatchOutcome {
    * collection touched only by deletes maps to an empty object); request
    * `returning: "changes"` to list deletions. Not the whole collection.
    */
-  "semantic:db:batch:dataset": Record<string, Record<string, SemanticObject>>;
-  "semantic:db:batch:stats": BatchStats;
+  dataset: Record<string, Record<string, SemanticObject>>;
+  stats: BatchStats;
 }
 export type BatchReturn =
   | "dataset"
@@ -694,19 +676,19 @@ export type BatchReturn =
   | "changes"
   | { projection: { fields: string[] } };
 export interface EntityChange {
-  "semantic:db:entity:collection": string;
+  collection: string;
   id: string;
-  "semantic:db:entity:kind": "upsert" | "delete";
+  kind: "upsert" | "delete";
 }
 export interface BatchStatsReply {
-  "semantic:db:batch:stats": BatchStats;
+  stats: BatchStats;
 }
 export interface BatchChangesReply extends BatchStatsReply {
-  "semantic:db:batch:changes": EntityChange[];
+  changes: EntityChange[];
 }
 export interface BatchProjectionReply<T extends object = SemanticObject>
   extends BatchChangesReply {
-  "semantic:db:batch:rows": EntityRecord<T>[];
+  rows: EntityRecord<T>[];
 }
 export type BatchReply =
   | BatchOutcome
@@ -727,19 +709,19 @@ export type BatchOperation =
   | { kind: "delete_by_id"; collection: string; id: string }
   | { kind: "delete_by_ids"; collection: string; ids: string[] };
 export interface ScopeInfo {
-  "semantic:scope:id": string;
-  "semantic:scope:owner": string;
-  "semantic:scope:visibility": "principal" | "system";
-  "semantic:scope:uri": string;
-  "semantic:scope:loaded": boolean;
+  scope_id: string;
+  owner: string;
+  visibility: "principal" | "system";
+  uri: string;
+  loaded: boolean;
 }
 export interface FileAnalysisOutcome {
   id: string;
-  "semantic:file:collection": string;
-  "semantic:file:analyzed": boolean;
-  "semantic:file:analysis_kind": string | null;
-  "semantic:file:attributes": SemanticObject;
-  "semantic:file:object": SemanticObject;
+  collection: string;
+  analyzed: boolean;
+  analysis_kind: string | null;
+  attributes: SemanticObject;
+  object: SemanticObject;
 }
 
 export interface CommandDefinition<P = SemanticObject, O = SemanticValue> {

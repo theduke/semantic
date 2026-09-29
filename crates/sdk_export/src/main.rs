@@ -442,14 +442,15 @@ mod tests {
     fn jobs_types_match_decoded_rpc_values() {
         let output = generate_core_types();
         assert!(output.contains("export type DateTime = number | bigint;"));
-        assert!(output.contains("\"semantic:jobs:job:progress:total\": number | bigint | null"));
-        assert!(output.contains("\"semantic:jobs:job:error\": JobError | null"));
-        assert!(output.contains("\"semantic:description\": string | null"));
+        assert!(output.contains("\"total\": number | bigint | null"));
+        assert!(output.contains("\"error\": JobError | null"));
+        assert!(output.contains("\"description\": string | null"));
         assert!(
             output.contains(
                 "\"semantic.jobs.get\": { params: JobIdParams; result: JobRecord | null }"
             )
         );
-        assert!(output.contains("\"semantic:jobs:cursor\"?: JobListCursorInput | null"));
+        assert!(output.contains("cursor?: JobListCursorInput | null"));
+        assert!(!output.contains("semantic:jobs:job:"));
     }
 }

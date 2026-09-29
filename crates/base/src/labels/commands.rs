@@ -1,12 +1,9 @@
 use super::*;
 use semantic_data::{
-    attr::AttrId,
     builtin::DEFAULT_COLLECTION,
     value::{FromValue, IntoValue, Null, SemanticType, Value},
 };
-use semantic_rpc_core::{
-    AttrScopeId, CommandAdapter, DynCommand, RpcCommand, RpcCommandSpec, RpcError,
-};
+use semantic_rpc_core::{CommandAdapter, DynCommand, RpcCommand, RpcCommandSpec, RpcError};
 use std::{future::Future, pin::Pin};
 
 /// Resolves the authorized database for each request, honoring the host's scope rules.
@@ -74,52 +71,39 @@ where
 }
 
 #[derive(SemanticType, IntoValue, FromValue, Clone, Debug, Default)]
-#[semantic(namespace = "semantic:base:label")]
 pub struct LabelScopePayload {
-    #[semantic(attr = AttrScopeId)]
     pub scope_id: Option<String>,
 }
 
 /// Identifies an entity; `collection` defaults to the default collection.
 #[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
-#[semantic(namespace = "semantic:base:label")]
 pub struct EntityPayload {
-    #[semantic(attr = AttrScopeId)]
     pub scope_id: Option<String>,
     pub collection: Option<String>,
     /// A nonempty entity id.
-    #[semantic(attr = AttrId)]
     pub id: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
-#[semantic(namespace = "semantic:base:label")]
 pub struct EntityLabelsPayload {
-    #[semantic(attr = AttrScopeId)]
     pub scope_id: Option<String>,
     pub collection: Option<String>,
     /// A nonempty entity id.
-    #[semantic(attr = AttrId)]
     pub id: String,
     /// Nonempty label ids.
     pub label_ids: Vec<String>,
 }
 
 #[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
-#[semantic(namespace = "semantic:base:label")]
 pub struct SaveLabelPayload {
-    #[semantic(attr = AttrScopeId)]
     pub scope_id: Option<String>,
     pub label: Label,
 }
 
 #[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
-#[semantic(namespace = "semantic:base:label")]
 pub struct DeleteLabelPayload {
-    #[semantic(attr = AttrScopeId)]
     pub scope_id: Option<String>,
     /// A nonempty label id.
-    #[semantic(attr = AttrId)]
     pub id: String,
 }
 

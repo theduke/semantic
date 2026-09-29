@@ -1,5 +1,3 @@
-use semantic_data::attr::AttrDescriptorConst;
-use semantic_data::query::AttrEntityObject;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
@@ -206,7 +204,7 @@ async fn load_entity(
         .map_err(|err| err.to_string())?;
     match response {
         Value::Null | Value::Void => Ok(None),
-        Value::Object(mut response) => match response.remove(AttrEntityObject::ID) {
+        Value::Object(mut response) => match response.remove("object") {
             Some(Value::Object(mut object)) => {
                 if !object.contains_key("id")
                     && let Some(Value::String(id)) = response.remove("id")

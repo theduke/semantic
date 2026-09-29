@@ -1,9 +1,15 @@
 //! Derive macros for the semantic data model traits `SemanticType`,
-//! `IntoValue` and `FromValue` of `semantic_data::value`.
+//! `IntoValue` and `FromValue` of `semantic_data::value`, plus `Class`, which
+//! implements all three for class instances along with
+//! `semantic_data::attr::ClassDescriptorConst`.
 //!
 //! Supported shapes:
-//! - structs with named fields: records, encoded as objects keyed by attribute
-//!   ids. Unknown fields are ignored when decoding.
+//! - structs with named fields: records, encoded as objects keyed by the plain
+//!   field names. Unknown fields are ignored when decoding.
+//!
+//! `#[derive(Class)]` takes a struct with named fields and
+//! `#[semantic(id = "...")]`: a class instance (entity), keyed by attribute ids
+//! like DB query results. See below.
 //! - newtype structs: transparent.
 //! - enums of unit variants: string enums.
 //! - enums with `#[semantic(tag = "field")]`: objects with the variant name in
@@ -11,17 +17,20 @@
 //!
 //! Attributes, under `#[semantic(...)]`:
 //! - container: `rename_all = "snake_case"`, `tag = "..."` (enums),
-//!   `namespace = "semantic:..."`
-//! - field: `attr = Marker`, `rename = "..."`, `default`,
-//!   `default = "path::to::fn"`, `flatten`, and `required` on `Option` fields
+//!   `id = "..."` and `namespace = "..."` (classes)
+//! - field: `rename = "..."`, `default`, `default = "path::to::fn"`, `flatten`,
+//!   `required` on `Option` fields, and `attr = Marker` on class fields
 //! - variant: `rename = "..."`
 //!
-//! Field keys are qualified attribute ids, like DB query results: `attr = Marker`
-//! keys the field by `Marker::ID` (see `semantic_data::attr!`), otherwise the key
-//! is `<namespace>:<name>`. A field with neither is a compile error. Decoding also
-//! accepts the plain name (`Marker::PLAIN_NAME` or the field name) as an alias;
-//! both at once are an error. A `tag` is qualified the same way, unless it is the
-//! built-in `type`.
+//! Class fields are keyed `<namespace>:<name>`, where the namespace defaults to
+//! the class id; `attr = Marker` keys a field by `Marker::ID` instead (see
+//! `semantic_data::attr!`), like the built-in `id`. Decoding also accepts the
+//! plain name (`Marker::PLAIN_NAME` or the field name) as an alias; both at once
+//! are an error. Encoding writes the built-in `type` as the class id; decoding
+//! accepts a missing `type` but rejects a different one. The `SemanticType` of a
+//! class is a record keyed by the attribute ids, plus an optional `type` that
+//! defaults to the class id. `id`, `namespace` and `attr` are only allowed on
+//! classes, and class fields can't be flattened.
 //!
 //! `Option<T>` fields are optional: missing and null decode to `None`, and
 //! `None` is omitted. With `required` the field is always encoded, `None` as null,
@@ -37,25 +46,37 @@ use model::{Container, Field, FieldKind, Key, Shape, Variant};
 
 #[proc_macro_derive(SemanticType, attributes(semantic))]
 pub fn derive_semantic_type(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand(input, semantic_type)
+    expand(input, Container::parse, semantic_type)
 }
 
 #[proc_macro_derive(IntoValue, attributes(semantic))]
 pub fn derive_into_value(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand(input, into_value)
+    expand(input, Container::parse, into_value)
 }
 
 #[proc_macro_derive(FromValue, attributes(semantic))]
 pub fn derive_from_value(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    expand(input, from_value)
+    expand(input, Container::parse, from_value)
+}
+
+#[proc_macro_derive(Class, attributes(semantic))]
+pub fn derive_class(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    expand(input, Container::parse_class, |container| {
+        let mut out = semantic_type(container);
+        out.extend(into_value(container));
+        out.extend(from_value(container));
+        out.extend(class_descriptor(container));
+        out
+    })
 }
 
 fn expand(
     input: proc_macro::TokenStream,
+    parse: fn(syn::DeriveInput) -> syn::Result<Container>,
     body: fn(&Container) -> TokenStream,
 ) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
-    match Container::parse(input) {
+    match parse(input) {
         Ok(container) => body(&container).into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -73,21 +94,23 @@ fn option_str(value: &Option<String>) -> TokenStream {
 }
 
 impl Key {
-    /// The id expression.
+    /// The key expression.
     fn id(&self) -> TokenStream {
         match self {
+            Key::Plain(name) => quote!(#name),
+            Key::Qualified { id, .. } => quote!(#id),
             Key::Attr(path) => quote!(<#path as ::semantic_data::attr::AttrDescriptorConst>::ID),
-            Key::Literal { id, .. } => quote!(#id),
         }
     }
 
-    /// The alias expression.
+    /// The alias expression, equal to the key for plain keys.
     fn alias(&self) -> TokenStream {
         match self {
+            Key::Plain(name) => quote!(#name),
+            Key::Qualified { alias, .. } => quote!(#alias),
             Key::Attr(path) => {
                 quote!(<#path as ::semantic_data::attr::AttrDescriptorConst>::PLAIN_NAME)
             }
-            Key::Literal { alias, .. } => quote!(#alias),
         }
     }
 }
@@ -100,12 +123,38 @@ impl Field {
     }
 }
 
+fn class_descriptor(container: &Container) -> TokenStream {
+    let Shape::Struct {
+        class: Some(class), ..
+    } = &container.shape
+    else {
+        unreachable!("classes are parsed with an id")
+    };
+    let ident = &container.ident;
+    let (impl_generics, ty_generics, where_clause) = container.generics.split_for_impl();
+    quote! {
+        impl #impl_generics ::semantic_data::attr::ClassDescriptorConst for #ident #ty_generics #where_clause {
+            const ID: &'static str = #class;
+        }
+    }
+}
+
 fn semantic_type(container: &Container) -> TokenStream {
     let p = private();
     let body = match &container.shape {
-        Shape::Record(fields) => {
+        Shape::Struct {
+            class: None,
+            fields,
+        } => {
             let (defs, flattened) = field_defs(fields);
             quote!(#p::record_type(::std::vec![#(#defs),*], ::std::vec![#(#flattened),*]))
+        }
+        Shape::Struct {
+            class: Some(class),
+            fields,
+        } => {
+            let (defs, _) = field_defs(fields);
+            quote!(#p::class_type(#class, ::std::vec![#(#defs),*]))
         }
         Shape::Newtype(ty) => {
             quote!(<#ty as ::semantic_data::value::SemanticType>::semantic_type())
@@ -134,7 +183,6 @@ fn semantic_type(container: &Container) -> TokenStream {
                 };
                 quote!((#name, #doc, #record))
             });
-            let tag = tag.id();
             quote!(#p::tagged_type(#tag, ::std::vec![#(#variants),*]))
         }
     };
@@ -186,11 +234,15 @@ fn field_defs(fields: &[Field]) -> (Vec<TokenStream>, Vec<TokenStream>) {
 fn into_value(container: &Container) -> TokenStream {
     let p = private();
     let body = match &container.shape {
-        Shape::Record(fields) => {
+        Shape::Struct { class, fields } => {
             let inserts = field_inserts(fields, |ident| quote!(self.#ident));
+            let object = match class {
+                Some(class) => quote!(#p::class_object(#class)),
+                None => quote!(#p::Object::new()),
+            };
             quote! {
                 #[allow(unused_mut)]
-                let mut __object = #p::Object::new();
+                let mut __object = #object;
                 #(#inserts)*
                 #p::Value::Object(__object)
             }
@@ -203,7 +255,6 @@ fn into_value(container: &Container) -> TokenStream {
             quote!(match self { #(#arms),* })
         }
         Shape::Tagged { tag, variants } => {
-            let tag = tag.id();
             let arms = variants.iter().map(|variant| {
                 let ident = &variant.ident;
                 let name = &variant.name;
@@ -271,11 +322,15 @@ fn field_inserts(
 fn from_value(container: &Container) -> TokenStream {
     let p = private();
     let body = match &container.shape {
-        Shape::Record(fields) => {
+        Shape::Struct { class, fields } => {
             let construct = construct(quote!(Self), fields);
+            let check = class
+                .as_ref()
+                .map(|class| quote!(#p::check_class(&mut __object, #class)?;));
             quote! {
                 #[allow(unused_mut)]
                 let mut __object = #p::object(value)?;
+                #check
                 ::core::result::Result::Ok(#construct)
             }
         }
@@ -298,7 +353,6 @@ fn from_value(container: &Container) -> TokenStream {
             }
         }
         Shape::Tagged { tag, variants } => {
-            let (tag, alias) = (tag.id(), tag.alias());
             let names = variants.iter().map(|variant| &variant.name);
             let arms = variants.iter().map(|variant| {
                 let ident = &variant.ident;
@@ -311,7 +365,7 @@ fn from_value(container: &Container) -> TokenStream {
             });
             quote! {
                 let mut __object = #p::object(value)?;
-                let __tag: ::std::string::String = #p::required(&mut __object, #tag, #alias)?;
+                let __tag: ::std::string::String = #p::required(&mut __object, #tag, #tag)?;
                 match __tag.as_str() {
                     #(#arms,)*
                     __other => ::core::result::Result::Err(

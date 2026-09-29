@@ -40,9 +40,8 @@ export async function searchMetadata(
   const result = await client.sql<{ id?: unknown; title?: unknown }>(
     metadataSearchSql(kind, query),
   );
-  if (result["semantic:db:query:kind"] !== "select")
-    throw new Error("Unexpected search response.");
-  return result["semantic:db:query:rows"].flatMap((row) =>
+  if (result.kind !== "select") throw new Error("Unexpected search response.");
+  return result.rows.flatMap((row) =>
     typeof row.id === "string" && row.id
       ? [
           {

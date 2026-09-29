@@ -1,5 +1,3 @@
-use semantic_data::attr::AttrDescriptorConst;
-use semantic_data::query::AttrQueryRows;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
@@ -314,7 +312,7 @@ async fn query_collection_page(
     let Value::Object(object) = response else {
         return Err("query response must be an object".to_string());
     };
-    let Some(Value::List(values)) = object.get(AttrQueryRows::ID) else {
+    let Some(Value::List(values)) = object.get("rows") else {
         return Ok(CollectionQueryPage {
             rows: Rc::from([]),
             has_more: false,

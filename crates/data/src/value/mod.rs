@@ -44,7 +44,7 @@ pub mod serde;
 
 pub mod convert;
 pub use convert::{FromValue, FromValueError, IntoValue, Null, SemanticType};
-pub use semantic_macros::{FromValue, IntoValue, SemanticType};
+pub use semantic_macros::{Class, FromValue, IntoValue, SemanticType};
 
 #[cfg(test)]
 mod tests {

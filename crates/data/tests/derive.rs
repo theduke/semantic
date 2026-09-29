@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 
 use semantic_data::attr::{
-    AttrCreatedAt, AttrDescriptor, AttrDescriptorConst, AttrId, AttrType, created_at_attribute,
+    AttrCreatedAt, AttrDescriptor, AttrDescriptorConst, AttrId, AttrType, ClassDescriptorConst,
+    created_at_attribute,
 };
 use semantic_data::schema::{
     EnumRepr, NumberType, OptionalType, RecordType, Type, TypeKind, UIntWidth, VariantPayload,
     VariantTag,
 };
-use semantic_data::value::{DateTime, FromValue, IntoValue, Object, SemanticType, Value};
+use semantic_data::value::{Class, DateTime, FromValue, IntoValue, Object, SemanticType, Value};
 
 semantic_data::attrs! {
     /// A score.
@@ -30,10 +31,8 @@ enum Mode {
 struct Id(String);
 
 #[derive(SemanticType, IntoValue, FromValue, Debug, Clone, PartialEq, Eq)]
-#[semantic(namespace = "test:payload")]
 struct Payload {
     /// The target id.
-    #[semantic(attr = AttrId)]
     id: Id,
     scope_id: Option<String>,
     #[semantic(required)]
@@ -42,7 +41,7 @@ struct Payload {
     mode: Mode,
     #[semantic(default = "default_limit")]
     limit: u32,
-    #[semantic(rename = "kind_name")]
+    #[semantic(rename = "type")]
     kind: String,
     tags: Vec<String>,
     counts: BTreeMap<String, u64>,
@@ -53,7 +52,6 @@ fn default_limit() -> u32 {
 }
 
 #[derive(SemanticType, IntoValue, FromValue, Debug, Clone, PartialEq, Eq)]
-#[semantic(namespace = "test:outer")]
 struct Outer {
     #[semantic(flatten)]
     payload: Payload,
@@ -61,7 +59,7 @@ struct Outer {
 }
 
 #[derive(SemanticType, IntoValue, FromValue, Debug, Clone, PartialEq, Eq)]
-#[semantic(tag = "kind", rename_all = "snake_case", namespace = "test:op")]
+#[semantic(tag = "kind", rename_all = "snake_case")]
 enum Operation {
     Create {
         id: String,
@@ -74,24 +72,29 @@ enum Operation {
     Ddl,
 }
 
-/// Keyed by markers only, so no namespace is needed.
-#[derive(SemanticType, IntoValue, FromValue, Debug, Clone, PartialEq, Eq)]
-struct Scored {
-    #[semantic(attr = AttrType)]
-    ty: String,
-    #[semantic(attr = Score)]
-    score: u32,
-    #[semantic(attr = Label)]
-    label: Option<String>,
+/// A class instance, keyed by attribute ids.
+#[derive(Class, Debug, Clone, PartialEq, Eq)]
+#[semantic(id = "test:task")]
+struct Task {
+    #[semantic(attr = AttrId)]
+    id: String,
+    /// Keyed by `test:task:title`.
+    title: String,
+    #[semantic(rename = "due")]
+    due_at: Option<DateTime>,
     #[semantic(attr = AttrCreatedAt)]
-    created_at: Option<DateTime>,
+    created_at: DateTime,
+    #[semantic(attr = Score, default)]
+    score: u32,
 }
 
-/// Tagged by the built-in `type`, which needs no namespace.
-#[derive(SemanticType, IntoValue, FromValue, Debug, Clone, PartialEq, Eq)]
-#[semantic(tag = "type", rename_all = "snake_case")]
-enum Kind {
-    Plain,
+/// A class whose attribute ids don't share the class prefix.
+#[derive(Class, Debug, Clone, PartialEq, Eq)]
+#[semantic(id = "test:tag", namespace = "test:label")]
+struct Tag {
+    #[semantic(attr = AttrId)]
+    id: String,
+    name: String,
 }
 
 fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
@@ -134,12 +137,12 @@ fn struct_round_trips_with_wire_shape() {
         value,
         object([
             ("id", string("a")),
-            ("test:payload:note", Value::Null),
-            ("test:payload:mode", string("open_existing")),
-            ("test:payload:limit", Value::U32(3)),
-            ("test:payload:kind_name", string("k")),
-            ("test:payload:tags", Value::List(vec![string("x")])),
-            ("test:payload:counts", object([("c", Value::U64(1))])),
+            ("note", Value::Null),
+            ("mode", string("open_existing")),
+            ("limit", Value::U32(3)),
+            ("type", string("k")),
+            ("tags", Value::List(vec![string("x")])),
+            ("counts", object([("c", Value::U64(1))])),
         ])
     );
     assert_eq!(Payload::from_value(value).unwrap(), payload());
@@ -149,11 +152,11 @@ fn struct_round_trips_with_wire_shape() {
 fn struct_decodes_defaults_nulls_and_ignores_unknown_fields() {
     let decoded = Payload::from_value(object([
         ("id", string("a")),
-        ("test:payload:scope_id", Value::Null),
-        ("test:payload:note", Value::Void),
-        ("test:payload:kind_name", string("k")),
-        ("test:payload:tags", Value::List(vec![])),
-        ("test:payload:counts", object([])),
+        ("scope_id", Value::Null),
+        ("note", Value::Void),
+        ("type", string("k")),
+        ("tags", Value::List(vec![])),
+        ("counts", object([])),
         ("unknown", Value::Bool(true)),
     ]))
     .unwrap();
@@ -173,21 +176,15 @@ fn errors_carry_the_field_path() {
     );
 
     let err = Payload::from_value(object([("id", string("a"))])).unwrap_err();
-    assert_eq!(err.to_string(), "test:payload:note: missing required field");
+    assert_eq!(err.to_string(), "note: missing required field");
 
     let mut fields = payload().into_value();
     let Value::Object(map) = &mut fields else {
         unreachable!()
     };
-    map.insert(
-        "test:payload:tags",
-        Value::List(vec![string("x"), Value::Bool(false)]),
-    );
+    map.insert("tags", Value::List(vec![string("x"), Value::Bool(false)]));
     let err = Payload::from_value(fields).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "test:payload:tags[1]: expected string, found boolean"
-    );
+    assert_eq!(err.to_string(), "tags[1]: expected string, found boolean");
 
     let err = Mode::from_value(string("nope")).unwrap_err();
     assert_eq!(
@@ -209,24 +206,10 @@ fn record_type_matches_fields() {
     assert_eq!(
         record.fields.keys().map(String::as_str).collect::<Vec<_>>(),
         [
-            "id",
-            "test:payload:counts",
-            "test:payload:kind_name",
-            "test:payload:limit",
-            "test:payload:mode",
-            "test:payload:note",
-            "test:payload:scope_id",
-            "test:payload:tags",
+            "counts", "id", "limit", "mode", "note", "scope_id", "tags", "type"
         ]
     );
-    let field = |name: &str| {
-        let key = if name == "id" {
-            name.to_owned()
-        } else {
-            format!("test:payload:{name}")
-        };
-        &record.fields[&key]
-    };
+    let field = |name: &str| &record.fields[name];
     assert!(field("id").required);
     assert_eq!(field("id").ty, String::semantic_type());
     assert_eq!(
@@ -287,14 +270,13 @@ fn flattened_fields_are_inlined() {
     let Value::Object(fields) = &value else {
         panic!("expected object")
     };
-    assert_eq!(fields.get("test:outer:extra"), Some(&Value::Bool(true)));
+    assert_eq!(fields.get("extra"), Some(&Value::Bool(true)));
     assert_eq!(fields.get("id"), Some(&string("a")));
-    assert_eq!(fields.get("test:payload:kind_name"), Some(&string("k")));
     assert_eq!(Outer::from_value(value).unwrap(), outer);
 
     let record = record(Outer::semantic_type());
-    assert!(record.fields.contains_key("test:outer:extra"));
-    assert!(record.fields.contains_key("test:payload:kind_name"));
+    assert!(record.fields.contains_key("extra"));
+    assert!(record.fields.contains_key("type"));
 }
 
 #[test]
@@ -307,27 +289,26 @@ fn tagged_enum_round_trips() {
     assert_eq!(
         value,
         object([
-            ("test:op:kind", string("create")),
-            ("test:op:id", string("a")),
-            ("test:op:object", object([])),
+            ("kind", string("create")),
+            ("id", string("a")),
+            ("object", object([])),
         ])
     );
     assert_eq!(Operation::from_value(value).unwrap(), create);
     assert_eq!(
-        Operation::from_value(object([("test:op:kind", string("ddl"))])).unwrap(),
+        Operation::from_value(object([("kind", string("ddl"))])).unwrap(),
         Operation::Ddl
     );
-    // Plain names decode as aliases, and errors name the key that was given.
     let err = Operation::from_value(object([
         ("kind", string("delete_by_ids")),
         ("ids", Value::Null),
     ]))
     .unwrap_err();
     assert_eq!(err.to_string(), "ids: expected list, found null");
-    let err = Operation::from_value(object([("test:op:kind", string("x"))])).unwrap_err();
+    let err = Operation::from_value(object([("kind", string("x"))])).unwrap_err();
     assert_eq!(
         err.to_string(),
-        "test:op:kind: unknown variant 'x', expected one of: create, delete_by_ids, ddl"
+        "kind: unknown variant 'x', expected one of: create, delete_by_ids, ddl"
     );
 
     let TypeKind::Variant(ty) = Operation::semantic_type().kind else {
@@ -336,112 +317,15 @@ fn tagged_enum_round_trips() {
     assert_eq!(
         ty.tag,
         VariantTag::InternallyTagged {
-            field: "test:op:kind".into()
+            field: "kind".into()
         }
     );
     assert!(matches!(ty.variants[2].payload, VariantPayload::Unit));
     let VariantPayload::Record(fields) = &ty.variants[1].payload else {
         panic!("expected record payload")
     };
-    assert!(fields.fields["test:op:ids"].required);
-    assert!(!fields.fields["test:op:collection"].required);
-
-    assert_eq!(
-        Kind::Plain.into_value(),
-        object([("type", string("plain"))])
-    );
-    assert_eq!(
-        Kind::from_value(object([("type", string("plain"))])).unwrap(),
-        Kind::Plain
-    );
-}
-
-#[test]
-fn plain_names_decode_as_aliases() {
-    let decoded = Payload::from_value(object([
-        ("id", string("a")),
-        ("note", Value::Null),
-        ("test:payload:mode", string("open_existing")),
-        ("limit", Value::U32(3)),
-        ("kind_name", string("k")),
-        ("tags", Value::List(vec![string("x")])),
-        ("counts", object([("c", Value::U64(1))])),
-    ]))
-    .unwrap();
-    assert_eq!(decoded, payload());
-
-    let scored = Scored::from_value(object([
-        ("type", string("t")),
-        ("score", Value::U32(2)),
-        ("label", string("l")),
-        ("created_at", Value::Null),
-    ]))
-    .unwrap();
-    assert_eq!(scored.score, 2);
-    assert_eq!(scored.label.as_deref(), Some("l"));
-}
-
-#[test]
-fn qualified_id_and_alias_together_are_an_error() {
-    let mut value = payload().into_value();
-    let Value::Object(map) = &mut value else {
-        unreachable!()
-    };
-    map.insert("limit", Value::U32(4));
-    let err = Payload::from_value(value).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "test:payload:limit: field is also given by its alias 'limit'"
-    );
-}
-
-#[test]
-fn attr_markers_key_fields() {
-    let scored = Scored {
-        ty: "t".into(),
-        score: 2,
-        label: Some("l".into()),
-        created_at: None,
-    };
-    let value = scored.clone().into_value();
-    assert_eq!(
-        value,
-        object([
-            ("type", string("t")),
-            ("test:scoring:score", Value::U32(2)),
-            ("test:label:name", string("l")),
-        ])
-    );
-    assert_eq!(Scored::from_value(value).unwrap(), scored);
-
-    let record = record(Scored::semantic_type());
-    assert_eq!(
-        record.fields.keys().map(String::as_str).collect::<Vec<_>>(),
-        [
-            "semantic:created_at",
-            "test:label:name",
-            "test:scoring:score",
-            "type"
-        ]
-    );
-    assert_eq!(record.fields["test:scoring:score"].ty, u32::semantic_type());
-}
-
-#[test]
-fn attr_marker_describes_the_attribute() {
-    assert_eq!(Score::ID, "test:scoring:score");
-    assert_eq!(Score::PLAIN_NAME, "score");
-    assert_eq!(Label::PLAIN_NAME, "label");
-    let schema = Score::attr_schema();
-    assert_eq!(schema.id, "test:scoring:score");
-    assert_eq!(schema.name, "score");
-    assert_eq!(schema.ty, u32::semantic_type());
-
-    assert_eq!(AttrId::ID, "id");
-    assert_eq!(AttrId::PLAIN_NAME, "id");
-    assert_eq!(AttrType::ID, "type");
-    assert_eq!(AttrCreatedAt::PLAIN_NAME, "created_at");
-    assert_eq!(AttrCreatedAt::attr_schema(), created_at_attribute());
+    assert!(fields.fields["ids"].required);
+    assert!(!fields.fields["collection"].required);
 }
 
 #[test]
@@ -463,4 +347,146 @@ fn scalars_and_collections() {
         Value::semantic_type().kind,
         TypeKind::Any(semantic_data::schema::AnyType)
     );
+}
+
+fn task() -> Task {
+    Task {
+        id: "t1".into(),
+        title: "Write".into(),
+        due_at: None,
+        created_at: DateTime::from(time::OffsetDateTime::UNIX_EPOCH),
+        score: 2,
+    }
+}
+
+#[test]
+fn class_is_keyed_by_attribute_ids() {
+    assert_eq!(Task::ID, "test:task");
+    let value = task().into_value();
+    assert_eq!(
+        value,
+        object([
+            ("type", string("test:task")),
+            ("id", string("t1")),
+            ("test:task:title", string("Write")),
+            ("semantic:created_at", task().created_at.into_value()),
+            ("test:scoring:score", Value::U32(2)),
+        ])
+    );
+    assert_eq!(Task::from_value(value).unwrap(), task());
+
+    let tag = Tag {
+        id: "g".into(),
+        name: "red".into(),
+    };
+    let value = tag.clone().into_value();
+    assert_eq!(
+        value,
+        object([
+            ("type", string("test:tag")),
+            ("id", string("g")),
+            ("test:label:name", string("red")),
+        ])
+    );
+    assert_eq!(Tag::from_value(value).unwrap(), tag);
+}
+
+#[test]
+fn class_type_is_checked_when_present() {
+    let without_type = object([
+        ("id", string("t1")),
+        ("test:task:title", string("Write")),
+        ("semantic:created_at", task().created_at.into_value()),
+        ("test:scoring:score", Value::U32(2)),
+    ]);
+    assert_eq!(Task::from_value(without_type).unwrap(), task());
+
+    let mut value = task().into_value();
+    let Value::Object(map) = &mut value else {
+        unreachable!()
+    };
+    map.insert("type", string("test:other"));
+    assert_eq!(
+        Task::from_value(value.clone()).unwrap_err().to_string(),
+        "type: expected class 'test:task', found 'test:other'"
+    );
+    let Value::Object(map) = &mut value else {
+        unreachable!()
+    };
+    map.insert("type", Value::Bool(true));
+    assert_eq!(
+        Task::from_value(value).unwrap_err().to_string(),
+        "type: expected string, found boolean"
+    );
+}
+
+#[test]
+fn class_accepts_plain_names_as_aliases() {
+    let decoded = Task::from_value(object([
+        ("id", string("t1")),
+        ("title", string("Write")),
+        ("due", Value::Null),
+        ("created_at", task().created_at.into_value()),
+        ("score", Value::U32(2)),
+    ]))
+    .unwrap();
+    assert_eq!(decoded, task());
+    let decoded = Tag::from_value(object([("id", string("g")), ("name", string("red"))])).unwrap();
+    assert_eq!(decoded.name, "red");
+
+    let mut value = task().into_value();
+    let Value::Object(map) = &mut value else {
+        unreachable!()
+    };
+    map.insert("score", Value::U32(4));
+    assert_eq!(
+        Task::from_value(value).unwrap_err().to_string(),
+        "test:scoring:score: field is also given by its alias 'score'"
+    );
+}
+
+#[test]
+fn class_type_is_a_record_of_attribute_ids() {
+    let record = record(Task::semantic_type());
+    assert!(!record.open);
+    assert_eq!(
+        record.fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "id",
+            "semantic:created_at",
+            "test:scoring:score",
+            "test:task:due",
+            "test:task:title",
+            "type",
+        ]
+    );
+    assert!(!record.fields["type"].required);
+    assert_eq!(record.fields["type"].default, Some(string("test:task")));
+    assert!(record.fields["test:task:title"].required);
+    assert_eq!(
+        record.fields["test:task:title"].meta.description.as_deref(),
+        Some("Keyed by `test:task:title`.")
+    );
+    assert!(!record.fields["test:task:due"].required);
+    assert_eq!(
+        record.fields["test:scoring:score"].default,
+        Some(Value::U32(0))
+    );
+}
+
+#[test]
+fn attr_marker_describes_the_attribute() {
+    assert_eq!(Score::ID, "test:scoring:score");
+    assert_eq!(Score::PLAIN_NAME, "score");
+    assert_eq!(Label::PLAIN_NAME, "label");
+    let schema = Score::attr_schema();
+    assert_eq!(schema.id, "test:scoring:score");
+    assert_eq!(schema.name, "score");
+    assert_eq!(schema.ty, u32::semantic_type());
+
+    assert_eq!(AttrId::ID, "id");
+    assert_eq!(AttrId::PLAIN_NAME, "id");
+    assert_eq!(AttrType::ID, "type");
+    assert_eq!(AttrCreatedAt::PLAIN_NAME, "created_at");
+    assert_eq!(AttrCreatedAt::attr_schema(), created_at_attribute());
 }

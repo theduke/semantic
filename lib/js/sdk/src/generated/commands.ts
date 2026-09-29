@@ -21,20 +21,19 @@ export const commands = {
       visibility?: "principal" | "system";
       set_current?: boolean;
     },
-    ScopeInfo & { "semantic:scope:current": boolean }
+    ScopeInfo & { current: boolean }
   >("semantic.scope.open"),
   scopeUse: command<
     string | { scope_id?: string } | null,
-    { "semantic:scope:id": string | null }
+    { scope_id: string | null }
   >("semantic.scope.use"),
-  scopeCurrent: command<
-    SemanticObject | null,
-    { "semantic:scope:id": string | null }
-  >("semantic.scope.current"),
+  scopeCurrent: command<SemanticObject | null, { scope_id: string | null }>(
+    "semantic.scope.current",
+  ),
   scopeList: command<SemanticObject | null, ScopeInfo[]>("semantic.scope.list"),
   catalog: command<
     { scope_id?: string },
-    { "semantic:db:format": "facet-json"; "semantic:db:catalog": string }
+    { format: "facet-json"; catalog: string }
   >("semantic.db.catalog"),
   query: command<
     {

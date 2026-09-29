@@ -1,5 +1,3 @@
-use semantic_data::attr::AttrDescriptorConst;
-use semantic_data::query::AttrQueryRows;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{IsTerminal as _, Read as _};
@@ -946,7 +944,7 @@ async fn query_rows(
             "database query returned a non-object response".to_string(),
         ));
     };
-    let Some(Value::List(rows)) = response.get(AttrQueryRows::ID) else {
+    let Some(Value::List(rows)) = response.get("rows") else {
         return Err(CliError::InvalidInput(
             "database query response is missing select rows".to_string(),
         ));

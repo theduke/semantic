@@ -82,37 +82,37 @@ export type ValidationViolation = {
 
 export type JobRecord = {
   id: string;
-  "semantic:jobs:job:kind": string;
-  "semantic:jobs:job:status": JobStatus;
-  "semantic:jobs:job:progress": JobProgress;
-  "semantic:jobs:job:error": JobError | null;
-  "semantic:jobs:job:created_at": DateTime;
-  "semantic:jobs:job:started_at": datetime_DateTime | null;
-  "semantic:jobs:job:updated_at": DateTime;
-  "semantic:jobs:job:finished_at": datetime_DateTime | null;
-  "semantic:jobs:job:snapshot_seq": number | bigint;
+  kind: string;
+  status: JobStatus;
+  progress: JobProgress;
+  error: JobError | null;
+  created_at: DateTime;
+  started_at: datetime_DateTime | null;
+  updated_at: DateTime;
+  finished_at: datetime_DateTime | null;
+  snapshot_seq: number | bigint;
 };
 
 export type JobListQuery = {
-  "semantic:jobs:statuses": Array<JobStatus>;
-  "semantic:jobs:kind": string | null;
-  "semantic:jobs:oldest_first": boolean;
-  "semantic:jobs:cursor": JobListCursor | null;
-  "semantic:jobs:limit": number;
+  statuses: Array<JobStatus>;
+  kind: string | null;
+  oldest_first: boolean;
+  cursor: JobListCursor | null;
+  limit: number;
 };
 
 export type JobListPage = {
-  "semantic:jobs:records": Array<jobs_JobRecord>;
-  "semantic:jobs:next_cursor": JobListCursor | null;
+  records: Array<jobs_JobRecord>;
+  next_cursor: JobListCursor | null;
 };
 
 export type JobKindDescriptor = {
-  "semantic:jobs:job_kind:id": string;
-  "semantic:title": string;
-  "semantic:description": string | null;
+  id: string;
+  title: string;
+  description: string | null;
 };
 
-export type ClearCompletedResult = { "semantic:jobs:deleted": number | bigint };
+export type ClearCompletedResult = { deleted: number | bigint };
 
 export type QueryInput =
   | { ast: query_Query }
@@ -265,37 +265,31 @@ export type JobStatus =
   | "interrupted";
 
 export type JobProgress = {
-  "semantic:jobs:job:progress:completed": number | bigint;
-  "semantic:jobs:job:progress:total": number | bigint | null;
-  "semantic:jobs:job:progress:unit": string | null;
-  "semantic:jobs:job:progress:phase": string | null;
+  completed: number | bigint;
+  total: number | bigint | null;
+  unit: string | null;
+  phase: string | null;
 };
 
-export type JobError = {
-  "semantic:jobs:job:error:code": string;
-  "semantic:jobs:job:error:message": string;
-};
+export type JobError = { code: string; message: string };
 
 export type DateTime = number | bigint;
 
 export type datetime_DateTime = number | bigint;
 
-export type JobListCursor = {
-  "semantic:jobs:job:created_at": DateTime;
-  id: string;
-};
+export type JobListCursor = { created_at: DateTime; id: string };
 
 export type jobs_JobRecord = {
   id: string;
-  "semantic:jobs:job:kind": string;
-  "semantic:jobs:job:status": JobStatus;
-  "semantic:jobs:job:progress": JobProgress;
-  "semantic:jobs:job:error": JobError | null;
-  "semantic:jobs:job:created_at": DateTime;
-  "semantic:jobs:job:started_at": datetime_DateTime | null;
-  "semantic:jobs:job:updated_at": DateTime;
-  "semantic:jobs:job:finished_at": datetime_DateTime | null;
-  "semantic:jobs:job:snapshot_seq": number | bigint;
+  kind: string;
+  status: JobStatus;
+  progress: JobProgress;
+  error: JobError | null;
+  created_at: DateTime;
+  started_at: datetime_DateTime | null;
+  updated_at: DateTime;
+  finished_at: datetime_DateTime | null;
+  snapshot_seq: number | bigint;
 };
 
 export type query_Query =
@@ -1375,20 +1369,15 @@ export const ATTR_CORE_CATALOG_PACKAGES = "semantic:db:packages" as const;
 export const ATTR_CORE_CATALOG_APPLIED_MIGRATIONS =
   "semantic:db:applied_migrations" as const;
 
-/** Jobs commands accept decoded SemanticValue payloads and return decoded values, keyed by attribute ids. */
-export type JobScopeParams = { "semantic:scope:id"?: string | null };
-/** Encode cursor timestamps with value.dateTimeNanos(next_cursor["semantic:jobs:job:created_at"]). */
-export type JobListCursorInput = Omit<
-  JobListCursor,
-  "semantic:jobs:job:created_at"
-> & {
-  "semantic:jobs:job:created_at":
-    | Date
-    | import("../types.js").EncodedTaggedValue;
+/** Jobs commands accept decoded SemanticValue payloads and return decoded values. */
+export type JobScopeParams = { scope_id?: string | null };
+/** Encode cursor timestamps with value.dateTimeNanos(next_cursor.created_at). */
+export type JobListCursorInput = Omit<JobListCursor, "created_at"> & {
+  created_at: Date | import("../types.js").EncodedTaggedValue;
 };
 export type JobListParams = JobScopeParams &
-  Partial<Omit<JobListQuery, "semantic:jobs:cursor">> & {
-    "semantic:jobs:cursor"?: JobListCursorInput | null;
+  Partial<Omit<JobListQuery, "cursor">> & {
+    cursor?: JobListCursorInput | null;
   };
 export type JobIdParams = JobScopeParams & { id: string };
 export type JobsCommands = {

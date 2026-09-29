@@ -4,11 +4,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use semantic_data::attr::AttrId;
-use semantic_data::query::{AttrEntityObject, AttrQueryRows};
 use semantic_data::schema::{
-    DbOpenMode, EnumRepr, EnumType, EnumVariant, Field, Meta, Package, RecordType, Type, TypeKind,
-    UnionType,
+    DbOpenMode, EnumRepr, EnumType, EnumVariant, Meta, Package, Type, TypeKind, UnionType,
 };
 use semantic_data::value::{FromValue, FromValueError, IntoValue, Object, SemanticType, Value};
 use semantic_db_core::{
@@ -17,7 +14,7 @@ use semantic_db_core::{
 };
 use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{
-    AttrScopeId, CallError, RpcCommand, RpcCommandSpec, RpcRequest, RpcResponse, RuntimePackage,
+    CallError, RpcCommand, RpcCommandSpec, RpcRequest, RpcResponse, RuntimePackage,
 };
 
 use crate::object_store::{ObjectStoreId, ObjectStoreManager, ObjectStoreOpenRequest};
@@ -437,7 +434,6 @@ pub(crate) enum DocumentFormat {
 /// A payload with only an optional scope; the current scope applies without it.
 #[derive(SemanticType, IntoValue, FromValue, Clone, Debug, Default)]
 pub(crate) struct ScopeParams {
-    #[semantic(attr = AttrScopeId)]
     pub scope_id: Option<String>,
 }
 
@@ -460,10 +456,8 @@ enum OpenMode {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:scope")]
 struct ScopeOpenPayload {
     uri: String,
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     /// Defaults to `auto_create`.
     mode: Option<OpenMode>,
@@ -474,9 +468,7 @@ struct ScopeOpenPayload {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:scope")]
 struct ScopeInfoOutput {
-    #[semantic(attr = AttrScopeId)]
     scope_id: String,
     owner: String,
     visibility: ScopeVisibility,
@@ -497,7 +489,6 @@ impl From<ScopeInfo> for ScopeInfoOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:scope")]
 struct ScopeOpenOutput {
     #[semantic(flatten)]
     info: ScopeInfoOutput,
@@ -543,12 +534,11 @@ impl FromValue for ScopeSelector {
 
 #[derive(SemanticType, IntoValue, FromValue)]
 struct CurrentScope {
-    #[semantic(attr = AttrScopeId, required)]
+    #[semantic(required)]
     scope_id: Option<String>,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db")]
 struct CatalogOutput {
     format: DocumentFormat,
     /// The catalog storage snapshot, encoded in `format`.
@@ -556,9 +546,7 @@ struct CatalogOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db")]
 struct PackageUpsertPayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     format: Option<DocumentFormat>,
     /// The package, encoded in `format`.
@@ -566,7 +554,6 @@ struct PackageUpsertPayload {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db")]
 struct PackageUpsertOutput {
     format: DocumentFormat,
     /// The update outcome, encoded in `format`.
@@ -582,9 +569,7 @@ enum QueryFormat {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:query")]
 struct QueryPayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     query: String,
     /// Defaults to `sql`.
@@ -594,14 +579,9 @@ struct QueryPayload {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(
-    namespace = "semantic:db:query",
-    tag = "kind",
-    rename_all = "snake_case"
-)]
+#[semantic(tag = "kind", rename_all = "snake_case")]
 enum QueryOutput {
     Select {
-        #[semantic(attr = AttrQueryRows)]
         rows: Vec<Object>,
     },
     Insert {
@@ -646,7 +626,6 @@ impl From<QueryResult> for QueryOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:query")]
 struct MutationStatsOutput {
     matched: usize,
     affected: usize,
@@ -654,32 +633,23 @@ struct MutationStatsOutput {
 
 /// Identifies an entity; `collection` defaults to the default collection.
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:entity")]
 struct EntityPayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     collection: Option<String>,
-    #[semantic(attr = AttrId)]
     id: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:entity")]
 struct EntityOutput {
     collection: String,
-    #[semantic(attr = AttrId)]
     id: String,
-    #[semantic(attr = AttrEntityObject)]
     object: Object,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:entity")]
 struct InsertPayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     collection: Option<String>,
-    #[semantic(attr = AttrId)]
     id: String,
     object: Object,
 }
@@ -689,9 +659,7 @@ fn collection_or_default(collection: Option<String>) -> String {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:batch")]
 struct BatchPayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     operations: Vec<BatchOperationPayload>,
     #[semantic(default)]
@@ -699,27 +667,20 @@ struct BatchPayload {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(
-    namespace = "semantic:db:batch",
-    tag = "kind",
-    rename_all = "snake_case"
-)]
+#[semantic(tag = "kind", rename_all = "snake_case")]
 enum BatchOperationPayload {
     Create {
         collection: Option<String>,
-        #[semantic(attr = AttrId)]
         id: String,
         object: Object,
     },
     Upsert {
         collection: Option<String>,
-        #[semantic(attr = AttrId)]
         id: String,
         object: Object,
     },
     DeleteById {
         collection: Option<String>,
-        #[semantic(attr = AttrId)]
         id: String,
     },
     DeleteByIds {
@@ -783,30 +744,8 @@ impl SemanticType for BatchReturning {
                 })
                 .collect(),
         }));
-        // `{"projection": {"fields": [...]}}` mirrors the externally tagged
-        // `BatchReturn` variant, so its keys are variant names, not attribute ids.
-        let record = |name: &str, ty: Type| {
-            let field = Field {
-                ty,
-                required: true,
-                readonly: false,
-                writeonly: false,
-                default: None,
-                meta: Meta::default(),
-            };
-            Type::new(TypeKind::Record(RecordType {
-                fields: BTreeMap::from([(name.to_owned(), field)]),
-                open: false,
-                additional: None,
-                required_order: None,
-            }))
-        };
-        let projection = record(
-            "projection",
-            record("fields", Vec::<String>::semantic_type()),
-        );
         Type::new(TypeKind::Union(UnionType {
-            variants: vec![modes, projection],
+            variants: vec![modes, BatchProjectionMode::semantic_type()],
         }))
     }
 }
@@ -822,6 +761,19 @@ impl FromValue for BatchReturning {
     fn from_value(value: Value) -> Result<Self, FromValueError> {
         Ok(Self(Some(value)))
     }
+}
+
+/// Declares the projection mode of [`BatchReturning`].
+#[derive(SemanticType)]
+#[allow(dead_code)]
+struct BatchProjectionMode {
+    projection: BatchProjection,
+}
+
+#[derive(SemanticType)]
+#[allow(dead_code)]
+struct BatchProjection {
+    fields: Vec<String>,
 }
 
 impl BatchReturning {
@@ -867,7 +819,6 @@ impl BatchReturning {
 
 /// The batch reply; its fields depend on the `returning` mode.
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:batch")]
 struct BatchOutput {
     stats: BatchStatsOutput,
     /// Rows written, by collection and id (mode `dataset`).
@@ -879,7 +830,6 @@ struct BatchOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:batch")]
 struct BatchStatsOutput {
     upserted: usize,
     deleted: usize,
@@ -904,10 +854,8 @@ enum EntityChangeKindOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:entity")]
 struct EntityChangeOutput {
     collection: String,
-    #[semantic(attr = AttrId)]
     id: String,
     kind: EntityChangeKindOutput,
 }
@@ -963,28 +911,21 @@ impl From<semantic_db_core::BatchReply> for BatchOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:db:entity")]
 struct ValidationViolationOutput {
     collection: String,
-    #[semantic(attr = AttrId)]
     id: String,
     /// The validation error data, as in `validation_failed` errors.
     error: Value,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:file")]
 struct FileAnalyzePayload {
-    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
-    #[semantic(attr = AttrId)]
     id: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
-#[semantic(namespace = "semantic:file")]
 struct FileAnalyzeOutput {
-    #[semantic(attr = AttrId)]
     id: String,
     collection: String,
     analyzed: bool,

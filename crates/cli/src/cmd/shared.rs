@@ -2,10 +2,8 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use semantic_data::attr::AttrDescriptorConst;
 use semantic_data::value::{Object, Value};
 use semantic_rpc::{RpcClient, transport::http_client::HttpRpcClient};
-use semantic_rpc_core::AttrScopeId;
 
 use crate::CliError;
 
@@ -38,7 +36,7 @@ impl ApiClientArgs {
 
     pub fn insert_scope(&self, payload: &mut Object) {
         if let Some(scope) = &self.scope {
-            payload.insert(AttrScopeId::ID, Value::String(scope.clone()));
+            payload.insert("scope_id", Value::String(scope.clone()));
         }
     }
 }
@@ -171,7 +169,7 @@ fn read_stdin() -> std::result::Result<String, CliError> {
 mod tests {
     use semantic_data::value::Value;
 
-    use super::{ApiClientArgs, AttrDescriptorConst, AttrScopeId, ConfirmationArgs, OutputArgs};
+    use super::{ApiClientArgs, ConfirmationArgs, OutputArgs};
 
     #[test]
     fn api_client_inserts_scope_only_when_set() {
@@ -182,7 +180,7 @@ mod tests {
         }
         .insert_scope(&mut payload);
         assert_eq!(
-            payload.get(AttrScopeId::ID),
+            payload.get("scope_id"),
             Some(&Value::String("research".to_string()))
         );
     }
