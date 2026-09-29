@@ -26,6 +26,8 @@ pub enum AppError {
     InvalidRange(String),
     #[error("media analysis failed: {0}")]
     MediaAnalysis(#[from] semantic_media::MediaAnalysisError),
+    #[error("unknown command '{0}'")]
+    UnknownCommand(String),
     #[error("unknown database scope '{0}'")]
     UnknownScope(String),
     #[error("unknown object store scope '{0}'")]
@@ -66,6 +68,7 @@ impl AppError {
             | Self::UnsupportedDbScheme(_) => 400,
             Self::AuthenticationRequired => 401,
             Self::FileNotFound(_)
+            | Self::UnknownCommand(_)
             | Self::UnknownScope(_)
             | Self::UnknownObjectStoreScope(_)
             | Self::UnknownObjectStore(_, _) => 404,
@@ -218,6 +221,9 @@ impl From<AppError> for semantic_rpc_core::RpcError {
             AppError::MediaAnalysis(_) => {
                 semantic_rpc_core::RpcError::new("media_analysis_failed", value.to_string())
             }
+            AppError::UnknownCommand(command) => {
+                semantic_rpc_core::RpcError::unknown_command(command)
+            }
             AppError::UnknownScope(_) => {
                 semantic_rpc_core::RpcError::new("unknown_scope", value.to_string())
             }
@@ -333,6 +339,10 @@ mod tests {
         assert_eq!(AppError::InvalidRequest("bad".into()).http_status(), 400);
         assert_eq!(AppError::AuthenticationRequired.http_status(), 401);
         assert_eq!(AppError::UnknownScope("missing".into()).http_status(), 404);
+        assert_eq!(
+            AppError::UnknownCommand("missing".into()).http_status(),
+            404
+        );
         assert_eq!(
             AppError::Db(semantic_db_core::DbError::EntityNotFound {
                 collection: "items".into(),

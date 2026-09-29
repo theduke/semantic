@@ -123,6 +123,11 @@ impl SemanticApp {
         self.inner.registry.call(&ctx, command, payload).await
     }
 
+    /// The registry of all commands exposed by this app.
+    pub(crate) fn registry(&self) -> &RpcRegistry<AppRequestContext, AppError> {
+        &self.inner.registry
+    }
+
     pub fn scopes(&self) -> &ScopeManager {
         &self.inner.scopes
     }
@@ -287,6 +292,7 @@ impl SemanticAppBuilder {
         self.registry.register(FileAnalyzeCommand)?;
         crate::jobs::register_commands(&mut self.registry)?;
         crate::import_commands::register(&mut self.registry)?;
+        crate::command_introspection::register(&mut self.registry)?;
         Ok(self)
     }
 

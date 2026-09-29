@@ -1,5 +1,6 @@
 mod auth;
 mod command;
+mod command_introspection;
 mod config;
 mod context;
 mod db;
@@ -1115,6 +1116,128 @@ mod tests {
         let snapshot = facet_json::from_str::<CatalogStorageSnapshot>(catalog)
             .expect("catalog snapshot should decode");
         assert!(snapshot.attributes.is_empty());
+    }
+
+    fn introspection_app() -> SemanticApp {
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), default_db)
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap()
+    }
+
+    async fn call_ok_object(app: &SemanticApp, command: &str, payload: Value) -> Object {
+        match app
+            .call(ctx(app, Principal::system()), command, payload)
+            .await
+        {
+            Ok(Value::Object(object)) => object,
+            other => panic!("expected ok object, got {other:?}"),
+        }
+    }
+
+    fn decode_type(object: &Object, field: &str) -> semantic_data::schema::Type {
+        let Some(Value::String(ty)) = object.get(field) else {
+            panic!("expected {field} type string");
+        };
+        facet_json::from_str(ty).expect("type should decode")
+    }
+
+    #[tokio::test]
+    async fn command_list_returns_sorted_names() {
+        let app = introspection_app();
+        let object = call_ok_object(&app, "semantic.command.list", Value::Void).await;
+        assert_eq!(object.get("format"), None);
+        let Some(Value::List(commands)) = object.get("commands") else {
+            panic!("expected commands list");
+        };
+        let names: Vec<&str> = commands
+            .iter()
+            .map(|command| {
+                let Value::Object(command) = command else {
+                    panic!("expected command object");
+                };
+                assert_eq!(command.get("input"), None);
+                command.get("name").and_then(Value::as_str).unwrap()
+            })
+            .collect();
+        assert!(names.is_sorted());
+        assert!(names.contains(&"semantic.command.list"));
+        assert!(names.contains(&"semantic.command.get"));
+    }
+
+    #[tokio::test]
+    async fn command_list_with_schema_returns_facet_json_types() {
+        let app = introspection_app();
+        let payload = Value::Object(Object::from_iter([(
+            "schema".to_string(),
+            Value::Bool(true),
+        )]));
+        let object = call_ok_object(&app, "semantic.command.list", payload).await;
+        assert_eq!(
+            object.get("format"),
+            Some(&Value::String("facet-json".to_string()))
+        );
+        let Some(Value::List(commands)) = object.get("commands") else {
+            panic!("expected commands list");
+        };
+        assert!(!commands.is_empty());
+        for command in commands {
+            let Value::Object(command) = command else {
+                panic!("expected command object");
+            };
+            decode_type(command, "input");
+            decode_type(command, "output");
+        }
+    }
+
+    #[tokio::test]
+    async fn command_get_returns_definition() {
+        let app = introspection_app();
+        let payload = Value::Object(Object::from_iter([(
+            "name".to_string(),
+            Value::String("semantic.command.get".to_string()),
+        )]));
+        let object = call_ok_object(&app, "semantic.command.get", payload).await;
+        assert_eq!(
+            object.get("format"),
+            Some(&Value::String("facet-json".to_string()))
+        );
+        assert_eq!(
+            object.get("name"),
+            Some(&Value::String("semantic.command.get".to_string()))
+        );
+        let definition = app
+            .registry()
+            .get("semantic.command.get")
+            .unwrap()
+            .definition()
+            .clone();
+        assert_eq!(decode_type(&object, "input"), definition.input);
+        assert_eq!(decode_type(&object, "output"), definition.output);
+    }
+
+    #[tokio::test]
+    async fn command_get_rejects_unknown_command() {
+        let app = introspection_app();
+        let payload = Value::Object(Object::from_iter([(
+            "name".to_string(),
+            Value::String("semantic.missing".to_string()),
+        )]));
+        let result = app
+            .call(
+                ctx(&app, Principal::system()),
+                "semantic.command.get",
+                payload,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(semantic_rpc_core::CallError::Command(AppError::UnknownCommand(name)))
+                if name == "semantic.missing"
+        ));
     }
 
     #[tokio::test]

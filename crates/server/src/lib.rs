@@ -418,6 +418,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn path_command_introspection() {
+        let server = SemanticServer::new(test_app());
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.command.list", vec![]).await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(matches!(result, RpcResult::Ok(Value::Object(_))));
+
+        let payload = value_object([("name", Value::String("semantic.missing".to_string()))]);
+        let body =
+            serde_json::to_vec(&semantic_data::value::serde::typed::TypedRef(&payload)).unwrap();
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.command.get", body).await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND);
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "unknown_command"));
+    }
+
+    #[tokio::test]
     async fn invalid_rpc_payload_returns_rpc_error() {
         let server = SemanticServer::new(test_app());
         let response = post_rpc(
