@@ -2,18 +2,26 @@
 //! `IntoValue` and `FromValue` of `semantic_data::value`.
 //!
 //! Supported shapes:
-//! - structs with named fields: records, encoded as objects. Unknown fields are
-//!   ignored when decoding.
+//! - structs with named fields: records, encoded as objects keyed by attribute
+//!   ids. Unknown fields are ignored when decoding.
 //! - newtype structs: transparent.
 //! - enums of unit variants: string enums.
 //! - enums with `#[semantic(tag = "field")]`: objects with the variant name in
 //!   `field`, plus the fields of struct variants.
 //!
 //! Attributes, under `#[semantic(...)]`:
-//! - container: `rename_all = "snake_case"`, `tag = "..."` (enums)
-//! - field: `rename = "..."`, `default`, `default = "path::to::fn"`, `flatten`,
-//!   and `required` on `Option` fields
+//! - container: `rename_all = "snake_case"`, `tag = "..."` (enums),
+//!   `namespace = "semantic:..."`
+//! - field: `attr = Marker`, `rename = "..."`, `default`,
+//!   `default = "path::to::fn"`, `flatten`, and `required` on `Option` fields
 //! - variant: `rename = "..."`
+//!
+//! Field keys are qualified attribute ids, like DB query results: `attr = Marker`
+//! keys the field by `Marker::ID` (see `semantic_data::attr!`), otherwise the key
+//! is `<namespace>:<name>`. A field with neither is a compile error. Decoding also
+//! accepts the plain name (`Marker::PLAIN_NAME` or the field name) as an alias;
+//! both at once are an error. A `tag` is qualified the same way, unless it is the
+//! built-in `type`.
 //!
 //! `Option<T>` fields are optional: missing and null decode to `None`, and
 //! `None` is omitted. With `required` the field is always encoded, `None` as null,
@@ -25,7 +33,7 @@ mod model;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use model::{Container, Field, FieldKind, Shape, Variant};
+use model::{Container, Field, FieldKind, Key, Shape, Variant};
 
 #[proc_macro_derive(SemanticType, attributes(semantic))]
 pub fn derive_semantic_type(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -64,6 +72,34 @@ fn option_str(value: &Option<String>) -> TokenStream {
     }
 }
 
+impl Key {
+    /// The id expression.
+    fn id(&self) -> TokenStream {
+        match self {
+            Key::Attr(path) => quote!(<#path as ::semantic_data::attr::AttrDescriptorConst>::ID),
+            Key::Literal { id, .. } => quote!(#id),
+        }
+    }
+
+    /// The alias expression.
+    fn alias(&self) -> TokenStream {
+        match self {
+            Key::Attr(path) => {
+                quote!(<#path as ::semantic_data::attr::AttrDescriptorConst>::PLAIN_NAME)
+            }
+            Key::Literal { alias, .. } => quote!(#alias),
+        }
+    }
+}
+
+impl Field {
+    fn key(&self) -> &Key {
+        self.key
+            .as_ref()
+            .expect("only flattened fields have no key")
+    }
+}
+
 fn semantic_type(container: &Container) -> TokenStream {
     let p = private();
     let body = match &container.shape {
@@ -98,6 +134,7 @@ fn semantic_type(container: &Container) -> TokenStream {
                 };
                 quote!((#name, #doc, #record))
             });
+            let tag = tag.id();
             quote!(#p::tagged_type(#tag, ::std::vec![#(#variants),*]))
         }
     };
@@ -123,7 +160,7 @@ fn field_defs(fields: &[Field]) -> (Vec<TokenStream>, Vec<TokenStream>) {
             flattened.push(quote!(#p::flattened::<#ty>()));
             continue;
         }
-        let name = &field.name;
+        let name = field.key().id();
         let doc = option_str(&field.doc);
         let required = matches!(field.kind, FieldKind::Required | FieldKind::Nullable);
         let default = match &field.kind {
@@ -166,6 +203,7 @@ fn into_value(container: &Container) -> TokenStream {
             quote!(match self { #(#arms),* })
         }
         Shape::Tagged { tag, variants } => {
+            let tag = tag.id();
             let arms = variants.iter().map(|variant| {
                 let ident = &variant.ident;
                 let name = &variant.name;
@@ -208,12 +246,15 @@ fn field_inserts(
         .into_iter()
         .chain(own)
         .map(|field| {
-            let name = &field.name;
             let value = access(&field.ident);
-            match field.kind {
-                FieldKind::Flatten => quote! {
+            if let FieldKind::Flatten = field.kind {
+                return quote! {
                     #p::merge(&mut __object, ::semantic_data::value::IntoValue::into_value(#value));
-                },
+                };
+            }
+            let name = field.key().id();
+            match field.kind {
+                FieldKind::Flatten => unreachable!("handled above"),
                 FieldKind::Optional => quote! {
                     if let ::core::option::Option::Some(__value) = #value {
                         __object.insert(#name, ::semantic_data::value::IntoValue::into_value(__value));
@@ -257,6 +298,7 @@ fn from_value(container: &Container) -> TokenStream {
             }
         }
         Shape::Tagged { tag, variants } => {
+            let (tag, alias) = (tag.id(), tag.alias());
             let names = variants.iter().map(|variant| &variant.name);
             let arms = variants.iter().map(|variant| {
                 let ident = &variant.ident;
@@ -269,7 +311,7 @@ fn from_value(container: &Container) -> TokenStream {
             });
             quote! {
                 let mut __object = #p::object(value)?;
-                let __tag: ::std::string::String = #p::required(&mut __object, #tag)?;
+                let __tag: ::std::string::String = #p::required(&mut __object, #tag, #alias)?;
                 match __tag.as_str() {
                     #(#arms,)*
                     __other => ::core::result::Result::Err(
@@ -303,21 +345,25 @@ fn construct(path: TokenStream, fields: &[Field]) -> TokenStream {
     let lets = own.into_iter().chain(flattened).map(|field| {
         let var = var(field);
         let ty = &field.ty;
-        let name = &field.name;
+        if let FieldKind::Flatten = field.kind {
+            return quote!(let #var = #p::flatten::<#ty>(&__object)?;);
+        }
+        let key = field.key();
+        let (name, alias) = (key.id(), key.alias());
         let value = match &field.kind {
             FieldKind::Required | FieldKind::Nullable => {
-                quote!(#p::required::<#ty>(&mut __object, #name)?)
+                quote!(#p::required::<#ty>(&mut __object, #name, #alias)?)
             }
-            FieldKind::Optional => {
-                quote!(#p::or_else::<#ty>(&mut __object, #name, || ::core::option::Option::None)?)
-            }
-            FieldKind::Default(None) => {
-                quote!(#p::or_else::<#ty>(&mut __object, #name, ::core::default::Default::default)?)
-            }
+            FieldKind::Optional => quote!(#p::or_else::<#ty>(
+                &mut __object, #name, #alias, || ::core::option::Option::None
+            )?),
+            FieldKind::Default(None) => quote!(#p::or_else::<#ty>(
+                &mut __object, #name, #alias, ::core::default::Default::default
+            )?),
             FieldKind::Default(Some(default)) => {
-                quote!(#p::or_else::<#ty>(&mut __object, #name, #default)?)
+                quote!(#p::or_else::<#ty>(&mut __object, #name, #alias, #default)?)
             }
-            FieldKind::Flatten => quote!(#p::flatten::<#ty>(&__object)?),
+            FieldKind::Flatten => unreachable!("handled above"),
         };
         quote!(let #var = #value;)
     });

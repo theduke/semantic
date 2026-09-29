@@ -2,6 +2,27 @@
 //!
 //! [`SemanticType`], [`IntoValue`] and [`FromValue`] can be derived with the
 //! macros of the same name (see `semantic_macros`).
+//!
+//! Derived records are keyed by attribute ids, so every field needs an attribute
+//! marker (see [`crate::attr!`]) or a container namespace:
+//!
+//! ```
+//! #[derive(semantic_data::IntoValue)]
+//! #[semantic(namespace = "example:item")]
+//! struct Item {
+//!     #[semantic(attr = semantic_data::attr::AttrId)]
+//!     id: String,
+//!     /// Keyed by `example:item:name`.
+//!     name: String,
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(semantic_data::IntoValue)]
+//! struct Item {
+//!     name: String,
+//! }
+//! ```
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -609,22 +630,49 @@ pub mod __private {
         ))
     }
 
-    pub fn required<T: FromValue>(object: &mut Object, name: &str) -> Result<T, FromValueError> {
-        match object.remove(name) {
-            Some(value) => T::from_value(value).map_err(|err| err.in_field(name)),
-            None => Err(FromValueError::missing_field(name)),
-        }
+    /// Remove the field `id`, or its plain-name `alias`, and decode it.
+    fn take<T: FromValue>(
+        object: &mut Object,
+        id: &str,
+        alias: &str,
+    ) -> Result<Option<T>, FromValueError> {
+        let qualified = object.remove(id);
+        let plain = if alias == id {
+            None
+        } else {
+            object.remove(alias)
+        };
+        let (name, value) = match (qualified, plain) {
+            (Some(_), Some(_)) => {
+                return Err(FromValueError::new(format!(
+                    "field is also given by its alias '{alias}'"
+                ))
+                .in_field(id));
+            }
+            (Some(value), None) => (id, value),
+            (None, Some(value)) => (alias, value),
+            (None, None) => return Ok(None),
+        };
+        T::from_value(value)
+            .map(Some)
+            .map_err(|err| err.in_field(name))
+    }
+
+    pub fn required<T: FromValue>(
+        object: &mut Object,
+        id: &str,
+        alias: &str,
+    ) -> Result<T, FromValueError> {
+        take(object, id, alias)?.ok_or_else(|| FromValueError::missing_field(id))
     }
 
     pub fn or_else<T: FromValue>(
         object: &mut Object,
-        name: &str,
+        id: &str,
+        alias: &str,
         default: impl FnOnce() -> T,
     ) -> Result<T, FromValueError> {
-        match object.remove(name) {
-            Some(value) => T::from_value(value).map_err(|err| err.in_field(name)),
-            None => Ok(default()),
-        }
+        Ok(take(object, id, alias)?.unwrap_or_else(default))
     }
 
     /// Decode a flattened field from the fields not consumed by the outer type.

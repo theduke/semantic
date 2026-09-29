@@ -88,23 +88,32 @@ impl JobStatus {
 }
 
 // The RPC types always encode optional fields, as null, matching the exported Facet types.
+// They are keyed by attribute ids; the Facet renames mirror those keys for the SDK export.
 
 #[derive(
     facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, Default, PartialEq, Eq,
 )]
+#[semantic(namespace = "semantic:jobs:job:progress")]
 pub struct JobProgress {
+    #[facet(rename = "semantic:jobs:job:progress:completed")]
     pub completed: u64,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:job:progress:total")]
     pub total: Option<u64>,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:job:progress:unit")]
     pub unit: Option<String>,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:job:progress:phase")]
     pub phase: Option<String>,
 }
 
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+#[semantic(namespace = "semantic:jobs:job:error")]
 pub struct JobError {
+    #[facet(rename = "semantic:jobs:job:error:code")]
     pub code: String,
+    #[facet(rename = "semantic:jobs:job:error:message")]
     pub message: String,
 }
 
@@ -124,48 +133,75 @@ impl std::fmt::Display for JobError {
 impl std::error::Error for JobError {}
 
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+#[semantic(namespace = "semantic:jobs:job_kind")]
 pub struct JobKindDescriptor {
+    #[facet(rename = "semantic:jobs:job_kind:id")]
     pub id: JobKindId,
+    #[semantic(attr = crate::attr::AttrTitle)]
+    #[facet(rename = "semantic:title")]
     pub title: String,
-    #[semantic(required)]
+    #[semantic(attr = crate::attr::AttrDescription, required)]
+    #[facet(rename = "semantic:description")]
     pub description: Option<String>,
 }
 
-/// Portable RPC representation; storage attribute names never cross this boundary.
+/// Portable RPC representation, keyed by the job attribute ids. Storage uses the
+/// separate codec [`Self::to_object`], which also carries the class and omits
+/// unset fields.
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+#[semantic(namespace = "semantic:jobs:job")]
 pub struct JobRecord {
+    #[semantic(attr = crate::attr::AttrId)]
     pub id: JobId,
+    #[facet(rename = "semantic:jobs:job:kind")]
     pub kind: JobKindId,
+    #[facet(rename = "semantic:jobs:job:status")]
     pub status: JobStatus,
+    #[facet(rename = "semantic:jobs:job:progress")]
     pub progress: JobProgress,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:job:error")]
     pub error: Option<JobError>,
+    #[facet(rename = "semantic:jobs:job:created_at")]
     pub created_at: DateTime,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:job:started_at")]
     pub started_at: Option<DateTime>,
+    #[facet(rename = "semantic:jobs:job:updated_at")]
     pub updated_at: DateTime,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:job:finished_at")]
     pub finished_at: Option<DateTime>,
+    #[facet(rename = "semantic:jobs:job:snapshot_seq")]
     pub snapshot_seq: u64,
 }
 
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+#[semantic(namespace = "semantic:jobs:job")]
 pub struct JobListCursor {
+    #[facet(rename = "semantic:jobs:job:created_at")]
     pub created_at: DateTime,
+    #[semantic(attr = crate::attr::AttrId)]
     pub id: JobId,
 }
 
 /// Missing fields take their [`Default`] values.
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+#[semantic(namespace = "semantic:jobs")]
 pub struct JobListQuery {
     #[semantic(default)]
+    #[facet(rename = "semantic:jobs:statuses")]
     pub statuses: Vec<JobStatus>,
+    #[facet(rename = "semantic:jobs:kind")]
     pub kind: Option<JobKindId>,
     #[semantic(default)]
+    #[facet(rename = "semantic:jobs:oldest_first")]
     pub oldest_first: bool,
+    #[facet(rename = "semantic:jobs:cursor")]
     pub cursor: Option<JobListCursor>,
     /// A positive page size.
     #[semantic(default = "JobListQuery::default_limit")]
+    #[facet(rename = "semantic:jobs:limit")]
     pub limit: u32,
 }
 impl Default for JobListQuery {
@@ -187,16 +223,21 @@ impl JobListQuery {
 }
 
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+#[semantic(namespace = "semantic:jobs")]
 pub struct JobListPage {
+    #[facet(rename = "semantic:jobs:records")]
     pub records: Vec<JobRecord>,
     #[semantic(required)]
+    #[facet(rename = "semantic:jobs:next_cursor")]
     pub next_cursor: Option<JobListCursor>,
 }
 
 #[derive(
     facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, Default, PartialEq, Eq,
 )]
+#[semantic(namespace = "semantic:jobs")]
 pub struct ClearCompletedResult {
+    #[facet(rename = "semantic:jobs:deleted")]
     pub deleted: u64,
 }
 
@@ -417,18 +458,29 @@ mod tests {
                 panic!("record object")
             };
             assert_eq!(wire.keys().count(), 10);
-            assert!(wire.keys().all(|key| !key.contains(':')));
-            assert_eq!(
-                wire.get("kind").and_then(Value::as_str),
-                Some("unknown.kind")
-            );
-            assert_eq!(wire.get("created_at"), Some(&Value::DateTime(now)));
-            assert_eq!(wire.get("snapshot_seq"), Some(&Value::U64(1)));
-            let Some(Value::Object(progress)) = wire.get("progress") else {
+            // The RPC form uses the storage keys, minus the class.
+            assert!(wire.keys().all(|key| object.contains_key(key)
+                || matches!(
+                    key.as_str(),
+                    "semantic:jobs:job:error"
+                        | "semantic:jobs:job:started_at"
+                        | "semantic:jobs:job:finished_at"
+                )));
+            let get = |name: &str| wire.get(&format!("{PREFIX}{name}"));
+            assert_eq!(get("kind").and_then(Value::as_str), Some("unknown.kind"));
+            assert_eq!(get("created_at"), Some(&Value::DateTime(now)));
+            assert_eq!(get("snapshot_seq"), Some(&Value::U64(1)));
+            let Some(Value::Object(progress)) = get("progress") else {
                 panic!("progress object")
             };
-            assert_eq!(progress.get("completed"), Some(&Value::U64(u64::MAX)));
-            assert_eq!(progress.get("unit"), Some(&Value::Null));
+            assert_eq!(
+                progress.get("semantic:jobs:job:progress:completed"),
+                Some(&Value::U64(u64::MAX))
+            );
+            assert_eq!(
+                progress.get("semantic:jobs:job:progress:unit"),
+                Some(&Value::Null)
+            );
             assert_eq!(
                 JobRecord::from_value(Value::Object(wire.clone())).unwrap(),
                 record
@@ -437,15 +489,14 @@ mod tests {
             let json = serde_json::to_string(&tagged).unwrap();
             assert!(json.contains("\"u64\":18446744073709551615"));
             assert!(json.contains("\"date_time\":"));
-            assert!(!json.contains(PREFIX));
             assert_eq!(
                 serde_json::from_str::<crate::value::serde::typed::TypedValue>(&json).unwrap(),
                 tagged
             );
             if status == JobStatus::Queued {
-                assert_eq!(wire.get("error"), Some(&Value::Null));
-                assert_eq!(wire.get("started_at"), Some(&Value::Null));
-                assert_eq!(wire.get("finished_at"), Some(&Value::Null));
+                assert_eq!(get("error"), Some(&Value::Null));
+                assert_eq!(get("started_at"), Some(&Value::Null));
+                assert_eq!(get("finished_at"), Some(&Value::Null));
             }
             assert_eq!(
                 record,
@@ -494,7 +545,7 @@ mod tests {
             query
         );
         let mut nulls = Object::new();
-        nulls.insert("kind", Value::Null);
+        nulls.insert("semantic:jobs:kind", Value::Null);
         nulls.insert("cursor", Value::Null);
         assert_eq!(
             JobListQuery::from_value(Value::Object(nulls)).unwrap(),
@@ -504,13 +555,16 @@ mod tests {
             panic!("object query")
         };
         assert!(record.fields.values().all(|field| !field.required));
-        assert_eq!(record.fields["limit"].default, Some(Value::U32(50)));
+        assert_eq!(
+            record.fields["semantic:jobs:limit"].default,
+            Some(Value::U32(50))
+        );
         let TypeKind::Record(record) = JobRecord::semantic_type().kind else {
             panic!("object record")
         };
         assert!(record.fields.values().all(|field| field.required));
         assert!(matches!(
-            record.fields["status"].ty.kind,
+            record.fields["semantic:jobs:job:status"].ty.kind,
             TypeKind::Enum(EnumType {
                 repr: EnumRepr::String,
                 ..

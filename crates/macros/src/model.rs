@@ -18,13 +18,23 @@ pub enum Shape {
     /// An enum of unit variants, represented as strings.
     Enum(Vec<Variant>),
     /// An enum represented as an object with the variant name in `tag`.
-    Tagged { tag: String, variants: Vec<Variant> },
+    Tagged { tag: Key, variants: Vec<Variant> },
+}
+
+/// The object key of a field: an attribute id, plus the plain name accepted
+/// as an alias when decoding.
+pub enum Key {
+    /// `#[semantic(attr = Marker)]`: `Marker::ID`, alias `Marker::PLAIN_NAME`.
+    Attr(syn::Path),
+    /// A literal id, like `<namespace>:<name>` or a built-in id.
+    Literal { id: String, alias: String },
 }
 
 pub struct Field {
     pub ident: syn::Ident,
     pub ty: syn::Type,
-    pub name: String,
+    /// `None` for flattened fields.
+    pub key: Option<Key>,
     pub doc: Option<String>,
     pub kind: FieldKind,
 }
@@ -54,11 +64,13 @@ pub struct Variant {
 struct ContainerAttrs {
     rename_all: bool,
     tag: Option<String>,
+    namespace: Option<String>,
 }
 
 #[derive(Default)]
 struct FieldAttrs {
     rename: Option<String>,
+    attr: Option<syn::Path>,
     default: Option<Option<syn::ExprPath>>,
     required: bool,
     flatten: bool,
@@ -76,9 +88,11 @@ impl Container {
                     ));
                 }
                 match data.fields {
-                    syn::Fields::Named(fields) => {
-                        Shape::Record(parse_fields(fields.named.into_iter(), attrs.rename_all)?)
-                    }
+                    syn::Fields::Named(fields) => Shape::Record(parse_fields(
+                        fields.named.into_iter(),
+                        attrs.rename_all,
+                        attrs.namespace.as_deref(),
+                    )?),
                     syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                         Shape::Newtype(fields.unnamed.into_iter().next().expect("one field").ty)
                     }
@@ -94,10 +108,15 @@ impl Container {
                 let variants = data
                     .variants
                     .into_iter()
-                    .map(|variant| parse_variant(variant, attrs.rename_all))
+                    .map(|variant| {
+                        parse_variant(variant, attrs.rename_all, attrs.namespace.as_deref())
+                    })
                     .collect::<syn::Result<Vec<_>>>()?;
                 match attrs.tag {
-                    Some(tag) => Shape::Tagged { tag, variants },
+                    Some(tag) => Shape::Tagged {
+                        tag: tag_key(tag, attrs.namespace.as_deref(), &input.ident)?,
+                        variants,
+                    },
                     None => {
                         if let Some(variant) = variants.iter().find(|v| v.fields.is_some()) {
                             return Err(syn::Error::new(
@@ -124,9 +143,36 @@ impl Container {
     }
 }
 
-fn parse_variant(variant: syn::Variant, rename_all: bool) -> syn::Result<Variant> {
+/// The tag is qualified by the namespace, unless it is the built-in `type`.
+fn tag_key(tag: String, namespace: Option<&str>, ident: &syn::Ident) -> syn::Result<Key> {
+    if tag == BUILTIN_TYPE {
+        return Ok(Key::Literal {
+            id: tag.clone(),
+            alias: tag,
+        });
+    }
+    match namespace {
+        Some(namespace) => Ok(Key::Literal {
+            id: format!("{namespace}:{tag}"),
+            alias: tag,
+        }),
+        None => Err(syn::Error::new(
+            ident.span(),
+            "a tag other than the built-in `type` needs #[semantic(namespace = \"...\")]",
+        )),
+    }
+}
+
+/// The built-in `type` attribute id (`semantic_data::builtin::ATTR_TYPE`).
+const BUILTIN_TYPE: &str = "type";
+
+fn parse_variant(
+    variant: syn::Variant,
+    rename_all: bool,
+    namespace: Option<&str>,
+) -> syn::Result<Variant> {
     let attrs = field_attrs(&variant.attrs)?;
-    if attrs.default.is_some() || attrs.required || attrs.flatten {
+    if attrs.default.is_some() || attrs.required || attrs.flatten || attrs.attr.is_some() {
         return Err(syn::Error::new(
             variant.ident.span(),
             "variants only support `rename`",
@@ -134,7 +180,11 @@ fn parse_variant(variant: syn::Variant, rename_all: bool) -> syn::Result<Variant
     }
     let fields = match variant.fields {
         syn::Fields::Unit => None,
-        syn::Fields::Named(fields) => Some(parse_fields(fields.named.into_iter(), rename_all)?),
+        syn::Fields::Named(fields) => Some(parse_fields(
+            fields.named.into_iter(),
+            rename_all,
+            namespace,
+        )?),
         syn::Fields::Unnamed(fields) => {
             return Err(syn::Error::new(
                 fields.span(),
@@ -155,6 +205,7 @@ fn parse_variant(variant: syn::Variant, rename_all: bool) -> syn::Result<Variant
 fn parse_fields(
     fields: impl Iterator<Item = syn::Field>,
     rename_all: bool,
+    namespace: Option<&str>,
 ) -> syn::Result<Vec<Field>> {
     fields
         .map(|field| {
@@ -168,10 +219,16 @@ fn parse_fields(
                     "`default`, `required` and `flatten` are mutually exclusive",
                 ));
             }
-            if attrs.flatten && attrs.rename.is_some() {
+            if attrs.flatten && (attrs.rename.is_some() || attrs.attr.is_some()) {
                 return Err(syn::Error::new(
                     ident.span(),
-                    "flattened fields can't be renamed",
+                    "flattened fields can't have a `rename` or `attr`",
+                ));
+            }
+            if attrs.attr.is_some() && attrs.rename.is_some() {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    "`attr` fields are keyed by the attribute id and can't be renamed",
                 ));
             }
             let kind = if attrs.flatten {
@@ -191,8 +248,25 @@ fn parse_fields(
             } else {
                 FieldKind::Required
             };
+            let key = if attrs.flatten {
+                None
+            } else if let Some(attr) = attrs.attr {
+                Some(Key::Attr(attr))
+            } else if let Some(namespace) = namespace {
+                let name = attrs.rename.unwrap_or_else(|| rename(&ident, rename_all));
+                Some(Key::Literal {
+                    id: format!("{namespace}:{name}"),
+                    alias: name,
+                })
+            } else {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    "fields are keyed by attribute id: add #[semantic(attr = Marker)] to the \
+                     field or #[semantic(namespace = \"...\")] to the container",
+                ));
+            };
             Ok(Field {
-                name: attrs.rename.unwrap_or_else(|| rename(&ident, rename_all)),
+                key,
                 doc: doc(&field.attrs),
                 ident,
                 ty: field.ty,
@@ -219,6 +293,9 @@ fn container_attrs(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttrs> {
             } else if meta.path.is_ident("tag") {
                 let value: syn::LitStr = meta.value()?.parse()?;
                 out.tag = Some(value.value());
+            } else if meta.path.is_ident("namespace") {
+                let value: syn::LitStr = meta.value()?.parse()?;
+                out.namespace = Some(value.value());
             } else {
                 return Err(meta.error("unsupported container attribute"));
             }
@@ -235,6 +312,8 @@ fn field_attrs(attrs: &[syn::Attribute]) -> syn::Result<FieldAttrs> {
             if meta.path.is_ident("rename") {
                 let value: syn::LitStr = meta.value()?.parse()?;
                 out.rename = Some(value.value());
+            } else if meta.path.is_ident("attr") {
+                out.attr = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("default") {
                 out.default = Some(if meta.input.peek(syn::Token![=]) {
                     let value: syn::LitStr = meta.value()?.parse()?;

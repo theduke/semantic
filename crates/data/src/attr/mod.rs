@@ -1,4 +1,5 @@
 use crate::schema::AttributeType;
+use crate::value::{DateTime, SemanticType};
 
 pub const ATTR_TITLE: &str = "semantic:title";
 pub const ATTR_DESCRIPTION: &str = "semantic:description";
@@ -81,13 +82,131 @@ pub fn url_attribute() -> AttributeType {
     }
 }
 
+/// Describes an attribute; implemented by marker types declared with [`attr!`].
 pub trait AttrDescriptor {
-    fn attr_schema(&self) -> AttributeType;
+    fn attr_schema() -> AttributeType;
 }
 
 pub trait AttrDescriptorConst: AttrDescriptor {
+    /// The qualified attribute id, like `semantic:created_at`.
     const ID: &'static str;
+    /// The unqualified name, accepted as an alias of [`Self::ID`].
     const PLAIN_NAME: &'static str;
+    /// The Rust type of the attribute's values.
+    type Value: SemanticType;
+}
+
+/// Declares a unit marker struct for an attribute, implementing
+/// [`AttrDescriptor`] and [`AttrDescriptorConst`]. Fields of derived structs
+/// refer to it with `#[semantic(attr = Marker)]`.
+///
+/// ```
+/// semantic_data::attr!(
+///     /// When the entity was created.
+///     pub CreatedAt, "semantic:created_at", semantic_data::DateTime
+/// );
+/// ```
+///
+/// The plain name defaults to the last `:` segment of the id; override it with
+/// `name = "..."`. The schema defaults to one built from the value's
+/// [`SemanticType`]; override it with `schema = expr`.
+#[macro_export]
+macro_rules! attr {
+    (@name $id:expr) => {
+        $crate::attr::plain_name($id)
+    };
+    (@name $id:expr, $name:expr) => {
+        $name
+    };
+    (@schema $marker:ident) => {
+        $crate::attr::attr_schema::<$marker>()
+    };
+    (@schema $marker:ident, $schema:expr) => {
+        $schema
+    };
+    (
+        $(#[$meta:meta])*
+        $vis:vis $marker:ident, $id:expr, $value:ty
+        $(, name = $name:expr)?
+        $(, schema = $schema:expr)?
+        $(,)?
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+        $vis struct $marker;
+
+        impl $crate::attr::AttrDescriptorConst for $marker {
+            const ID: &'static str = $id;
+            const PLAIN_NAME: &'static str = $crate::attr!(@name $id $(, $name)?);
+            type Value = $value;
+        }
+
+        impl $crate::attr::AttrDescriptor for $marker {
+            fn attr_schema() -> $crate::schema::AttributeType {
+                $crate::attr!(@schema $marker $(, $schema)?)
+            }
+        }
+    };
+}
+
+/// The last `:` segment of an attribute id.
+#[doc(hidden)]
+pub const fn plain_name(id: &'static str) -> &'static str {
+    let bytes = id.as_bytes();
+    let mut start = bytes.len();
+    while start > 0 && bytes[start - 1] != b':' {
+        start -= 1;
+    }
+    match std::str::from_utf8(bytes.split_at(start).1) {
+        Ok(name) => name,
+        Err(_) => panic!("ids split at ':' stay valid UTF-8"),
+    }
+}
+
+/// The default schema of an attribute marker.
+#[doc(hidden)]
+pub fn attr_schema<A: AttrDescriptorConst>() -> AttributeType {
+    AttributeType {
+        id: A::ID.to_string(),
+        name: A::PLAIN_NAME.to_string(),
+        ty: A::Value::semantic_type(),
+        constraints: Vec::new(),
+        meta: crate::schema::Meta::default(),
+    }
+}
+
+crate::attr!(
+    /// The built-in entity id.
+    pub AttrId, crate::builtin::ATTR_ID, String
+);
+crate::attr!(
+    /// The built-in entity type: the class id.
+    pub AttrType, crate::builtin::ATTR_TYPE, String
+);
+crate::attr!(pub AttrTitle, ATTR_TITLE, String, schema = title_attribute());
+crate::attr!(pub AttrDescription, ATTR_DESCRIPTION, String, schema = description_attribute());
+crate::attr!(pub AttrCreatedAt, ATTR_CREATED_AT, DateTime, schema = created_at_attribute());
+crate::attr!(pub AttrUpdatedAt, ATTR_UPDATED_AT, DateTime, schema = updated_at_attribute());
+crate::attr!(pub AttrUrl, ATTR_URL, String, schema = url_attribute());
+crate::attr!(
+    /// The parent entity id.
+    pub AttrParent, ATTR_PARENT, String, schema = parent_attribute()
+);
+
+/// The shared parent attribute, as last defined by the shared bundle.
+fn parent_attribute() -> AttributeType {
+    use crate::schema::{EntityRef, Meta, Type, TypeKind};
+
+    AttributeType {
+        id: ATTR_PARENT.to_string(),
+        name: "parent".to_string(),
+        ty: Type::new(TypeKind::Ref(EntityRef::any())),
+        constraints: Vec::new(),
+        meta: Meta {
+            title: Some("Parent".to_string()),
+            ..Meta::default()
+        },
+    }
 }
 
 //
