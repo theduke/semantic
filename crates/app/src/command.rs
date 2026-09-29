@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use semantic_data::schema::{DbOpenMode, FunctionType, Package};
+use semantic_data::schema::{DbOpenMode, Package};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::{
     Batch, BatchOperation, BatchOutcome, BatchStats, DEFAULT_COLLECTION, DeleteResult,
@@ -385,15 +385,6 @@ macro_rules! command_spec {
             type Error = AppError;
 
             const NAME: &'static str = $name;
-
-            fn signature(&self) -> FunctionType {
-                FunctionType {
-                    params: Vec::new(),
-                    results: Vec::new(),
-                    throws: None,
-                    async_fn: true,
-                }
-            }
         }
     };
 }

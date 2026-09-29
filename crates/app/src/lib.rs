@@ -79,15 +79,6 @@ mod tests {
         type Output = Value;
         type Error = AppError;
         const NAME: &'static str = "test.package.echo";
-
-        fn signature(&self) -> semantic_data::schema::FunctionType {
-            semantic_data::schema::FunctionType {
-                params: Vec::new(),
-                results: Vec::new(),
-                throws: None,
-                async_fn: true,
-            }
-        }
     }
 
     impl semantic_rpc_core::RpcCommand<AppRequestContext> for PackageEcho {

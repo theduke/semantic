@@ -1,7 +1,7 @@
 use crate::{AppError, AppRequestContext, DbScopeId};
-use semantic_data::{Object, Value, jobs::*, schema::FunctionType};
+use semantic_data::{Object, Value, jobs::*};
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
+use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
 use std::{future::Future, pin::Pin};
 
 pub(crate) fn register(
@@ -22,8 +22,9 @@ macro_rules! command {
             type Output = Value;
             type Error = AppError;
             const NAME: &'static str = $name;
-            fn signature(&self) -> FunctionType {
-                command_signature($name).expect("registered jobs command")
+            fn definition(&self) -> CommandDef {
+                let (input, output) = command_types($name).expect("registered jobs command");
+                CommandDef::new($name, input, output)
             }
         }
         impl RpcCommand<AppRequestContext> for $type {

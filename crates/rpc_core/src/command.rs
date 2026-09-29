@@ -1,11 +1,38 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use semantic_data::schema::FunctionType;
+use semantic_data::schema::{AnyType, Type, TypeKind};
 use semantic_data::value::Value;
 
 use crate::convert::{RpcDecode, RpcEncode};
 use crate::error::RpcError;
+
+/// Typed definition of a command: its name plus payload and output types.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandDef {
+    pub name: String,
+    pub input: Type,
+    pub output: Type,
+}
+
+impl CommandDef {
+    pub fn new(name: impl Into<String>, input: Type, output: Type) -> Self {
+        Self {
+            name: name.into(),
+            input,
+            output,
+        }
+    }
+
+    /// A definition accepting and returning any value.
+    pub fn untyped(name: impl Into<String>) -> Self {
+        Self::new(
+            name,
+            Type::new(TypeKind::Any(AnyType)),
+            Type::new(TypeKind::Any(AnyType)),
+        )
+    }
+}
 
 pub trait RpcCommandSpec {
     type Payload: RpcEncode + RpcDecode + Send + 'static;
@@ -14,7 +41,9 @@ pub trait RpcCommandSpec {
 
     const NAME: &'static str;
 
-    fn signature(&self) -> FunctionType;
+    fn definition(&self) -> CommandDef {
+        CommandDef::untyped(Self::NAME)
+    }
 }
 
 pub trait RpcCommand<Ctx>: RpcCommandSpec + Send + Sync + 'static {
@@ -49,7 +78,7 @@ impl<E: Into<RpcError>> From<CallError<E>> for RpcError {
 pub trait DynCommand<Ctx, E>: Send + Sync {
     fn name(&self) -> &str;
 
-    fn signature(&self) -> &FunctionType;
+    fn definition(&self) -> &CommandDef;
 
     fn call_value<'a>(
         &'a self,
@@ -60,7 +89,7 @@ pub trait DynCommand<Ctx, E>: Send + Sync {
 
 pub struct CommandAdapter<C> {
     command: C,
-    signature: FunctionType,
+    definition: CommandDef,
 }
 
 impl<C> CommandAdapter<C>
@@ -68,8 +97,11 @@ where
     C: RpcCommandSpec,
 {
     pub fn new(command: C) -> Self {
-        let signature = command.signature();
-        Self { command, signature }
+        let definition = command.definition();
+        Self {
+            command,
+            definition,
+        }
     }
 }
 
@@ -83,8 +115,8 @@ where
         C::NAME
     }
 
-    fn signature(&self) -> &FunctionType {
-        &self.signature
+    fn definition(&self) -> &CommandDef {
+        &self.definition
     }
 
     fn call_value<'a>(

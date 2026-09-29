@@ -7,7 +7,7 @@ use semantic_data::{
     schema::*,
 };
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
+use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
 use std::{future::Future, pin::Pin};
 
 pub(crate) fn register(
@@ -48,20 +48,23 @@ fn explicit(payload: &Object) -> Result<Option<(&str, &str)>, AppError> {
     }
 }
 
-fn signature(name: &str) -> FunctionType {
+fn definition(name: &str) -> CommandDef {
     let method = match name {
         "semantic.import.candidates" => Some("list_candidates"),
         "semantic.import.start_source" => Some("start_import_source"),
         _ => None,
     };
     if let Some(method) = method {
-        return semantic_data::import::package().root.interfaces["Application"]
+        let mut signature = semantic_data::import::package().root.interfaces["Application"]
             .methods
             .iter()
             .find(|m| m.name == method)
             .expect("canonical import method")
             .signature
             .clone();
+        let input = signature.params.remove(0).ty;
+        let output = signature.results.remove(0);
+        return CommandDef::new(name, input, output);
     }
     let object = Type::new(TypeKind::Record(RecordType {
         fields: Default::default(),
@@ -76,15 +79,7 @@ fn signature(name: &str) -> FunctionType {
     } else {
         Type::new(TypeKind::Null(NullType))
     };
-    FunctionType {
-        params: vec![FunctionParam {
-            name: Some("request".into()),
-            ty: object.clone(),
-        }],
-        results: vec![result],
-        throws: Some(Box::new(object)),
-        async_fn: true,
-    }
+    CommandDef::new(name, object, result)
 }
 macro_rules! command {
     ($type:ident,$name:literal,$ctx:ident,$payload:ident,$body:block) => {
@@ -94,8 +89,8 @@ macro_rules! command {
             type Output = Value;
             type Error = AppError;
             const NAME: &'static str = $name;
-            fn signature(&self) -> FunctionType {
-                signature($name)
+            fn definition(&self) -> CommandDef {
+                definition($name)
             }
         }
         impl RpcCommand<AppRequestContext> for $type {

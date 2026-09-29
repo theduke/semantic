@@ -649,10 +649,8 @@ mod tests {
         );
         assert_eq!(query.to_object().get("kind"), Some(&Value::Null));
         for command in ["list", "get", "cancel", "clear_completed", "kinds"] {
-            let signature = command_signature(&format!("semantic.jobs.{command}")).unwrap();
-            assert_eq!(signature.params.len(), 1);
-            assert_eq!(signature.results.len(), 1);
-            let TypeKind::Record(payload) = &signature.params[0].ty.kind else {
+            let (input, _output) = command_types(&format!("semantic.jobs.{command}")).unwrap();
+            let TypeKind::Record(payload) = &input.kind else {
                 panic!("object payload")
             };
             assert!(!payload.fields["scope_id"].required);
@@ -663,8 +661,8 @@ mod tests {
     }
 }
 
-/// Portable command schemas, independent of qualified database attributes.
-pub fn command_signature(name: &str) -> Option<FunctionType> {
+/// Portable command `(input, output)` types, independent of qualified database attributes.
+pub fn command_types(name: &str) -> Option<(Type, Type)> {
     fn string() -> Type {
         Type::new(TypeKind::String(StringType {
             format: None,
@@ -782,15 +780,7 @@ pub fn command_signature(name: &str) -> Option<FunctionType> {
         ])),
         _ => return None,
     };
-    Some(FunctionType {
-        params: vec![FunctionParam {
-            name: Some("payload".into()),
-            ty: record(params),
-        }],
-        results: vec![result],
-        throws: None,
-        async_fn: true,
-    })
+    Some((record(params), result))
 }
 
 pub fn package() -> Package {

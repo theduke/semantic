@@ -7,7 +7,7 @@ pub mod interface_protocol;
 pub mod package;
 pub mod protocol;
 
-pub use command::{CallError, CommandAdapter, DynCommand, RpcCommand, RpcCommandSpec};
+pub use command::{CallError, CommandAdapter, CommandDef, DynCommand, RpcCommand, RpcCommandSpec};
 pub use convert::{RpcDecode, RpcEncode};
 pub use error::{RegisterError, RpcClientError, RpcError};
 pub use package::RuntimePackage;

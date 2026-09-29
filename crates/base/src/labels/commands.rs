@@ -4,7 +4,6 @@ use super::{
 };
 use semantic_data::{
     builtin::DEFAULT_COLLECTION,
-    schema::{FunctionParam, FunctionType, Type, TypeKind},
     value::{Object, Value},
 };
 use semantic_rpc_core::{CommandAdapter, DynCommand, RpcCommand, RpcCommandSpec, RpcError};
@@ -27,17 +26,6 @@ macro_rules! command {
             type Output = Value;
             type Error = RpcError;
             const NAME: &'static str = $name;
-            fn signature(&self) -> FunctionType {
-                FunctionType {
-                    params: vec![FunctionParam {
-                        name: Some("payload".into()),
-                        ty: Type::new(TypeKind::Any(semantic_data::schema::AnyType)),
-                    }],
-                    results: vec![Type::new(TypeKind::Any(semantic_data::schema::AnyType))],
-                    throws: None,
-                    async_fn: true,
-                }
-            }
         }
         impl<Ctx: LabelContext> RpcCommand<Ctx> for $type {
             fn call<'a>(

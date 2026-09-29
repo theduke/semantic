@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
-use semantic_data::schema::FunctionType;
 use semantic_data::value::{Object, Value};
 use semantic_db_core::embedded::StorageStats;
 use semantic_db_core::{
@@ -52,15 +51,6 @@ macro_rules! maintenance_command {
             type Error = AppError;
 
             const NAME: &'static str = $name;
-
-            fn signature(&self) -> FunctionType {
-                FunctionType {
-                    params: Vec::new(),
-                    results: Vec::new(),
-                    throws: None,
-                    async_fn: true,
-                }
-            }
         }
 
         impl RpcCommand<AppRequestContext> for $ty {

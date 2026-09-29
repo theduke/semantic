@@ -85,7 +85,6 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use semantic_data::schema::FunctionType;
     use semantic_data::value::Value;
 
     use semantic_rpc_core::{CallError, RpcCommand, RpcCommandSpec, RpcError, RpcResult};
@@ -100,15 +99,6 @@ mod tests {
         type Error = RpcError;
 
         const NAME: &'static str = "test.echo";
-
-        fn signature(&self) -> FunctionType {
-            FunctionType {
-                params: Vec::new(),
-                results: Vec::new(),
-                throws: None,
-                async_fn: true,
-            }
-        }
     }
 
     impl RpcCommand<()> for EchoCommand {
@@ -129,15 +119,6 @@ mod tests {
         type Error = &'static str;
 
         const NAME: &'static str = "test.fail";
-
-        fn signature(&self) -> FunctionType {
-            FunctionType {
-                params: Vec::new(),
-                results: Vec::new(),
-                throws: None,
-                async_fn: true,
-            }
-        }
     }
 
     impl RpcCommand<()> for FailCommand {
