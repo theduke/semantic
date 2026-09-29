@@ -365,7 +365,13 @@ mod tests {
         let RpcResult::Ok(Value::Object(object)) = response.result else {
             panic!("expected ok object");
         };
-        let Some(Value::List(rows)) = object.get("rows") else {
+        use semantic_data::attr::AttrDescriptorConst;
+        use semantic_data::query::{AttrQueryKind, AttrQueryRows};
+        assert_eq!(
+            object.get(AttrQueryKind::ID),
+            Some(&Value::String("select".to_string()))
+        );
+        let Some(Value::List(rows)) = object.get(AttrQueryRows::ID) else {
             panic!("expected rows");
         };
         let Some(Value::Object(row)) = rows.first() else {
@@ -753,12 +759,13 @@ mod tests {
         let RpcResult::Ok(Value::Object(out)) = response.result else {
             panic!("expected ok object");
         };
-        assert_eq!(out.get("analyzed"), Some(&Value::Bool(true)));
+        assert_eq!(out.get("semantic:file:analyzed"), Some(&Value::Bool(true)));
         assert_eq!(
-            out.get("analysis_kind").and_then(Value::as_str),
+            out.get("semantic:file:analysis_kind")
+                .and_then(Value::as_str),
             Some("image")
         );
-        let Some(Value::Object(attributes)) = out.get("attributes") else {
+        let Some(Value::Object(attributes)) = out.get("semantic:file:attributes") else {
             panic!("expected attributes object");
         };
         assert_eq!(
@@ -830,9 +837,9 @@ mod tests {
         let RpcResult::Ok(Value::Object(out)) = response.result else {
             panic!("expected ok object");
         };
-        assert_eq!(out.get("analyzed"), Some(&Value::Bool(false)));
+        assert_eq!(out.get("semantic:file:analyzed"), Some(&Value::Bool(false)));
         assert!(
-            matches!(out.get("attributes"), Some(Value::Object(attributes)) if attributes.is_empty())
+            matches!(out.get("semantic:file:attributes"), Some(Value::Object(attributes)) if attributes.is_empty())
         );
     }
 
@@ -887,9 +894,9 @@ mod tests {
         let RpcResult::Ok(Value::Object(out)) = response.result else {
             panic!("expected ok object");
         };
-        assert_eq!(out.get("analyzed"), Some(&Value::Bool(false)));
+        assert_eq!(out.get("semantic:file:analyzed"), Some(&Value::Bool(false)));
         assert!(
-            matches!(out.get("attributes"), Some(Value::Object(attributes)) if attributes.is_empty())
+            matches!(out.get("semantic:file:attributes"), Some(Value::Object(attributes)) if attributes.is_empty())
         );
     }
 
@@ -980,7 +987,7 @@ mod tests {
             panic!("expected current response");
         };
         assert_eq!(
-            object.get("scope_id"),
+            object.get("semantic:scope:id"),
             Some(&Value::String("current".to_string()))
         );
     }
@@ -1107,10 +1114,10 @@ mod tests {
             panic!("expected ok object");
         };
         assert_eq!(
-            object.get("format"),
+            object.get("semantic:db:format"),
             Some(&Value::String("facet-json".to_string()))
         );
-        let Some(Value::String(catalog)) = object.get("catalog") else {
+        let Some(Value::String(catalog)) = object.get("semantic:db:catalog") else {
             panic!("expected catalog string");
         };
         let snapshot = facet_json::from_str::<CatalogStorageSnapshot>(catalog)
@@ -1149,8 +1156,8 @@ mod tests {
     async fn command_list_returns_sorted_names() {
         let app = introspection_app();
         let object = call_ok_object(&app, "semantic.command.list", Value::Void).await;
-        assert_eq!(object.get("format"), None);
-        let Some(Value::List(commands)) = object.get("commands") else {
+        assert_eq!(object.get("semantic:command:format"), None);
+        let Some(Value::List(commands)) = object.get("semantic:command:commands") else {
             panic!("expected commands list");
         };
         let names: Vec<&str> = commands
@@ -1159,8 +1166,11 @@ mod tests {
                 let Value::Object(command) = command else {
                     panic!("expected command object");
                 };
-                assert_eq!(command.get("input"), None);
-                command.get("name").and_then(Value::as_str).unwrap()
+                assert_eq!(command.get("semantic:command:input"), None);
+                command
+                    .get("semantic:command:name")
+                    .and_then(Value::as_str)
+                    .unwrap()
             })
             .collect();
         assert!(names.is_sorted());
@@ -1177,10 +1187,10 @@ mod tests {
         )]));
         let object = call_ok_object(&app, "semantic.command.list", payload).await;
         assert_eq!(
-            object.get("format"),
+            object.get("semantic:command:format"),
             Some(&Value::String("facet-json".to_string()))
         );
-        let Some(Value::List(commands)) = object.get("commands") else {
+        let Some(Value::List(commands)) = object.get("semantic:command:commands") else {
             panic!("expected commands list");
         };
         assert!(!commands.is_empty());
@@ -1188,8 +1198,8 @@ mod tests {
             let Value::Object(command) = command else {
                 panic!("expected command object");
             };
-            decode_type(command, "input");
-            decode_type(command, "output");
+            decode_type(command, "semantic:command:input");
+            decode_type(command, "semantic:command:output");
         }
     }
 
@@ -1203,7 +1213,7 @@ mod tests {
             Value::Bool(true),
         )]));
         let object = call_ok_object(&app, "semantic.command.list", payload).await;
-        let Some(Value::List(commands)) = object.get("commands") else {
+        let Some(Value::List(commands)) = object.get("semantic:command:commands") else {
             panic!("expected commands list");
         };
         let input = |name: &str| {
@@ -1211,28 +1221,29 @@ mod tests {
                 .iter()
                 .find_map(|command| match command {
                     Value::Object(command)
-                        if command.get("name").and_then(Value::as_str) == Some(name) =>
+                        if command.get("semantic:command:name").and_then(Value::as_str)
+                            == Some(name) =>
                     {
                         Some(command)
                     }
                     _ => None,
                 })
                 .unwrap_or_else(|| panic!("missing command {name}"));
-            decode_type(command, "input")
+            decode_type(command, "semantic:command:input")
         };
         let TypeKind::Record(get) = input("semantic.db.get").kind else {
             panic!("db.get input should be a record");
         };
         assert!(get.fields["id"].required);
-        assert!(!get.fields["collection"].required);
-        assert!(!get.fields["scope_id"].required);
+        assert!(!get.fields["semantic:db:entity:collection"].required);
+        assert!(!get.fields["semantic:scope:id"].required);
         let TypeKind::Record(open) = input("semantic.scope.open").kind else {
             panic!("scope.open input should be a record");
         };
-        assert!(open.fields["uri"].required);
-        assert!(!open.fields["scope_id"].required);
+        assert!(open.fields["semantic:scope:uri"].required);
+        assert!(!open.fields["semantic:scope:id"].required);
         assert!(matches!(
-            open.fields["mode"].ty.kind,
+            open.fields["semantic:scope:mode"].ty.kind,
             TypeKind::Optional(ref optional) if matches!(optional.inner.kind, TypeKind::Enum(_))
         ));
     }
@@ -1246,11 +1257,11 @@ mod tests {
         )]));
         let object = call_ok_object(&app, "semantic.command.get", payload).await;
         assert_eq!(
-            object.get("format"),
+            object.get("semantic:command:format"),
             Some(&Value::String("facet-json".to_string()))
         );
         assert_eq!(
-            object.get("name"),
+            object.get("semantic:command:name"),
             Some(&Value::String("semantic.command.get".to_string()))
         );
         let definition = app
@@ -1259,8 +1270,14 @@ mod tests {
             .unwrap()
             .definition()
             .clone();
-        assert_eq!(decode_type(&object, "input"), definition.input);
-        assert_eq!(decode_type(&object, "output"), definition.output);
+        assert_eq!(
+            decode_type(&object, "semantic:command:input"),
+            definition.input
+        );
+        assert_eq!(
+            decode_type(&object, "semantic:command:output"),
+            definition.output
+        );
     }
 
     #[tokio::test]
@@ -1313,10 +1330,10 @@ mod tests {
             panic!("expected ok object");
         };
         assert_eq!(
-            object.get("format"),
+            object.get("semantic:db:format"),
             Some(&Value::String("facet-json".to_string()))
         );
-        let Some(Value::String(outcome)) = object.get("outcome") else {
+        let Some(Value::String(outcome)) = object.get("semantic:db:outcome") else {
             panic!("expected outcome string");
         };
         let outcome = facet_json::from_str::<PackageRegistrationOutcome>(outcome)
@@ -1358,10 +1375,13 @@ mod tests {
         let RpcResult::Ok(Value::Object(object)) = response.result else {
             panic!("expected ok object");
         };
-        let Some(Value::Object(stats)) = object.get("stats") else {
+        let Some(Value::Object(stats)) = object.get("semantic:db:batch:stats") else {
             panic!("expected stats");
         };
-        assert_eq!(stats.get("upserted"), Some(&Value::U64(1)));
+        assert_eq!(
+            stats.get("semantic:db:batch:upserted"),
+            Some(&Value::U64(1))
+        );
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::{AttrEntityObject, AttrQueryRows};
 use std::collections::{BTreeSet, VecDeque};
 
 use semantic_base::directory_query::{
@@ -91,7 +93,7 @@ pub async fn get_object(
     let Value::Object(mut response) = response else {
         return Err(format!("Entity {} no longer exists", target.id));
     };
-    let Some(Value::Object(mut object)) = response.remove("object") else {
+    let Some(Value::Object(mut object)) = response.remove(AttrEntityObject::ID) else {
         return Err("Entity response did not contain an object".to_string());
     };
     if !object.contains_key("id") {
@@ -199,7 +201,7 @@ async fn run_query(
     let Value::Object(response) = response else {
         return Err("Query response must be an object".to_string());
     };
-    let Some(Value::List(rows)) = response.get("rows") else {
+    let Some(Value::List(rows)) = response.get(AttrQueryRows::ID) else {
         return Ok(Vec::new());
     };
     Ok(rows

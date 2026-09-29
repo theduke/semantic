@@ -27,12 +27,14 @@ struct Get;
 type CommandFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AppError>> + Send + 'a>>;
 
 #[derive(SemanticType, IntoValue, FromValue, Default)]
+#[semantic(namespace = "semantic:command")]
 struct ListPayload {
     /// Include the encoded input and output types.
     schema: Option<bool>,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:command")]
 struct ListOutput {
     /// The type encoding, with `schema`.
     format: Option<DocumentFormat>,
@@ -41,6 +43,7 @@ struct ListOutput {
 
 /// A command's name, plus its encoded types with `schema`.
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:command")]
 struct CommandEntry {
     name: String,
     input: Option<String>,
@@ -48,11 +51,13 @@ struct CommandEntry {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:command")]
 struct GetPayload {
     name: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:command")]
 struct GetOutput {
     format: DocumentFormat,
     name: String,

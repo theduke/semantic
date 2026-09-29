@@ -32,6 +32,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use http::Request;
     use semantic_app::{DbScopeId, SemanticDb};
+    use semantic_data::attr::AttrDescriptorConst;
     use semantic_data::value::{Object, Value};
     use semantic_db_core::catalog::Catalog;
     use semantic_db_core::{
@@ -39,7 +40,7 @@ mod tests {
         TextQueryInput,
     };
 
-    use semantic_rpc_core::{RpcRequest, RpcResponse, RpcResult};
+    use semantic_rpc_core::{AttrScopeId, RpcRequest, RpcResponse, RpcResult};
     use tower::ServiceExt;
 
     use super::*;
@@ -304,7 +305,7 @@ mod tests {
         let RpcResult::Ok(Value::Object(object)) = result else {
             panic!("expected ok object");
         };
-        let Some(Value::List(rows)) = object.get("rows") else {
+        let Some(Value::List(rows)) = object.get("semantic:db:query:rows") else {
             panic!("expected rows");
         };
         let Some(Value::Object(row)) = rows.first() else {
@@ -330,7 +331,7 @@ mod tests {
         let RpcResult::Ok(Value::Object(object)) = response.result else {
             panic!("expected ok object");
         };
-        assert_eq!(object.get("scope_id"), Some(&Value::Null));
+        assert_eq!(object.get(AttrScopeId::ID), Some(&Value::Null));
     }
 
     #[tokio::test]
@@ -382,7 +383,7 @@ mod tests {
         let RpcResult::Ok(Value::Object(object)) = result else {
             panic!("expected ok object");
         };
-        assert_eq!(object.get("scope_id"), Some(&Value::Null));
+        assert_eq!(object.get(AttrScopeId::ID), Some(&Value::Null));
     }
 
     #[tokio::test]

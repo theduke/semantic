@@ -6,6 +6,10 @@ use semantic_rpc::RpcClient;
 use crate::context::{use_active_scope_id, use_rpc_client};
 use crate::ui_catalog::{RenderSettings, UiCatalog, UiCatalogError};
 
+/// Keys of the `semantic.db.catalog` output.
+const CATALOG_FORMAT: &str = "semantic:db:format";
+const CATALOG_SNAPSHOT: &str = "semantic:db:catalog";
+
 #[derive(Clone, PartialEq)]
 struct CatalogSourceKey {
     client: RpcClient,
@@ -71,7 +75,7 @@ pub async fn load_catalog(
             "catalog response must be an object".to_string(),
         ));
     };
-    match object.get("format") {
+    match object.get(CATALOG_FORMAT) {
         Some(Value::String(format)) if format == "facet-json" => {}
         Some(_) => {
             return Err(UiCatalogError::InvalidResponse(
@@ -84,7 +88,7 @@ pub async fn load_catalog(
             ));
         }
     }
-    let Some(Value::String(catalog)) = object.get("catalog") else {
+    let Some(Value::String(catalog)) = object.get(CATALOG_SNAPSHOT) else {
         return Err(UiCatalogError::InvalidResponse(
             "catalog response missing catalog string".to_string(),
         ));

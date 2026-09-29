@@ -67,8 +67,15 @@ async fn http_maintenance_commands() {
     let server = SemanticServer::new(app);
 
     let verify = rpc(&server, "semantic.db.maintenance.verify", Object::new()).await;
-    assert_eq!(verify.get("ok"), Some(&Value::Bool(true)), "{verify:?}");
-    assert_eq!(verify.get("problem_count"), Some(&Value::U64(0)));
+    assert_eq!(
+        verify.get("semantic:maintenance:ok"),
+        Some(&Value::Bool(true)),
+        "{verify:?}"
+    );
+    assert_eq!(
+        verify.get("semantic:maintenance:problem_count"),
+        Some(&Value::U64(0))
+    );
 
     let reindex = rpc(
         &server,
@@ -76,7 +83,7 @@ async fn http_maintenance_commands() {
         payload(&[("collection", Value::String("entities".into()))]),
     )
     .await;
-    let Some(Value::List(indexes)) = reindex.get("indexes") else {
+    let Some(Value::List(indexes)) = reindex.get("semantic:maintenance:indexes") else {
         panic!("reindexed indexes expected: {reindex:?}")
     };
     assert!(!indexes.is_empty());
@@ -87,22 +94,34 @@ async fn http_maintenance_commands() {
         payload(&[("check_storage_integrity", Value::Bool(false))]),
     )
     .await;
-    let Some(Value::Object(after)) = repair.get("after") else {
+    let Some(Value::Object(after)) = repair.get("semantic:maintenance:after") else {
         panic!("repair report expected: {repair:?}")
     };
-    assert_eq!(after.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(
+        after.get("semantic:maintenance:ok"),
+        Some(&Value::Bool(true))
+    );
 
     let stats = rpc(&server, "semantic.db.maintenance.stats", Object::new()).await;
-    assert!(matches!(stats.get("file_size_bytes"), Some(Value::U64(_))));
+    assert!(matches!(
+        stats.get("semantic:maintenance:file_size_bytes"),
+        Some(Value::U64(_))
+    ));
     let compact = rpc(&server, "semantic.db.maintenance.compact", Object::new()).await;
-    assert!(matches!(compact.get("compacted"), Some(Value::Bool(_))));
+    assert!(matches!(
+        compact.get("semantic:maintenance:compact:compacted"),
+        Some(Value::Bool(_))
+    ));
     let rewrite = rpc(
         &server,
         "semantic.db.maintenance.rewrite_payloads",
         payload(&[("batch_size", Value::I64(10))]),
     )
     .await;
-    assert_eq!(rewrite.get("rewritten"), Some(&Value::U64(0)));
+    assert_eq!(
+        rewrite.get("semantic:maintenance:rewritten"),
+        Some(&Value::U64(0))
+    );
 
     let target = directory.path().join("backup.redb");
     let backup = rpc(
@@ -111,6 +130,8 @@ async fn http_maintenance_commands() {
         payload(&[("path", Value::String(target.display().to_string()))]),
     )
     .await;
-    assert!(matches!(backup.get("entries"), Some(Value::U64(entries)) if *entries > 0));
+    assert!(
+        matches!(backup.get("semantic:maintenance:entries"), Some(Value::U64(entries)) if *entries > 0)
+    );
     assert!(target.exists());
 }

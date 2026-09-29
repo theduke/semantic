@@ -1,3 +1,5 @@
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::{AttrQueryKind, AttrQueryRows};
 use std::{collections::BTreeSet, rc::Rc, time::Instant};
 
 use dioxus::dioxus_core::Task;
@@ -320,7 +322,7 @@ fn parse_query_output(value: Value) -> QueryOutput {
         return QueryOutput::Unexpected(value);
     };
     let kind = object
-        .remove("kind")
+        .remove(AttrQueryKind::ID)
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string());
     if kind != "select" {
@@ -329,7 +331,7 @@ fn parse_query_output(value: Value) -> QueryOutput {
             fields: object,
         };
     }
-    let Some(Value::List(values)) = object.remove("rows") else {
+    let Some(Value::List(values)) = object.remove(AttrQueryRows::ID) else {
         return QueryOutput::Unexpected(Value::Object(object));
     };
     let total = values.len();

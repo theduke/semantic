@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 use semantic_base::directory_query::sql_ident;
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::AttrQueryRows;
 use semantic_data::{
     attr::ATTR_PARENT,
     value::{Object, Value},
@@ -266,7 +268,7 @@ async fn load_page(
     let Value::Object(response) = response else {
         return Err("query response must be an object".to_string());
     };
-    let Some(Value::List(rows)) = response.get("rows") else {
+    let Some(Value::List(rows)) = response.get(AttrQueryRows::ID) else {
         return Err("query response missing rows".to_string());
     };
     rows.iter()

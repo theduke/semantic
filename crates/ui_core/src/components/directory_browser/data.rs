@@ -1,3 +1,5 @@
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::{AttrEntityObject, AttrQueryRows};
 use std::collections::{BTreeMap, BTreeSet};
 
 use dioxus::logger::tracing::info;
@@ -1417,7 +1419,7 @@ async fn load_entity(
         .map_err(|err| err.to_string())?;
     match response {
         Value::Null | Value::Void => Ok(None),
-        Value::Object(mut response) => match response.remove("object") {
+        Value::Object(mut response) => match response.remove(AttrEntityObject::ID) {
             Some(Value::Object(mut object)) => {
                 if !object.contains_key("id")
                     && let Some(Value::String(id)) = response.remove("id")
@@ -1450,7 +1452,7 @@ async fn run_select_query(
     let Value::Object(object) = response else {
         return Err("query response must be an object".to_string());
     };
-    let Some(Value::List(rows)) = object.get("rows") else {
+    let Some(Value::List(rows)) = object.get(AttrQueryRows::ID) else {
         return Ok(Vec::new());
     };
     Ok(rows

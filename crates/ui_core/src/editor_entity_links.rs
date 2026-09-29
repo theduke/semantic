@@ -1,3 +1,5 @@
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::AttrQueryRows;
 use std::rc::Rc;
 
 use dioxus::prelude::use_hook;
@@ -102,7 +104,7 @@ fn rows(value: &Value) -> Option<&[Value]> {
     let Value::Object(object) = value else {
         return None;
     };
-    let Some(Value::List(rows)) = object.get("rows") else {
+    let Some(Value::List(rows)) = object.get(AttrQueryRows::ID) else {
         return None;
     };
     Some(rows)
@@ -237,7 +239,7 @@ mod tests {
 
     fn response(row: Object) -> Value {
         let mut response = Object::new();
-        response.insert("rows", Value::List(vec![Value::Object(row)]));
+        response.insert(AttrQueryRows::ID, Value::List(vec![Value::Object(row)]));
         Value::Object(response)
     }
 

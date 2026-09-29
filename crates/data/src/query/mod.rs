@@ -79,6 +79,19 @@ use crate::value::{FieldPath, Object, Value};
 pub mod text;
 pub use text::{TextAnalyzer, TextMatchMode};
 
+crate::attr!(
+    /// The kind of a `semantic.db.query` command output, like `select`.
+    pub AttrQueryKind, "semantic:db:query:kind", String
+);
+crate::attr!(
+    /// The rows of a `select` output of the `semantic.db.query` command.
+    pub AttrQueryRows, "semantic:db:query:rows", Vec<Object>
+);
+crate::attr!(
+    /// The entity object in `semantic.db.get` outputs and projected batch rows.
+    pub AttrEntityObject, "semantic:db:entity:object", Object
+);
+
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]

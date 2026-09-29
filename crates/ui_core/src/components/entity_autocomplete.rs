@@ -1,3 +1,5 @@
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::AttrQueryRows;
 use std::time::Duration;
 
 use dioxus::prelude::*;
@@ -112,7 +114,7 @@ fn entity_options_from_query_response(value: Value) -> Vec<EntityOption> {
     let Value::Object(object) = value else {
         return Vec::new();
     };
-    let Some(Value::List(rows)) = object.get("rows") else {
+    let Some(Value::List(rows)) = object.get(AttrQueryRows::ID) else {
         return Vec::new();
     };
     rows.iter()

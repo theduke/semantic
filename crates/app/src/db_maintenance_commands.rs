@@ -17,7 +17,7 @@ use semantic_db_core::{
     DEFAULT_REWRITE_BATCH_SIZE, ReindexReport, ReindexTarget, VerifyOptions, VerifyReport,
 };
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
+use semantic_rpc_core::{AttrScopeId, RpcCommand, RpcCommandSpec};
 
 use crate::command::ScopeParams;
 use crate::{AppError, AppRequestContext, DbScopeId, PrincipalKind, SemanticDb};
@@ -172,7 +172,9 @@ maintenance_command!(
 );
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct ReindexPayload {
+    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     /// Rebuild only the indexes of this collection.
     collection: Option<String>,
@@ -196,7 +198,9 @@ impl ReindexPayload {
 
 /// Every check runs unless disabled by its `check_*` field.
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct VerifyPayload {
+    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     check_indexes: Option<bool>,
     check_reverse_references: Option<bool>,
@@ -225,20 +229,25 @@ impl VerifyPayload {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct RewritePayloadsPayload {
+    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     /// A positive batch size.
     batch_size: Option<usize>,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct BackupPayload {
+    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     /// The server file path to write the backup to.
     path: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct VerifyOutput {
     ok: bool,
     #[semantic(required)]
@@ -251,6 +260,7 @@ struct VerifyOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct VerifyProblemOutput {
     kind: String,
     #[semantic(required)]
@@ -263,6 +273,7 @@ struct VerifyProblemOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance:verify")]
 struct VerifyCountsOutput {
     collections: u64,
     rows: u64,
@@ -307,6 +318,7 @@ impl From<VerifyReport> for VerifyOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct ReindexOutput {
     indexes: Vec<ReindexedIndexOutput>,
     derived: Vec<String>,
@@ -314,6 +326,7 @@ struct ReindexOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct ReindexedIndexOutput {
     collection: String,
     index: String,
@@ -346,6 +359,7 @@ impl From<ReindexReport> for ReindexOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct RepairOutput {
     before: VerifyOutput,
     rebuilt: ReindexOutput,
@@ -353,6 +367,7 @@ struct RepairOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct StatsOutput {
     #[semantic(required)]
     file_size_bytes: Option<u64>,
@@ -368,6 +383,7 @@ struct StatsOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct TableStatsOutput {
     name: String,
     entries: u64,
@@ -394,6 +410,7 @@ impl From<StorageStats> for StatsOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance:compact")]
 struct CompactOutput {
     before: StatsOutput,
     after: StatsOutput,
@@ -404,6 +421,7 @@ struct CompactOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct RewritePayloadsOutput {
     scanned: u64,
     rewritten: u64,
@@ -412,6 +430,7 @@ struct RewritePayloadsOutput {
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(namespace = "semantic:maintenance")]
 struct BackupOutput {
     path: String,
     #[semantic(required)]

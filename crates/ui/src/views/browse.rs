@@ -1,3 +1,5 @@
+use semantic_data::attr::AttrDescriptorConst;
+use semantic_data::query::AttrQueryRows;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -571,7 +573,7 @@ async fn run_query(
     let Value::Object(object) = response else {
         return Err("query response must be an object".to_string());
     };
-    let Some(Value::List(rows)) = object.get("rows") else {
+    let Some(Value::List(rows)) = object.get(AttrQueryRows::ID) else {
         return Ok(Vec::new());
     };
     Ok(rows

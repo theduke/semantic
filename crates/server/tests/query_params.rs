@@ -87,7 +87,7 @@ async fn http_named_sql_parameters() {
         let RpcResult::Ok(Value::Object(result)) = result else {
             panic!("{result:?}")
         };
-        let Some(Value::List(rows)) = result.get("rows") else {
+        let Some(Value::List(rows)) = result.get("semantic:db:query:rows") else {
             panic!("rows")
         };
         let Value::Object(row) = &rows[0] else {
