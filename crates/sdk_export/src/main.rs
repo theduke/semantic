@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
 
@@ -136,8 +137,8 @@ fn generate_core_schema_constants() -> String {
 }
 
 struct TypeScriptGenerator {
-    names: HashMap<usize, String>,
-    owners: BTreeMap<String, usize>,
+    names: HashMap<TypeId, String>,
+    owners: BTreeMap<String, TypeId>,
     queue: VecDeque<&'static Shape>,
     /// Class entity types, rendered with the built-in `type`.
     classes: Vec<(facet::ConstTypeId, &'static str)>,
@@ -179,8 +180,9 @@ impl TypeScriptGenerator {
         )
     }
 
-    fn key(shape: &Shape) -> usize {
-        std::ptr::from_ref(shape).addr()
+    /// Identifies the Rust type; one type can have several `Shape` statics.
+    fn key(shape: &Shape) -> TypeId {
+        shape.id.get()
     }
 
     fn named(&mut self, shape: &'static Shape) -> String {
