@@ -11,14 +11,13 @@ use http::header::{
     RANGE,
 };
 use http::{HeaderMap, StatusCode};
-use semantic_app::{
-    AppRequestContext, FileByteRange, FileContent, FileCreateRequest, FileSizedStream,
-};
+use semantic_app::{FileByteRange, FileContent, FileCreateRequest, FileSizedStream};
 use semantic_data::value::{Object, Value};
 use semantic_media::mime;
 
 use crate::ServerError;
-use crate::router::{ServerState, scope_from_parts};
+use crate::error::{app_error_response, server_error_response};
+use crate::router::{ServerState, request_context};
 
 pub async fn upload_handler(
     State(state): State<ServerState>,
@@ -175,21 +174,6 @@ pub async fn delete_handler(
     }
 }
 
-async fn request_context(
-    state: &ServerState,
-    headers: &HeaderMap,
-    query: &BTreeMap<String, String>,
-) -> std::result::Result<AppRequestContext, ServerError> {
-    let principal = state.resolver.resolve_http(headers).await?;
-    let request_scope = scope_from_parts(headers, query, &state.config);
-    Ok(AppRequestContext {
-        app: state.app.clone(),
-        principal,
-        session: None,
-        request_scope,
-    })
-}
-
 fn file_entity_from_headers(
     headers: &HeaderMap,
     header: &HeaderName,
@@ -333,31 +317,6 @@ fn parse_range_header(
         start,
         end: end.min(total_len - 1),
     })
-}
-
-fn server_error_response(err: ServerError) -> Response {
-    match err {
-        ServerError::InvalidHeader(_) => (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
-        ServerError::App(err) => app_error_response(err),
-        ServerError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
-    }
-}
-
-fn app_error_response(err: semantic_app::AppError) -> Response {
-    let status = match &err {
-        semantic_app::AppError::FileAlreadyExists { .. }
-        | semantic_app::AppError::FileReferenced { .. } => StatusCode::CONFLICT,
-        semantic_app::AppError::AuthenticationRequired => StatusCode::UNAUTHORIZED,
-        semantic_app::AppError::FileNotFound(_) => StatusCode::NOT_FOUND,
-        semantic_app::AppError::InvalidRange(_) => StatusCode::RANGE_NOT_SATISFIABLE,
-        semantic_app::AppError::FileUploadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
-        semantic_app::AppError::InvalidFileEntity(_)
-        | semantic_app::AppError::InvalidFileMetadata(_)
-        | semantic_app::AppError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    let error: semantic_rpc_core::RpcError = err.into();
-    (status, Json(error)).into_response()
 }
 
 fn header_value(value: &str) -> HeaderValue {

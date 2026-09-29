@@ -266,8 +266,42 @@ mod tests {
         serde_json::from_slice::<RpcResponse>(&bytes).unwrap()
     }
 
+    async fn post_command(
+        server: &SemanticServer,
+        uri: &str,
+        body: Vec<u8>,
+    ) -> (http::StatusCode, RpcResult) {
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let result = match status {
+            http::StatusCode::OK => RpcResult::Ok(
+                serde_json::from_slice::<semantic_data::value::serde::typed::TypedValue>(&bytes)
+                    .unwrap()
+                    .0,
+            ),
+            _ => RpcResult::Err(serde_json::from_slice(&bytes).unwrap()),
+        };
+        (status, result)
+    }
+
     fn select_db_name(response: RpcResponse) -> String {
-        let RpcResult::Ok(Value::Object(object)) = response.result else {
+        select_db_name_from_result(response.result)
+    }
+
+    fn select_db_name_from_result(result: RpcResult) -> String {
+        let RpcResult::Ok(Value::Object(object)) = result else {
             panic!("expected ok object");
         };
         let Some(Value::List(rows)) = object.get("rows") else {
@@ -325,6 +359,62 @@ mod tests {
         )
         .await;
         assert_eq!(select_db_name(response), "query");
+    }
+
+    #[tokio::test]
+    async fn path_command_invokes_with_body_payload() {
+        let server = SemanticServer::new(test_app());
+        let payload = value_object([("query", Value::String("select * from _".to_string()))]);
+        let body =
+            serde_json::to_vec(&semantic_data::value::serde::typed::TypedRef(&payload)).unwrap();
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.db.query?scope=query", body).await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(select_db_name_from_result(result), "query");
+    }
+
+    #[tokio::test]
+    async fn path_command_empty_body_is_void_payload() {
+        let server = SemanticServer::new(test_app());
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.scope.current", vec![]).await;
+        assert_eq!(status, http::StatusCode::OK);
+        let RpcResult::Ok(Value::Object(object)) = result else {
+            panic!("expected ok object");
+        };
+        assert_eq!(object.get("scope_id"), Some(&Value::Null));
+    }
+
+    #[tokio::test]
+    async fn path_command_errors_map_to_http_statuses() {
+        let server = SemanticServer::new(test_app());
+        let (status, result) = post_command(&server, "/api/v1/rpc/semantic.missing", vec![]).await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND);
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "unknown_command"));
+
+        let (status, result) = post_command(
+            &server,
+            "/api/v1/rpc/semantic.scope.current",
+            b"{not json".to_vec(),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "invalid_payload"));
+
+        let body = serde_json::to_vec(&semantic_data::value::serde::typed::TypedRef(&Value::U8(1)))
+            .unwrap();
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.db.query?scope=query", body).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "invalid_request"));
+
+        let payload = value_object([("query", Value::String("select * from _".to_string()))]);
+        let body =
+            serde_json::to_vec(&semantic_data::value::serde::typed::TypedRef(&payload)).unwrap();
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.db.query?scope=missing", body).await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND);
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "unknown_scope"));
     }
 
     #[tokio::test]
@@ -435,6 +525,23 @@ mod tests {
         );
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&bytes[..], b"hello");
+
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/file/{id}"))
+                    .header("x-semantic-scope", "missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: semantic_rpc_core::RpcError = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error.code, "unknown_scope");
     }
 
     #[tokio::test]
