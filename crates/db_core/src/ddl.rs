@@ -1,7 +1,7 @@
 use semantic_data::{
     attr::{
-        ATTR_PARENT, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO,
-        RELATION_CLASS_ID,
+        ATTR_CREATED_AT, ATTR_PARENT, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO,
+        ATTR_UPDATED_AT, RELATION_CLASS_ID,
     },
     schema::{
         ClassRef, IndexKind, Migration, MigrationCollectionKind, MigrationDdlOperation,
@@ -258,6 +258,7 @@ pub(crate) const INDEX_DEFINITIONS_MIGRATION: &str = "007_index_definitions";
 /// versions registered without maintaining entries.
 pub(crate) const FULL_TEXT_INDEXES_MIGRATION: &str = "008_full_text_indexes";
 pub(crate) const REGISTRATION_PROOFS_MIGRATION: &str = "009_registration_proofs";
+pub(crate) const TIMESTAMP_INDEXES_MIGRATION: &str = "010_timestamp_indexes";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -975,6 +976,7 @@ pub fn core_schema_migrations() -> Vec<Migration> {
         index_definitions_migration(),
         full_text_indexes_migration(),
         registration_proofs_migration(),
+        timestamp_indexes_migration(),
     ]
 }
 
@@ -1218,6 +1220,30 @@ fn shared_attributes_migration() -> Migration {
             .into_iter()
             .map(|attribute| {
                 MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute })
+            })
+            .collect(),
+        meta: Meta::default(),
+    }
+}
+
+fn timestamp_indexes_migration() -> Migration {
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: TIMESTAMP_INDEXES_MIGRATION.to_string(),
+        description: Some("Add range indexes for the shared entity timestamps.".to_string()),
+        operations: [ATTR_CREATED_AT, ATTR_UPDATED_AT]
+            .into_iter()
+            .map(|field| {
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertIndex {
+                    name: field.to_string(),
+                    collection: semantic_data::builtin::DEFAULT_COLLECTION.to_string(),
+                    field: field.to_string(),
+                    unique: false,
+                    kind: IndexKind::Range,
+                    extra_fields: Vec::new(),
+                    predicate: None,
+                    analyzer: Default::default(),
+                })
             })
             .collect(),
         meta: Meta::default(),
@@ -1496,7 +1522,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 9);
+        assert_eq!(first_run.len(), 10);
         for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
             let attribute = catalog.attribute_by_id(id).unwrap();
             let TypeKind::Ref(reference) = &attribute.attribute.ty.kind else {
@@ -1673,6 +1699,36 @@ mod tests {
         let index = catalog.find_equality_index(collection, ATTR_URL).unwrap();
         assert!(!index.schema.unique);
         assert_eq!(index.attr_id, Some(attribute.lid));
+    }
+
+    #[test]
+    fn core_timestamps_are_range_indexed_without_base_or_auto_indexing() {
+        use semantic_data::{
+            attr::{ATTR_CREATED_AT, ATTR_UPDATED_AT},
+            builtin::DEFAULT_COLLECTION,
+        };
+
+        let mut original = Catalog::new();
+        original.set_auto_index_enabled(false);
+        let collection = original
+            .upsert_collection(
+                DEFAULT_COLLECTION,
+                CollectionKind::Polymorphic,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        let (catalog, _) = apply_core_schema_migrations(&original).unwrap();
+
+        for field in [ATTR_CREATED_AT, ATTR_UPDATED_AT] {
+            let index = catalog
+                .indexes_for_collection(collection)
+                .find(|index| index.schema.name == field)
+                .unwrap();
+            assert_eq!(index.canonical_field, field);
+            assert_eq!(index.schema.kind, IndexKind::Range);
+            assert!(!index.schema.unique);
+            assert_eq!(index.attr_id, catalog.attribute_id(field));
+        }
     }
 
     fn recursive_node_class() -> ClassType {
