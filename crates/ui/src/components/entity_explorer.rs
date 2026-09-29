@@ -264,6 +264,8 @@ pub fn QueryEditor(
     #[props(default = "Run query".to_string())] run_label: String,
     #[props(default = "Use collection query".to_string())] clear_label: String,
     #[props(default)] running: bool,
+    #[props(default)] allow_modifications: bool,
+    #[props(default)] on_modifications_change: Option<EventHandler<bool>>,
     #[props(default = true)] show_clear: bool,
     #[props(default)] on_cancel: Option<EventHandler<()>>,
     on_change: EventHandler<String>,
@@ -280,7 +282,26 @@ pub fn QueryEditor(
                     h2 { "{title}" }
                     p { "{description}" }
                 }
-                span { class: "semantic-query-editor__badge", "Read only" }
+                span { class: "semantic-query-editor__badge",
+                    if allow_modifications { "Writes enabled" } else { "SELECT only" }
+                }
+            }
+            if let Some(on_modifications_change) = on_modifications_change {
+                div { class: "semantic-query-editor__mode",
+                    label {
+                        input {
+                            r#type: "checkbox",
+                            role: "switch",
+                            checked: allow_modifications,
+                            disabled: running,
+                            onchange: move |event: FormEvent| on_modifications_change.call(event.checked()),
+                        }
+                        span { "Allow modifying queries" }
+                    }
+                    if allow_modifications {
+                        p { "Changes apply immediately." }
+                    }
+                }
             }
             label { class: "semantic-query-editor__field",
                 span { class: "semantic-query-editor__label", "{label}" }
@@ -311,7 +332,7 @@ pub fn QueryEditor(
                 }
             }
             p { id: help_id, class: "semantic-query-editor__help",
-                "Ctrl/Command+Enter runs the query. This client check is a safety guard, not an authorization boundary."
+                "Ctrl/Command+Enter to run"
             }
             if non_portable {
                 p { class: "semantic-query-editor__warning",

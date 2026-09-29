@@ -2299,6 +2299,37 @@ pre {
   line-height: 1.6;
 }
 
+.semantic-query-editor__mode {
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius-md);
+}
+
+.semantic-query-editor__mode label {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.semantic-query-editor__mode input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--semantic-accent);
+}
+
+.semantic-query-editor__mode p {
+  margin: var(--semantic-space-2) 0 0;
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-caption);
+}
+
+.semantic-query-editor__mode:has(input:checked) {
+  border-color: var(--semantic-color-warning);
+  background: var(--semantic-color-warning-surface);
+}
+
 .semantic-query-editor__label {
   display: block;
   margin-block-end: var(--semantic-space-2);

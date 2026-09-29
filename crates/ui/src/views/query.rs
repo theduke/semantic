@@ -1,4 +1,6 @@
-use std::{collections::BTreeSet, rc::Rc, time::Instant};
+use std::{collections::BTreeSet, rc::Rc};
+
+use web_time::Instant;
 
 use dioxus::dioxus_core::Task;
 use dioxus::prelude::*;
@@ -64,6 +66,7 @@ pub fn QueryPage() -> Element {
     let mut draft =
         use_signal(|| format!("SELECT * FROM {DEFAULT_COLLECTION} LIMIT {DEFAULT_LIMIT}"));
     let mut validation_error = use_signal(|| None::<String>);
+    let mut allow_modifications = use_signal(|| false);
     let mut generation = use_signal(|| 0_u64);
     let mut submitted = use_signal(|| None::<QueryRequest>);
     let mut activity = use_signal(Activity::default);
@@ -74,7 +77,7 @@ pub fn QueryPage() -> Element {
         let client = client.clone();
         let scope_id = scope_id.clone();
         move |()| {
-            let sql = match validate_read_only_sql(&draft.read()) {
+            let sql = match validate_sql(&draft.read(), allow_modifications()) {
                 Ok(sql) => sql,
                 Err(error) => {
                     validation_error.set(Some(error));
@@ -142,15 +145,20 @@ pub fn QueryPage() -> Element {
         section { class: "semantic-query semantic-route-stack",
             PageHeader {
                 title: "Query workbench",
-                description: format!("Run read-only SQL against scope '{scope_label}'. Results stay local to this page."),
+                description: format!("Scope: {scope_label}"),
             }
             QueryEditor {
                 draft: draft.read().clone(),
                 error: validation_error.read().clone(),
                 title: "SQL editor",
-                description: format!("One SELECT statement only. Start with LIMIT {DEFAULT_LIMIT}; this UI retains at most {MAX_ROWS} returned rows."),
-                label: "Read-only SQL query",
+                description: "One statement at a time.",
+                label: "SQL query",
                 editor_id: "semantic-query-workbench-sql",
+                allow_modifications: allow_modifications(),
+                on_modifications_change: move |enabled| {
+                    allow_modifications.set(enabled);
+                    validation_error.set(None);
+                },
                 running,
                 show_clear: false,
                 on_change: move |value| {
@@ -171,7 +179,7 @@ pub fn QueryPage() -> Element {
                 match &state {
                     Activity::Idle => rsx! { EmptyState {
                         title: "Ready to query",
-                        description: "Review the SQL, then run it with the button or Ctrl/Command+Enter.",
+                        description: "Results will appear here.",
                     } },
                     Activity::Running(_) => rsx! { RefreshingIndicator {
                         label: if retained.is_some() { "Running query; previous results remain visible" } else { "Running query" },
@@ -179,7 +187,7 @@ pub fn QueryPage() -> Element {
                     Activity::Cancelled(request) => rsx! { InlineNotice {
                         variant: NoticeVariant::Warning,
                         title: "Query cancelled",
-                        message: format!("Run #{} was cancelled. The editor and last successful result were preserved.", request.generation),
+                        message: format!("Stopped waiting for run #{}. It may still complete on the server.", request.generation),
                     } },
                     Activity::Failed { error, .. } => rsx! { ErrorState {
                         title: "Query failed",
@@ -214,11 +222,16 @@ fn QueryResultView(success: Rc<QuerySuccess>, retained: bool) -> Element {
         QueryOutput::NonRow { kind, fields } => rsx! {
             QueryResultMeta { success: success.clone(), retained }
             InlineNotice {
-                variant: NoticeVariant::Warning,
-                title: "Non-row response",
-                message: format!("The backend returned a '{kind}' outcome; read-only mode expected SELECT rows."),
+                variant: NoticeVariant::Success,
+                title: "Query completed",
+                message: mutation_summary(kind, fields),
             }
-            pre { class: "semantic-query__raw-result", tabindex: "0", "{fields:#?}" }
+            if let Some(Value::List(returning)) = fields.get("returning") {
+                if !returning.is_empty() {
+                    h3 { "Returned rows" }
+                    QueryRowsView { data: Rc::new(parse_rows(returning.clone())) }
+                }
+            }
         },
         QueryOutput::Unexpected(value) => rsx! {
             QueryResultMeta { success: success.clone(), retained }
@@ -332,6 +345,26 @@ fn parse_query_output(value: Value) -> QueryOutput {
     let Some(Value::List(values)) = object.remove("rows") else {
         return QueryOutput::Unexpected(Value::Object(object));
     };
+    QueryOutput::Rows(parse_rows(values))
+}
+
+fn mutation_summary(kind: &str, fields: &Object) -> String {
+    let count = match kind {
+        "insert" => fields.get("inserted"),
+        "delete" => fields.get("deleted"),
+        "update" => fields.get("stats").and_then(|stats| match stats {
+            Value::Object(stats) => stats.get("affected"),
+            _ => None,
+        }),
+        _ => None,
+    };
+    match count {
+        Some(count) => format!("{kind} completed: {} row(s) affected.", value_string(count)),
+        None => format!("The {kind} statement completed successfully."),
+    }
+}
+
+fn parse_rows(values: Vec<Value>) -> QueryRows {
     let total = values.len();
     let mut malformed = 0;
     let rows = values
@@ -346,11 +379,11 @@ fn parse_query_output(value: Value) -> QueryOutput {
         .take(MAX_ROWS)
         .collect::<Vec<_>>()
         .into();
-    QueryOutput::Rows(QueryRows {
+    QueryRows {
         rows,
         total,
         malformed,
-    })
+    }
 }
 
 fn derive_columns(rows: &[Object]) -> Rc<[String]> {
@@ -381,7 +414,24 @@ fn bounded_debug(value: &Value) -> String {
 }
 
 /// Conservative client-side guard. The RPC/database remains the security boundary.
-fn validate_read_only_sql(sql: &str) -> std::result::Result<String, String> {
+fn validate_sql(sql: &str, allow_modifications: bool) -> Result<String, String> {
+    if !allow_modifications {
+        return validate_read_only_sql(sql);
+    }
+    let trimmed = sql.trim();
+    let sanitized = sanitize_sql(trimmed)?;
+    let statement = sanitized.trim();
+    let statement = statement.strip_suffix(';').unwrap_or(statement).trim_end();
+    if statement.is_empty() {
+        return Err("Enter a SQL statement first.".to_string());
+    }
+    if statement.contains(';') {
+        return Err("Run one SQL statement at a time.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_read_only_sql(sql: &str) -> Result<String, String> {
     let trimmed = sql.trim();
     if trimmed.is_empty() {
         return Err("Enter a SELECT query first.".to_string());
@@ -404,7 +454,7 @@ fn validate_read_only_sql(sql: &str) -> std::result::Result<String, String> {
         .map(|word| word.to_ascii_lowercase())
         .collect::<Vec<_>>();
     if words.first().map(String::as_str) != Some("select") {
-        return Err("The workbench accepts one read-only SELECT statement only.".to_string());
+        return Err("Only SELECT statements are allowed. Enable ‘Allow modifying queries’ to run a statement that changes data or schema.".to_string());
     }
     const REJECTED: &[&str] = &[
         "alter", "attach", "call", "copy", "create", "delete", "detach", "drop", "execute",
@@ -419,7 +469,7 @@ fn validate_read_only_sql(sql: &str) -> std::result::Result<String, String> {
     Ok(trimmed.trim_end_matches(';').trim_end().to_string())
 }
 
-fn sanitize_sql(sql: &str) -> std::result::Result<String, String> {
+fn sanitize_sql(sql: &str) -> Result<String, String> {
     let mut output = String::with_capacity(sql.len());
     let mut chars = sql.chars().peekable();
     while let Some(character) = chars.next() {
@@ -477,7 +527,7 @@ async fn run_query(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     query: String,
-) -> std::result::Result<Value, String> {
+) -> Result<Value, String> {
     let mut payload = Object::new();
     if let Some(scope_id) = scope_id {
         payload.insert("scope_id", Value::String(scope_id));
@@ -488,4 +538,53 @@ async fn run_query(
         .invoke_value("semantic.db.query", Value::Object(payload))
         .await
         .map_err(|error| error.to_string())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifying_queries_require_opt_in() {
+        for sql in [
+            "INSERT INTO all (name) VALUES ('test')",
+            "UPDATE all SET name = 'test'",
+            "DELETE FROM all",
+            "DROP TABLE all",
+            "SELECT * INTO backup FROM all",
+        ] {
+            assert!(validate_sql(sql, false).is_err(), "{sql}");
+            assert!(validate_sql(sql, true).is_ok(), "{sql}");
+        }
+        assert!(validate_sql("SELECT 'delete; update' FROM all;", false).is_ok());
+    }
+
+    #[test]
+    fn write_mode_still_requires_one_nonempty_statement() {
+        for sql in [
+            "",
+            "-- comment",
+            ";",
+            "DELETE FROM all; SELECT * FROM all",
+            "DELETE FROM all; ;",
+        ] {
+            assert!(validate_sql(sql, true).is_err(), "{sql}");
+        }
+        assert!(validate_sql("UPDATE all SET name = 'a;b'; -- comment", true).is_ok());
+    }
+
+    #[test]
+    fn mutation_output_keeps_counts_and_returning_rows() {
+        let mut fields = Object::new();
+        fields.insert("kind", Value::String("delete".to_string()));
+        fields.insert("deleted", Value::from(3_i64));
+        fields.insert("returning", Value::List(vec![]));
+        match parse_query_output(Value::Object(fields)) {
+            QueryOutput::NonRow { kind, fields } => {
+                assert_eq!(kind, "delete");
+                assert_eq!(fields.get("deleted"), Some(&Value::from(3_i64)));
+                assert!(fields.contains_key("returning"));
+            }
+            other => panic!("Expected mutation output, got {other:?}"),
+        }
+    }
 }
