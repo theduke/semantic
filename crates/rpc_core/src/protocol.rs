@@ -26,6 +26,15 @@ pub enum RpcResult {
     Err(RpcError),
 }
 
+impl From<Result<Value, RpcError>> for RpcResult {
+    fn from(result: Result<Value, RpcError>) -> Self {
+        match result {
+            Ok(value) => Self::Ok(value),
+            Err(err) => Self::Err(err),
+        }
+    }
+}
+
 impl RpcResponse {
     pub fn ok(id: RpcRequestId, value: Value) -> Self {
         Self {

@@ -11,28 +11,31 @@ use semantic_rpc_core::protocol::{RpcRequest, RpcResponse};
 
 pub use super::axum::RpcState;
 
-pub fn rpc_ws_router<Ctx>(state: RpcState<Ctx>) -> Router
+pub fn rpc_ws_router<Ctx, E>(state: RpcState<Ctx, E>) -> Router
 where
     Ctx: Send + Sync + 'static,
+    E: Into<RpcError> + 'static,
 {
     Router::new()
-        .route("/api/v1/rpc/ws", get(rpc_ws_handler::<Ctx>))
+        .route("/api/v1/rpc/ws", get(rpc_ws_handler::<Ctx, E>))
         .with_state(state)
 }
 
-pub async fn rpc_ws_handler<Ctx>(
-    State(state): State<RpcState<Ctx>>,
+pub async fn rpc_ws_handler<Ctx, E>(
+    State(state): State<RpcState<Ctx, E>>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse
 where
     Ctx: Send + Sync + 'static,
+    E: Into<RpcError> + 'static,
 {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn handle_socket<Ctx>(socket: WebSocket, state: RpcState<Ctx>)
+async fn handle_socket<Ctx, E>(socket: WebSocket, state: RpcState<Ctx, E>)
 where
     Ctx: Send + Sync + 'static,
+    E: Into<RpcError> + 'static,
 {
     let (mut sender, mut receiver) = socket.split();
     let (response_sender, mut response_receiver) = mpsc::unbounded_channel::<RpcResponse>();

@@ -828,6 +828,7 @@ pub(crate) fn default_packages() -> Vec<semantic_data::schema::Package> {
         #[cfg(feature = "base")]
         <semantic_base::BasePackage as semantic_rpc_core::RuntimePackage<
             crate::AppRequestContext,
+            AppError,
         >>::schema(&semantic_base::BasePackage),
         semantic_data::filestore::package(),
     ]

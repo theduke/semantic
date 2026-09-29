@@ -10,12 +10,16 @@ pub use bundle::{MODULE_NAME, PACKAGE_NAME, package, root_module};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BasePackage;
 
-impl<Ctx: labels::LabelContext> semantic_rpc_core::RuntimePackage<Ctx> for BasePackage {
+impl<Ctx, E> semantic_rpc_core::RuntimePackage<Ctx, E> for BasePackage
+where
+    Ctx: labels::LabelContext,
+    E: From<semantic_rpc_core::RpcError>,
+{
     fn schema(&self) -> semantic_data::schema::Package {
         bundle::package()
     }
 
-    fn commands(&self) -> Vec<Box<dyn semantic_rpc_core::DynCommand<Ctx>>> {
+    fn commands(&self) -> Vec<Box<dyn semantic_rpc_core::DynCommand<Ctx, E>>> {
         labels::commands()
     }
 }

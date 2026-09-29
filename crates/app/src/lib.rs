@@ -58,14 +58,16 @@ mod tests {
     struct TestPackage;
     struct PackageEcho;
 
-    impl semantic_rpc_core::RuntimePackage<AppRequestContext> for TestPackage {
+    impl semantic_rpc_core::RuntimePackage<AppRequestContext, AppError> for TestPackage {
         fn schema(&self) -> semantic_data::schema::Package {
             let mut schema = semantic_data::filestore::package();
             schema.name = "test".to_string();
             schema
         }
 
-        fn commands(&self) -> Vec<Box<dyn semantic_rpc_core::DynCommand<AppRequestContext>>> {
+        fn commands(
+            &self,
+        ) -> Vec<Box<dyn semantic_rpc_core::DynCommand<AppRequestContext, AppError>>> {
             vec![Box::new(semantic_rpc_core::CommandAdapter::new(
                 PackageEcho,
             ))]

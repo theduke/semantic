@@ -11,7 +11,9 @@ use semantic_db_core::{
     InsertResult, MutationStats, QueryResult, TextQueryFormat, TextQueryInput, UpdateResult,
 };
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{RpcCommand, RpcCommandSpec, RpcRequest, RpcResponse, RuntimePackage};
+use semantic_rpc_core::{
+    CallError, RpcCommand, RpcCommandSpec, RpcRequest, RpcResponse, RuntimePackage,
+};
 
 use crate::object_store::{ObjectStoreId, ObjectStoreManager, ObjectStoreOpenRequest};
 use crate::{
@@ -28,7 +30,7 @@ pub struct SemanticApp {
 }
 
 pub struct SemanticAppInner {
-    registry: Arc<RpcRegistry<AppRequestContext>>,
+    registry: Arc<RpcRegistry<AppRequestContext, AppError>>,
     scopes: ScopeManager,
     object_stores: ObjectStoreManager,
     file_service: FileService,
@@ -50,7 +52,7 @@ enum DefaultObjectStore {
 
 pub struct SemanticAppBuilder {
     providers: BTreeMap<String, Arc<dyn DbProvider>>,
-    registry: RpcRegistry<AppRequestContext>,
+    registry: RpcRegistry<AppRequestContext, AppError>,
     packages: Vec<Package>,
     default_scope: Option<DefaultScope>,
     default_object_store: Option<DefaultObjectStore>,
@@ -109,6 +111,16 @@ impl SemanticApp {
 
     pub async fn invoke(&self, ctx: AppRequestContext, request: RpcRequest) -> RpcResponse {
         self.inner.registry.invoke(&ctx, request).await
+    }
+
+    /// Call a command by name, preserving its typed [`AppError`].
+    pub async fn call(
+        &self,
+        ctx: AppRequestContext,
+        command: &str,
+        payload: Value,
+    ) -> Result<Value, CallError<AppError>> {
+        self.inner.registry.call(&ctx, command, payload).await
     }
 
     pub fn scopes(&self) -> &ScopeManager {
@@ -234,6 +246,7 @@ impl SemanticAppBuilder {
     pub fn register_command<C>(mut self, command: C) -> std::result::Result<Self, AppError>
     where
         C: RpcCommand<AppRequestContext>,
+        C::Error: Into<AppError>,
         AppRequestContext: Sync,
     {
         self.registry.register(command)?;
@@ -247,7 +260,7 @@ impl SemanticAppBuilder {
     /// Explicitly opened scopes retain their existing schema initialization behavior.
     pub fn register_package(
         mut self,
-        package: impl RuntimePackage<AppRequestContext>,
+        package: impl RuntimePackage<AppRequestContext, AppError>,
     ) -> Result<Self, AppError> {
         for command in package.commands() {
             self.registry.register_dyn(command)?;

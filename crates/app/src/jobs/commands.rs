@@ -4,7 +4,9 @@ use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
 use std::{future::Future, pin::Pin};
 
-pub(crate) fn register(registry: &mut RpcRegistry<AppRequestContext>) -> Result<(), AppError> {
+pub(crate) fn register(
+    registry: &mut RpcRegistry<AppRequestContext, AppError>,
+) -> Result<(), AppError> {
     registry.register(List)?;
     registry.register(Get)?;
     registry.register(Cancel)?;

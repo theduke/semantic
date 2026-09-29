@@ -42,6 +42,71 @@ pub enum AppError {
     ObjectStore(#[from] objstore::ObjStoreError),
     #[error(transparent)]
     RpcRegister(#[from] semantic_rpc_core::RegisterError),
+    /// An already erased error, e.g. from package commands or plugins.
+    #[error("{}", .0.message)]
+    Rpc(semantic_rpc_core::RpcError),
+}
+
+impl From<semantic_rpc_core::RpcError> for AppError {
+    fn from(value: semantic_rpc_core::RpcError) -> Self {
+        Self::Rpc(value)
+    }
+}
+
+impl AppError {
+    /// The HTTP status code that best describes this error.
+    pub fn http_status(&self) -> u16 {
+        match self {
+            Self::InvalidRequest(_)
+            | Self::InvalidFileEntity(_)
+            | Self::InvalidFileMetadata(_)
+            | Self::ScopeRequired
+            | Self::ObjectStoreRequired(_)
+            | Self::FileStoreRequired(_)
+            | Self::UnsupportedDbScheme(_) => 400,
+            Self::AuthenticationRequired => 401,
+            Self::FileNotFound(_)
+            | Self::UnknownScope(_)
+            | Self::UnknownObjectStoreScope(_)
+            | Self::UnknownObjectStore(_, _) => 404,
+            Self::FileAlreadyExists { .. } | Self::FileReferenced { .. } => 409,
+            Self::FileUploadTooLarge { .. } => 413,
+            Self::InvalidRange(_) => 416,
+            Self::Db(error) => db_error_http_status(error),
+            Self::Jobs(_)
+            | Self::MediaAnalysis(_)
+            | Self::ObjectStore(_)
+            | Self::RpcRegister(_)
+            | Self::Rpc(_) => 500,
+        }
+    }
+}
+
+fn db_error_http_status(error: &semantic_db_core::DbError) -> u16 {
+    use semantic_db_core::DbError;
+    match error {
+        DbError::Validation(_)
+        | DbError::UnsupportedConstraint { .. }
+        | DbError::BatchReturn { .. }
+        | DbError::InvalidQuery(_)
+        | DbError::QueryParameter { .. }
+        | DbError::QueryCanonicalization(_)
+        | DbError::ReferenceTargetNotFound { .. }
+        | DbError::UnknownCollection(_)
+        | DbError::UnknownRecordType(_)
+        | DbError::UnknownClass(_)
+        | DbError::UnknownAttribute { .. } => 400,
+        DbError::EntityNotFound { .. } | DbError::UnknownCollectionByName { .. } => 404,
+        DbError::EntityExists { .. }
+        | DbError::UniqueViolation { .. }
+        | DbError::CollectionAlreadyExists { .. }
+        | DbError::TransactionConflict(_) => 409,
+        DbError::ObjectNormalization(_)
+        | DbError::Serialization(_)
+        | DbError::Deserialization(_)
+        | DbError::Storage(_)
+        | DbError::TransactionRetriesExhausted { .. } => 500,
+    }
 }
 
 impl From<AppError> for semantic_rpc_core::RpcError {
@@ -193,6 +258,7 @@ impl From<AppError> for semantic_rpc_core::RpcError {
             AppError::RpcRegister(_) => {
                 semantic_rpc_core::RpcError::new("internal", value.to_string())
             }
+            AppError::Rpc(error) => error,
         }
     }
 }
@@ -260,6 +326,30 @@ mod tests {
             .map(|(key, value)| (key.to_string(), Value::String(value.into()))),
         );
         assert_eq!(error.data, Some(Value::Object(expected)));
+    }
+
+    #[test]
+    fn http_status_classifies_errors() {
+        assert_eq!(AppError::InvalidRequest("bad".into()).http_status(), 400);
+        assert_eq!(AppError::AuthenticationRequired.http_status(), 401);
+        assert_eq!(AppError::UnknownScope("missing".into()).http_status(), 404);
+        assert_eq!(
+            AppError::Db(semantic_db_core::DbError::EntityNotFound {
+                collection: "items".into(),
+                id: "a".into(),
+            })
+            .http_status(),
+            404
+        );
+        assert_eq!(
+            AppError::Db(semantic_db_core::DbError::UnknownAttribute { id: "x".into() })
+                .http_status(),
+            400
+        );
+        assert_eq!(
+            AppError::Rpc(semantic_rpc_core::RpcError::internal("boom")).http_status(),
+            500
+        );
     }
 
     #[test]

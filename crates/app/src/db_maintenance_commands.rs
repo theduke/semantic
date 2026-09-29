@@ -23,7 +23,9 @@ use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
 use crate::command::{expect_object, optional_bool, optional_string, required_string};
 use crate::{AppError, AppRequestContext, DbScopeId, PrincipalKind, SemanticDb};
 
-pub(crate) fn register(registry: &mut RpcRegistry<AppRequestContext>) -> Result<(), AppError> {
+pub(crate) fn register(
+    registry: &mut RpcRegistry<AppRequestContext, AppError>,
+) -> Result<(), AppError> {
     registry.register(Reindex)?;
     registry.register(Verify)?;
     registry.register(Repair)?;

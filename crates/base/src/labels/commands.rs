@@ -69,7 +69,11 @@ command!(ReplaceEntityLabels, "semantic.base.labels.replace", Replace);
 command!(SaveLabel, "semantic.base.labels.save", Save);
 command!(DeleteLabel, "semantic.base.labels.delete", Delete);
 
-pub fn commands<Ctx: LabelContext>() -> Vec<Box<dyn DynCommand<Ctx>>> {
+pub fn commands<Ctx, E>() -> Vec<Box<dyn DynCommand<Ctx, E>>>
+where
+    Ctx: LabelContext,
+    E: From<RpcError>,
+{
     vec![
         Box::new(CommandAdapter::new(ListLabels)),
         Box::new(CommandAdapter::new(LoadEntityLabels)),
