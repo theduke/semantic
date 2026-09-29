@@ -12,6 +12,7 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+semantic_macros = { workspace = true }
 bytes = { workspace = true }
 facet = { version = "0.43.2", features = ["time", "uuid", "bytes"]}
 facet-json = "0.43.2"

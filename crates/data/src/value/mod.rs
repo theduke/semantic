@@ -43,6 +43,8 @@ pub use access::{ObjectAccess, ObjectAccessMut};
 pub mod serde;
 
 pub mod convert;
+pub use convert::{FromValue, FromValueError, IntoValue, Null, SemanticType};
+pub use semantic_macros::{FromValue, IntoValue, SemanticType};
 
 #[cfg(test)]
 mod tests {

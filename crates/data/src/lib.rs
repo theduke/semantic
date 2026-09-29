@@ -1,3 +1,6 @@
+// Lets the derive macros' `::semantic_data` paths resolve inside this crate.
+extern crate self as semantic_data;
+
 pub mod value;
 pub use value::*;
 

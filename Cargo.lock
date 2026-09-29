@@ -8902,6 +8902,7 @@ dependencies = [
  "facet-json",
  "ordered-float 5.1.0",
  "rmp-serde",
+ "semantic_macros",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -9131,6 +9132,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "semantic_macros"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
