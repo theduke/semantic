@@ -81,13 +81,13 @@ export type honorific_suffix = string;
 export type middle_name = string;
 export type nickname = string;
 export type created_at = number | bigint | Date;
-export type base_description_2 = string;
-export type parent = string;
-export type title = string;
 export type updated_at = number | bigint | Date;
+export type shared_description = string;
+export type parent = SemanticValue;
+export type title = string;
 export interface Directory extends SemanticObject {
   [ATTR_CREATED_AT]?: created_at;
-  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_DESCRIPTION]?: shared_description;
   [ATTR_TITLE]: title;
   [ATTR_UPDATED_AT]?: updated_at;
 }
@@ -106,7 +106,7 @@ export interface EntityLabel extends SemanticObject {
 export interface Label extends SemanticObject {
   [ATTR_LABEL_COLOR]?: label_color;
   [ATTR_CREATED_AT]?: created_at;
-  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_DESCRIPTION]?: shared_description;
   [ATTR_LABEL_NAME]: label_name;
   [ATTR_PARENT]?: parent;
   [ATTR_UPDATED_AT]?: updated_at;
@@ -114,7 +114,7 @@ export interface Label extends SemanticObject {
 export interface LabelGroup extends SemanticObject {
   [ATTR_LABEL_COLOR]?: label_color;
   [ATTR_CREATED_AT]?: created_at;
-  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_DESCRIPTION]?: shared_description;
   [ATTR_LABEL_NAME]: label_name;
   [ATTR_PARENT]?: parent;
   [ATTR_LABEL_SELECTION_MODE]?: selection_mode;
@@ -144,7 +144,7 @@ export interface Person extends SemanticObject {
 }
 export interface WebBookmark extends SemanticObject {
   [ATTR_CREATED_AT]?: created_at;
-  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_DESCRIPTION]?: shared_description;
   [ATTR_TITLE]?: title;
   [ATTR_UPDATED_AT]?: updated_at;
   [ATTR_URL]: SemanticValue;

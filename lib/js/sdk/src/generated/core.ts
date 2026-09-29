@@ -35,9 +35,11 @@ export type BatchOperation =
   | { update: { collection: string; query: UpdateQuery } }
   | { delete: { collection: string; query: DeleteQuery } };
 
+/**  Result of a committed batch. */
 export type BatchOutcome = {
   dataset: Record<string, Record<string, SemanticObject>>;
   stats: BatchStats;
+  metrics: WriteMetrics;
 };
 
 /**  Select the result of a committed batch. Dataset preserves the original API. */
@@ -49,14 +51,21 @@ export type BatchReturn =
 
 /**  Rust uses an enum; the application RPC emits each variant's fields directly. */
 export type BatchReply =
-  | { dataset: query_BatchOutcome }
-  | { stats: { stats: BatchStats } }
-  | { changes: { stats: BatchStats; changes: Array<EntityChange> } }
+  | { dataset: BatchOutcome }
+  | { stats: { stats: BatchStats; metrics: WriteMetrics } }
+  | {
+      changes: {
+        stats: BatchStats;
+        changes: Array<EntityChange>;
+        metrics: WriteMetrics;
+      };
+    }
   | {
       projection: {
         stats: BatchStats;
         changes: Array<EntityChange>;
         rows: Array<EntityRecord>;
+        metrics: WriteMetrics;
       };
     };
 
@@ -77,9 +86,10 @@ export type ValidationError = {
 export type ValidationViolation = {
   collection: string;
   id: string;
-  error: stored_ValidationError;
+  error: ValidationError;
 };
 
+/**  A job entity, as stored and as returned over RPC. */
 export type JobRecord = {
   type: "semantic:jobs:job";
   id: string;
@@ -88,12 +98,13 @@ export type JobRecord = {
   "semantic:jobs:job:progress": JobProgress;
   "semantic:jobs:job:error"?: JobError;
   "semantic:jobs:job:created_at": DateTime;
-  "semantic:jobs:job:started_at"?: datetime_DateTime;
+  "semantic:jobs:job:started_at"?: DateTime;
   "semantic:jobs:job:updated_at": DateTime;
-  "semantic:jobs:job:finished_at"?: datetime_DateTime;
+  "semantic:jobs:job:finished_at"?: DateTime;
   "semantic:jobs:job:snapshot_seq": number | bigint;
 };
 
+/**  Missing fields take their [`Default`] values. */
 export type JobListQuery = {
   statuses: Array<JobStatus>;
   kind: string | null;
@@ -103,7 +114,7 @@ export type JobListQuery = {
 };
 
 export type JobListPage = {
-  records: Array<jobs_JobRecord>;
+  records: Array<JobRecord>;
   next_cursor: JobListCursor | null;
 };
 
@@ -228,9 +239,16 @@ export type BatchStats = {
   updated: number | bigint;
 };
 
-export type query_BatchOutcome = {
-  dataset: Record<string, Record<string, SemanticObject>>;
-  stats: BatchStats;
+/**  Counters of one write (batch or transaction commit).   Backends that do not collect write metrics report all counters as zero. */
+export type WriteMetrics = {
+  point_reads: number | bigint;
+  index_reads: number | bigint;
+  collection_scans: number | bigint;
+  fallback_scans: number | bigint;
+  visited_rows: number | bigint;
+  storage_writes: number | bigint;
+  attempts: number | bigint;
+  conflicts: number | bigint;
 };
 
 export type EntityChange = {
@@ -246,15 +264,6 @@ export type EntityRecord = {
 };
 
 export type PathSegment = { field: string } | { index: number | bigint };
-
-export type stored_ValidationError = {
-  class: string;
-  attribute: string;
-  path: Array<PathSegment>;
-  rule: string;
-  expected: string;
-  actual: string;
-};
 
 export type JobStatus =
   | "queued"
@@ -276,23 +285,7 @@ export type JobError = { code: string; message: string };
 
 export type DateTime = number | bigint;
 
-export type datetime_DateTime = number | bigint;
-
 export type JobListCursor = { created_at: DateTime; id: string };
-
-export type jobs_JobRecord = {
-  type: "semantic:jobs:job";
-  id: string;
-  "semantic:jobs:job:kind": string;
-  "semantic:jobs:job:status": JobStatus;
-  "semantic:jobs:job:progress": JobProgress;
-  "semantic:jobs:job:error"?: JobError;
-  "semantic:jobs:job:created_at": DateTime;
-  "semantic:jobs:job:started_at"?: datetime_DateTime;
-  "semantic:jobs:job:updated_at": DateTime;
-  "semantic:jobs:job:finished_at"?: datetime_DateTime;
-  "semantic:jobs:job:snapshot_seq": number | bigint;
-};
 
 export type query_Query =
   | { select: query_SelectQuery }
@@ -393,6 +386,14 @@ export type Expr =
         pattern: Expr;
         case_insensitive: boolean;
         negated: boolean;
+      };
+    }
+  | {
+      text_match: {
+        exprs: Array<Expr>;
+        query: Expr;
+        mode: TextMatchMode;
+        analyzer: TextAnalyzer;
       };
     }
   | { is_null: { expr: Expr; negated: boolean } }
@@ -510,7 +511,7 @@ export type Constraint =
   | "unique"
   | "distinct"
   | "primary_key"
-  | { foreign_key: ForeignKeyRef }
+  | { foreign_key: LegacyReferenceConstraint }
   | { index: { name: string | null; fields: Array<string>; unique: boolean } }
   | { default_value: { value: SemanticValue } }
   | { default_expr: { expr: expression_Expr } }
@@ -523,6 +524,7 @@ export type ClassAttribute = {
   required: boolean;
   ui_order: number | null;
   computed: expression_Expr | null;
+  default?: expression_Expr;
   constraints: Array<Constraint>;
   meta: Meta;
 };
@@ -541,7 +543,7 @@ export type ContractFunction = {
 
 export type ContractInterface = {
   name: string;
-  interface: interface_type_InterfaceType;
+  interface: InterfaceType;
   meta: Meta;
 };
 
@@ -552,7 +554,7 @@ export type MigrationDdlOperation =
   | { delete_type_def: { name: string } }
   | { upsert_record_type: { id: string; name: string; record: RecordType } }
   | { delete_record_type: { id: string } }
-  | { upsert_class: { class: class_type_ClassType } }
+  | { upsert_class: { class: ClassType } }
   | { delete_class: { id: string } }
   | {
       upsert_collection: {
@@ -568,6 +570,10 @@ export type MigrationDdlOperation =
         collection: string;
         field: string;
         unique: boolean;
+        kind: IndexKind;
+        extra_fields: Array<string>;
+        predicate?: query_Expr;
+        analyzer: TextAnalyzer;
       };
     }
   | { delete_index: { name: string; collection: string } }
@@ -612,6 +618,12 @@ export type AggregateOp = "count" | "sum" | "avg" | "min" | "max";
 
 export type PatternMatchKind = "like" | "similar_to";
 
+/**  How the query tokens of a text match combine. */
+export type TextMatchMode = "all" | "any";
+
+/**  Tokenization options of full-text indexes and text matches.   The default analyzer lowercases and splits on non-alphanumeric  characters, without stemming or a minimum token length. Default fields  are omitted when serialized. */
+export type TextAnalyzer = { stemming: boolean; min_token_len: number };
+
 export type SortDirection = "asc" | "desc";
 
 export type DdlOperation =
@@ -621,7 +633,7 @@ export type DdlOperation =
   | { delete_type_def: { name: string } }
   | { upsert_record_type: { id: string; name: string; record: RecordType } }
   | { delete_record_type: { id: string } }
-  | { upsert_class: { class: class_type_ClassType } }
+  | { upsert_class: { class: ClassType } }
   | { delete_class: { id: string } }
   | {
       upsert_collection: {
@@ -637,6 +649,10 @@ export type DdlOperation =
         collection: string;
         field: string;
         unique: boolean;
+        kind: IndexKind;
+        extra_fields: Array<string>;
+        predicate?: query_Expr;
+        analyzer: TextAnalyzer;
       };
     }
   | { delete_index: { name: string; collection: string } }
@@ -695,6 +711,14 @@ export type query_Expr =
         negated: boolean;
       };
     }
+  | {
+      text_match: {
+        exprs: Array<query_Expr>;
+        query: query_Expr;
+        mode: TextMatchMode;
+        analyzer: TextAnalyzer;
+      };
+    }
   | { is_null: { expr: query_Expr; negated: boolean } }
   | { exists: { query: query_SelectQuery; negated: boolean } }
   | {
@@ -739,20 +763,21 @@ export type TypeKind =
   | { map: MapType }
   | { set: SetType }
   | { record: RecordType }
-  | { attribute: attribute_type_AttributeType }
-  | { class: class_type_ClassType }
+  | { attribute: AttributeType }
+  | { class: ClassType }
   | { union: UnionType }
   | { intersection: IntersectionType }
   | { variant: VariantType }
   | { enum: EnumType }
   | { result: ResultType }
   | { function: FunctionType }
-  | { interface: interface_type_InterfaceType }
+  | { interface: InterfaceType }
   | { handle: HandleType }
   | { stream: StreamType }
   | { opaque: OpaqueType }
   | { extension: ExtensionType }
-  | { ref: TypeRef };
+  | { named: TypeRef }
+  | { ref: EntityRef };
 
 export type Annotation = { key: string; value: AnnotationValue };
 
@@ -778,7 +803,8 @@ export type TimeZoneSpec =
   | "allowed"
   | { specific: string };
 
-export type ForeignKeyRef = { to: TypeRef; fields: Array<string> };
+/**  Wire-compatible representation used only to read schemas written before  entity references became intrinsic foreign keys. */
+export type LegacyReferenceConstraint = { to: TypeRef; fields: Array<string> };
 
 export type expression_Expr =
   | { literal: LiteralExpr }
@@ -832,8 +858,6 @@ export type FunctionType = {
   async_fn: boolean;
 };
 
-export type interface_type_InterfaceType = { methods: Array<InterfaceMethod> };
-
 export type RecordType = {
   fields: Record<string, Field>;
   open: boolean;
@@ -841,21 +865,11 @@ export type RecordType = {
   required_order: Array<string> | null;
 };
 
-export type class_type_ClassType = {
-  id: string;
-  name: string;
-  inherits: ClassRef | null;
-  extends: Array<ClassRef>;
-  "semantic:class:strict_schema": boolean;
-  "semantic:ui:creatable_in_ui": boolean | null;
-  attributes: Record<string, ClassAttribute>;
-  constraints: Array<ClassConstraint>;
-  meta: Meta;
-};
-
 export type MigrationCollectionKind = "untyped" | "schema" | "polymorphic";
 
 export type MigrationIntegrityMode = "permissive" | "strict_registered_schema";
+
+export type IndexKind = "equality" | "path_equality" | "range" | "full_text";
 
 export type RelationType = {
   id: string;
@@ -938,14 +952,6 @@ export type MapType = { keys: Type; values: Type; ordered: boolean };
 
 export type SetType = { items: Type };
 
-export type attribute_type_AttributeType = {
-  id: string;
-  name: string;
-  ty: Type;
-  constraints: Array<Constraint>;
-  meta: Meta;
-};
-
 export type UnionType = { variants: Array<Type> };
 
 export type IntersectionType = { variants: Array<Type> };
@@ -970,6 +976,13 @@ export type ExtensionType = {
   namespace: string;
   name: string;
   payload: Record<string, string>;
+};
+
+/**  A stored entity-ID reference.   References always point to the primary ID of an entity in the owning collection.  `target: None` accepts an entity of any class while still requiring it to exist. */
+export type EntityRef = {
+  name: string | null;
+  args: Array<Type>;
+  on_delete: OnDelete;
 };
 
 export type AnnotationValue =
@@ -1180,6 +1193,9 @@ export type EnumVariant = {
 };
 
 export type HandleMode = "own" | "borrow";
+
+/**  Action applied to an entity that contains a reference when its target is deleted. */
+export type OnDelete = "restrict" | "cascade";
 
 export type ParameterRef = { name: string };
 

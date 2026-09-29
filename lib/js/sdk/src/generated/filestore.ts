@@ -57,7 +57,6 @@ export const ATTR_FILE_MIME_TYPE = "semantic:filestore:file:mime_type" as const;
 export const CLEANUP_CLASS_ID = "semantic:filestore:cleanup" as const;
 export const FILE_CLASS_ID = "semantic:filestore:file" as const;
 
-export type description = string;
 export type uploaded_at = number | bigint | Date;
 export type attempts = number;
 export type last_error = string;
@@ -91,7 +90,8 @@ export type media_video_codec = string;
 export type media_video_frame_count = number | bigint;
 export type media_video_frames_per_second = number;
 export type mime_type = string;
-export type parent = string;
+export type description = string;
+export type parent = SemanticValue;
 export type title = string;
 export interface Cleanup {
   [ATTR_CLEANUP_ATTEMPTS]: attempts;

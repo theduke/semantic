@@ -82,7 +82,8 @@ export type TaggedValue =
 export type PathSegment = { field: string } | { index: number };
 export type FieldPath = PathSegment[];
 export type ValidationError = import("./generated/core.js").ValidationError;
-export type ValidationViolation = import("./generated/core.js").ValidationViolation;
+export type ValidationViolation =
+  import("./generated/core.js").ValidationViolation;
 export type BinaryOp =
   | "add"
   | "sub"
