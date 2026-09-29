@@ -33,8 +33,12 @@ class FakeClient implements BookmarkClient {
   async batch(operations: readonly BatchOperation[]): Promise<BatchOutcome> {
     this.batches.push(operations);
     return {
-      dataset: {},
-      stats: { upserted: operations.length, updated: 0, deleted: 0 },
+      "semantic:db:batch:dataset": {},
+      "semantic:db:batch:stats": {
+        "semantic:db:batch:upserted": operations.length,
+        "semantic:db:batch:updated": 0,
+        "semantic:db:batch:deleted": 0,
+      },
     };
   }
   queries: string[] = [];
@@ -46,7 +50,10 @@ class FakeClient implements BookmarkClient {
     query: string,
   ): Promise<QueryResult<T>> {
     this.queries.push(query);
-    return { kind: "select", rows: this.rows as T[] };
+    return {
+      "semantic:db:query:kind": "select",
+      "semantic:db:query:rows": this.rows as T[],
+    };
   }
 
   async insert<T extends object>(
@@ -206,7 +213,10 @@ test("creates the bookmark and directory membership in one ordered batch", async
       : query.includes("SELECT id FROM")
         ? [{ id: "folder-1" }]
         : [];
-    return { kind: "select", rows: rows as T[] };
+    return {
+      "semantic:db:query:kind": "select",
+      "semantic:db:query:rows": rows as T[],
+    };
   };
   await captureBookmark(
     client,

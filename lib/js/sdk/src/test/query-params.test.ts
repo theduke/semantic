@@ -57,7 +57,12 @@ test("SQL parameters use own properties and retain tagged values over HTTP", asy
         return new Response(
           stringifyJson({
             id: request.id,
-            result: { ok: encodeTagged({ kind: "select", rows: [] }) },
+            result: {
+              ok: encodeTagged({
+                "semantic:db:query:kind": "select",
+                "semantic:db:query:rows": [],
+              }),
+            },
           }),
           { headers: { "content-type": "application/json" } },
         );
@@ -68,6 +73,7 @@ test("SQL parameters use own properties and retain tagged values over HTTP", asy
     "SELECT :text, :wide, :id, :bytes FROM items",
     { params },
   );
-  assert.equal(result.kind, "select");
-  if (result.kind === "select") assert.deepEqual(result.rows, []);
+  assert.equal(result["semantic:db:query:kind"], "select");
+  if (result["semantic:db:query:kind"] === "select")
+    assert.deepEqual(result["semantic:db:query:rows"], []);
 });

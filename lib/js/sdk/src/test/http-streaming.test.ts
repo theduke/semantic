@@ -82,7 +82,9 @@ test("all client operations forward request signals outside the wire payload", a
       assert.equal(options?.signal, signal);
       assert.equal(Object.hasOwn(payload as object, "signal"), false);
       seen.push(command);
-      return command.endsWith("package.upsert") ? { outcome: "{}" } : {};
+      return command.endsWith("package.upsert")
+        ? { "semantic:db:outcome": "{}" }
+        : {};
     },
   });
   await client.invoke({ name: "custom" }, {}, { signal });

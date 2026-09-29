@@ -169,7 +169,7 @@ export class SemanticClient {
         options,
       ),
     );
-    return parseJson(String(out.outcome));
+    return parseJson(String(out["semantic:db:outcome"]));
   }
   close(): void {
     this.transport.close?.();

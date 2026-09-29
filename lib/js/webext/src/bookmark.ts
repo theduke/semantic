@@ -96,10 +96,13 @@ export async function findBookmark(
   url: string,
 ): Promise<BookmarkLink | null> {
   const result = await client.sql<BookmarkRow>(bookmarkLookupSql(url));
-  if (result.kind !== "select" || !Array.isArray(result.rows)) {
+  if (
+    result["semantic:db:query:kind"] !== "select" ||
+    !Array.isArray(result["semantic:db:query:rows"])
+  ) {
     throw new Error("Semantic returned an unexpected bookmark query result.");
   }
-  const row = result.rows[0];
+  const row = result["semantic:db:query:rows"][0];
   if (!row) return null;
   if (typeof row.id !== "string" || row.id.length === 0) {
     throw new Error("Semantic returned a bookmark without a valid ID.");
@@ -139,7 +142,10 @@ export async function captureBookmark(
     const target = await client.sql(
       `SELECT id FROM entities WHERE id = '${directory}' AND type IN ('semantic:base:directory') LIMIT 1`,
     );
-    if (target.kind !== "select" || !target.rows.length)
+    if (
+      target["semantic:db:query:kind"] !== "select" ||
+      !target["semantic:db:query:rows"].length
+    )
       throw new Error(
         "The selected folder no longer exists. Choose another folder.",
       );
@@ -147,8 +153,8 @@ export async function captureBookmark(
       `SELECT MAX("semantic:base:directory_node:order") AS next_order FROM entities WHERE "semantic:base:directory_node:from" = '${directory}'`,
     );
     const lastOrder =
-      orderResult.kind === "select"
-        ? orderResult.rows[0]?.next_order
+      orderResult["semantic:db:query:kind"] === "select"
+        ? orderResult["semantic:db:query:rows"][0]?.next_order
         : undefined;
     const order =
       typeof lastOrder === "bigint"

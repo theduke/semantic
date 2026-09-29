@@ -25,20 +25,45 @@ test("batch returning preserves default wire shape, typed modes and caller optio
         };
         const payload = decodeTagged(envelope.payload) as SemanticObject;
         requests.push(payload);
-        const stats = { upserted: 1, deleted: 0, updated: 0 };
-        const changes = [{ collection: "default", id: "a", kind: "upsert" }];
+        const stats = {
+          "semantic:db:batch:stats": {
+            "semantic:db:batch:upserted": 1,
+            "semantic:db:batch:deleted": 0,
+            "semantic:db:batch:updated": 0,
+          },
+        };
+        const changes = {
+          ...stats,
+          "semantic:db:batch:changes": [
+            {
+              "semantic:db:entity:collection": "default",
+              id: "a",
+              "semantic:db:entity:kind": "upsert",
+            },
+          ],
+        };
         const reply =
           payload.returning === "stats"
-            ? { stats }
+            ? stats
             : payload.returning === "changes"
-              ? { stats, changes }
+              ? changes
               : typeof payload.returning === "object"
                 ? {
-                    stats,
-                    changes,
-                    rows: [{ collection: "default", id: "a", object: {} }],
+                    ...changes,
+                    "semantic:db:batch:rows": [
+                      {
+                        "semantic:db:entity:collection": "default",
+                        id: "a",
+                        "semantic:db:entity:object": {},
+                      },
+                    ],
                   }
-                : { stats, dataset: { default: { a: { id: "a" } } } };
+                : {
+                    ...stats,
+                    "semantic:db:batch:dataset": {
+                      default: { a: { id: "a" } },
+                    },
+                  };
         return new Response(
           stringifyJson({
             id: envelope.id,
@@ -49,18 +74,23 @@ test("batch returning preserves default wire shape, typed modes and caller optio
     }),
   );
   const options = { scopeId: "scope", signal: controller.signal };
-  assert.ok((await client.batch([], options)).dataset);
+  assert.ok((await client.batch([], options))["semantic:db:batch:dataset"]);
   assert.equal(Object.hasOwn(requests[0]!, "returning"), false);
   assert.ok(
-    (await client.batch([], { ...options, returning: "dataset" })).dataset,
+    (await client.batch([], { ...options, returning: "dataset" }))[
+      "semantic:db:batch:dataset"
+    ],
   );
   assert.equal(
-    (await client.batch([], { ...options, returning: "stats" })).stats.upserted,
+    (await client.batch([], { ...options, returning: "stats" }))[
+      "semantic:db:batch:stats"
+    ]["semantic:db:batch:upserted"],
     1,
   );
   assert.equal(
-    (await client.batch([], { ...options, returning: "changes" })).changes[0]
-      ?.id,
+    (await client.batch([], { ...options, returning: "changes" }))[
+      "semantic:db:batch:changes"
+    ][0]?.id,
     "a",
   );
   assert.equal(
@@ -69,7 +99,7 @@ test("batch returning preserves default wire shape, typed modes and caller optio
         ...options,
         returning: { projection: { fields: [] } },
       })
-    ).rows[0]?.id,
+    )["semantic:db:batch:rows"][0]?.id,
     "a",
   );
   for (const request of requests) assert.equal(request.scope_id, "scope");
@@ -81,30 +111,32 @@ test("batch returning preserves default wire shape, typed modes and caller optio
     assert.equal(Object.hasOwn(request, "signal"), false);
   // The original descriptor keeps its dataset result type.
   assert.ok(
-    (await client.invoke(commands.batch, { operations: [] }, options)).dataset,
+    (await client.invoke(commands.batch, { operations: [] }, options))[
+      "semantic:db:batch:dataset"
+    ],
   );
 });
 
 // Compile-time contracts: only fields guaranteed by the selected mode are visible.
 async function typeContracts(client: SemanticClient, mode: BatchReturn) {
   const stats = await client.batch([], { returning: "stats" });
-  stats.stats;
+  stats["semantic:db:batch:stats"];
   // @ts-expect-error stats does not contain a dataset
-  stats.dataset;
+  stats["semantic:db:batch:dataset"];
   // @ts-expect-error stats does not contain changes
-  stats.changes;
+  stats["semantic:db:batch:changes"];
   const changes = await client.batch([], { returning: "changes" });
-  changes.changes;
+  changes["semantic:db:batch:changes"];
   // @ts-expect-error changes does not contain projected rows
-  changes.rows;
+  changes["semantic:db:batch:rows"];
   const rows = await client.batch([], {
     returning: { projection: { fields: ["name"] } },
   });
-  rows.rows;
+  rows["semantic:db:batch:rows"];
   const result = await client.batch([], { returning: mode });
-  result.stats;
+  result["semantic:db:batch:stats"];
   // @ts-expect-error a union mode does not guarantee a dataset
-  result.dataset;
+  result["semantic:db:batch:dataset"];
   // @ts-expect-error unknown response mode
   await client.batch([], { returning: "invalid" });
 }
