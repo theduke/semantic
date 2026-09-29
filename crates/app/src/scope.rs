@@ -35,7 +35,16 @@ impl From<String> for DbScopeId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    semantic_data::value::SemanticType,
+    semantic_data::value::IntoValue,
+    semantic_data::value::FromValue,
+)]
+#[semantic(rename_all = "snake_case")]
 pub enum ScopeVisibility {
     Principal,
     System,

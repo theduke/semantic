@@ -4,11 +4,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use semantic_data::schema::{DbOpenMode, Package};
-use semantic_data::value::{Object, Value};
+use semantic_data::schema::{
+    DbOpenMode, EnumRepr, EnumType, EnumVariant, Meta, Package, Type, TypeKind, UnionType,
+};
+use semantic_data::value::{FromValue, FromValueError, IntoValue, Object, SemanticType, Value};
 use semantic_db_core::{
-    Batch, BatchOperation, BatchOutcome, BatchStats, DEFAULT_COLLECTION, DeleteResult,
-    InsertResult, MutationStats, QueryResult, TextQueryFormat, TextQueryInput, UpdateResult,
+    Batch, BatchOperation, BatchStats, DEFAULT_COLLECTION, DeleteResult, InsertResult, QueryResult,
+    TextQueryFormat, TextQueryInput, UpdateResult,
 };
 use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{
@@ -384,10 +386,10 @@ struct DbValidationActivateCommand;
 struct FileAnalyzeCommand;
 
 macro_rules! command_spec {
-    ($ty:ty, $name:literal) => {
+    ($ty:ty, $name:literal, $payload:ty => $output:ty) => {
         impl RpcCommandSpec for $ty {
-            type Payload = Value;
-            type Output = Value;
+            type Payload = $payload;
+            type Output = $output;
             type Error = AppError;
 
             const NAME: &'static str = $name;
@@ -395,82 +397,583 @@ macro_rules! command_spec {
     };
 }
 
-command_spec!(ScopeOpenCommand, "semantic.scope.open");
-command_spec!(ScopeUseCommand, "semantic.scope.use");
-command_spec!(ScopeCurrentCommand, "semantic.scope.current");
-command_spec!(ScopeListCommand, "semantic.scope.list");
-command_spec!(DbCatalogCommand, "semantic.db.catalog");
-command_spec!(DbPackageUpsertCommand, "semantic.db.package.upsert");
-command_spec!(DbQueryCommand, "semantic.db.query");
-command_spec!(DbGetCommand, "semantic.db.get");
-command_spec!(DbInsertCommand, "semantic.db.insert");
-command_spec!(DbDeleteCommand, "semantic.db.delete");
-command_spec!(DbBatchCommand, "semantic.db.batch");
+command_spec!(ScopeOpenCommand, "semantic.scope.open", ScopeOpenPayload => ScopeOpenOutput);
+command_spec!(ScopeUseCommand, "semantic.scope.use", Option<ScopeSelector> => CurrentScope);
+command_spec!(ScopeCurrentCommand, "semantic.scope.current", Option<NoParams> => CurrentScope);
+command_spec!(ScopeListCommand, "semantic.scope.list", Option<NoParams> => Vec<ScopeInfoOutput>);
+command_spec!(DbCatalogCommand, "semantic.db.catalog", Option<ScopeParams> => CatalogOutput);
+command_spec!(
+    DbPackageUpsertCommand,
+    "semantic.db.package.upsert",
+    PackageUpsertPayload => PackageUpsertOutput
+);
+command_spec!(DbQueryCommand, "semantic.db.query", QueryPayload => QueryOutput);
+command_spec!(DbGetCommand, "semantic.db.get", EntityPayload => Option<EntityOutput>);
+command_spec!(DbInsertCommand, "semantic.db.insert", InsertPayload => ());
+command_spec!(DbDeleteCommand, "semantic.db.delete", EntityPayload => ());
+command_spec!(DbBatchCommand, "semantic.db.batch", BatchPayload => BatchOutput);
 command_spec!(
     DbValidationPreflightCommand,
-    "semantic.db.validation.preflight"
+    "semantic.db.validation.preflight",
+    ScopeParams => Vec<ValidationViolationOutput>
 );
 command_spec!(
     DbValidationActivateCommand,
-    "semantic.db.validation.activate"
+    "semantic.db.validation.activate",
+    ScopeParams => ()
 );
-command_spec!(FileAnalyzeCommand, "semantic.file.analyze");
+command_spec!(FileAnalyzeCommand, "semantic.file.analyze", FileAnalyzePayload => FileAnalyzeOutput);
+
+/// Encoding of serialized documents, like catalogs and packages.
+#[derive(SemanticType, IntoValue, FromValue, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentFormat {
+    #[semantic(rename = "facet-json")]
+    FacetJson,
+}
+
+/// A payload with only an optional scope; the current scope applies without it.
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug, Default)]
+pub(crate) struct ScopeParams {
+    pub scope_id: Option<String>,
+}
+
+impl ScopeParams {
+    pub(crate) fn scope_id(self) -> Option<DbScopeId> {
+        self.scope_id.map(DbScopeId::new)
+    }
+}
+
+/// A payload without fields.
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug, Default)]
+pub(crate) struct NoParams {}
+
+#[derive(SemanticType, IntoValue, FromValue, Clone, Copy, Debug, Default)]
+#[semantic(rename_all = "snake_case")]
+enum OpenMode {
+    OpenExisting,
+    #[default]
+    AutoCreate,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ScopeOpenPayload {
+    uri: String,
+    scope_id: Option<String>,
+    /// Defaults to `auto_create`.
+    mode: Option<OpenMode>,
+    /// Defaults to `principal`.
+    visibility: Option<ScopeVisibility>,
+    /// Defaults to `true`.
+    set_current: Option<bool>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ScopeInfoOutput {
+    scope_id: String,
+    owner: String,
+    visibility: ScopeVisibility,
+    uri: String,
+    loaded: bool,
+}
+
+impl From<ScopeInfo> for ScopeInfoOutput {
+    fn from(info: ScopeInfo) -> Self {
+        Self {
+            scope_id: info.scope_id.to_string(),
+            owner: info.owner.to_string(),
+            visibility: info.visibility,
+            uri: info.uri,
+            loaded: info.loaded,
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ScopeOpenOutput {
+    #[semantic(flatten)]
+    info: ScopeInfoOutput,
+    /// Whether the scope became the session's current scope.
+    current: bool,
+}
+
+/// A scope id, or an object with an optional `scope_id`.
+enum ScopeSelector {
+    Id(String),
+    Params(ScopeParams),
+}
+
+impl SemanticType for ScopeSelector {
+    fn semantic_type() -> Type {
+        Type::new(TypeKind::Union(UnionType {
+            variants: vec![String::semantic_type(), ScopeParams::semantic_type()],
+        }))
+    }
+}
+
+impl IntoValue for ScopeSelector {
+    fn into_value(self) -> Value {
+        match self {
+            Self::Id(id) => Value::String(id),
+            Self::Params(params) => params.into_value(),
+        }
+    }
+}
+
+impl FromValue for ScopeSelector {
+    fn from_value(value: Value) -> Result<Self, FromValueError> {
+        match value {
+            Value::String(id) => Ok(Self::Id(id)),
+            value @ Value::Object(_) => ScopeParams::from_value(value).map(Self::Params),
+            other => Err(FromValueError::expected(
+                "scope id string or object",
+                &other,
+            )),
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct CurrentScope {
+    #[semantic(required)]
+    scope_id: Option<String>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct CatalogOutput {
+    format: DocumentFormat,
+    /// The catalog storage snapshot, encoded in `format`.
+    catalog: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct PackageUpsertPayload {
+    scope_id: Option<String>,
+    format: Option<DocumentFormat>,
+    /// The package, encoded in `format`.
+    package: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct PackageUpsertOutput {
+    format: DocumentFormat,
+    /// The update outcome, encoded in `format`.
+    outcome: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue, Clone, Copy, Default)]
+#[semantic(rename_all = "snake_case")]
+enum QueryFormat {
+    #[default]
+    Sql,
+    Prql,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct QueryPayload {
+    scope_id: Option<String>,
+    query: String,
+    /// Defaults to `sql`.
+    format: Option<QueryFormat>,
+    #[semantic(default)]
+    params: BTreeMap<String, Value>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(tag = "kind", rename_all = "snake_case")]
+enum QueryOutput {
+    Select {
+        rows: Vec<Object>,
+    },
+    Insert {
+        inserted: usize,
+        returning: Vec<Object>,
+    },
+    Update {
+        stats: MutationStatsOutput,
+        returning: Vec<Object>,
+    },
+    Delete {
+        deleted: usize,
+        returning: Vec<Object>,
+    },
+    Ddl,
+}
+
+impl From<QueryResult> for QueryOutput {
+    fn from(result: QueryResult) -> Self {
+        match result {
+            QueryResult::Select(rows) => Self::Select { rows },
+            QueryResult::Insert(InsertResult {
+                inserted,
+                returning,
+            }) => Self::Insert {
+                inserted,
+                returning,
+            },
+            QueryResult::Update(UpdateResult { stats, returning }) => Self::Update {
+                stats: MutationStatsOutput {
+                    matched: stats.matched,
+                    affected: stats.affected,
+                },
+                returning,
+            },
+            QueryResult::Delete(DeleteResult { deleted, returning }) => {
+                Self::Delete { deleted, returning }
+            }
+            QueryResult::Ddl(()) => Self::Ddl,
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct MutationStatsOutput {
+    matched: usize,
+    affected: usize,
+}
+
+/// Identifies an entity; `collection` defaults to the default collection.
+#[derive(SemanticType, IntoValue, FromValue)]
+struct EntityPayload {
+    scope_id: Option<String>,
+    collection: Option<String>,
+    id: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct EntityOutput {
+    collection: String,
+    id: String,
+    object: Object,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct InsertPayload {
+    scope_id: Option<String>,
+    collection: Option<String>,
+    id: String,
+    object: Object,
+}
+
+fn collection_or_default(collection: Option<String>) -> String {
+    collection.unwrap_or_else(|| DEFAULT_COLLECTION.into())
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct BatchPayload {
+    scope_id: Option<String>,
+    operations: Vec<BatchOperationPayload>,
+    #[semantic(default)]
+    returning: BatchReturning,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(tag = "kind", rename_all = "snake_case")]
+enum BatchOperationPayload {
+    Create {
+        collection: Option<String>,
+        id: String,
+        object: Object,
+    },
+    Upsert {
+        collection: Option<String>,
+        id: String,
+        object: Object,
+    },
+    DeleteById {
+        collection: Option<String>,
+        id: String,
+    },
+    DeleteByIds {
+        collection: Option<String>,
+        ids: Vec<String>,
+    },
+}
+
+impl From<BatchOperationPayload> for BatchOperation {
+    fn from(operation: BatchOperationPayload) -> Self {
+        match operation {
+            BatchOperationPayload::Create {
+                collection,
+                id,
+                object,
+            } => BatchOperation::Create {
+                collection: collection_or_default(collection),
+                id,
+                object,
+            },
+            BatchOperationPayload::Upsert {
+                collection,
+                id,
+                object,
+            } => BatchOperation::Upsert {
+                collection: collection_or_default(collection),
+                id,
+                object,
+            },
+            BatchOperationPayload::DeleteById { collection, id } => BatchOperation::DeleteById {
+                collection: collection_or_default(collection),
+                id,
+            },
+            BatchOperationPayload::DeleteByIds { collection, ids } => BatchOperation::DeleteByIds {
+                collection: collection_or_default(collection),
+                ids,
+            },
+        }
+    }
+}
+
+/// The batch reply mode: `"dataset"` (the default), `"stats"`, `"changes"`, or
+/// `{"projection": {"fields": [...]}}`.
+///
+/// Decoding keeps the raw value, so invalid modes fail as a
+/// [`semantic_db_core::DbError::BatchReturn`] error rather than an invalid payload.
+#[derive(Default)]
+struct BatchReturning(Option<Value>);
+
+impl SemanticType for BatchReturning {
+    fn semantic_type() -> Type {
+        let modes = Type::new(TypeKind::Enum(EnumType {
+            repr: EnumRepr::String,
+            variants: ["dataset", "stats", "changes"]
+                .into_iter()
+                .map(|name| EnumVariant {
+                    name: name.into(),
+                    value: None,
+                    symbol: Some(name.into()),
+                    meta: Meta::default(),
+                })
+                .collect(),
+        }));
+        Type::new(TypeKind::Union(UnionType {
+            variants: vec![modes, BatchProjectionMode::semantic_type()],
+        }))
+    }
+}
+
+impl IntoValue for BatchReturning {
+    fn into_value(self) -> Value {
+        self.0
+            .unwrap_or_else(|| Value::String("dataset".to_string()))
+    }
+}
+
+impl FromValue for BatchReturning {
+    fn from_value(value: Value) -> Result<Self, FromValueError> {
+        Ok(Self(Some(value)))
+    }
+}
+
+/// Declares the projection mode of [`BatchReturning`].
+#[derive(SemanticType)]
+#[allow(dead_code)]
+struct BatchProjectionMode {
+    projection: BatchProjection,
+}
+
+#[derive(SemanticType)]
+#[allow(dead_code)]
+struct BatchProjection {
+    fields: Vec<String>,
+}
+
+impl BatchReturning {
+    fn parse(self) -> Result<semantic_db_core::BatchReturn, AppError> {
+        use semantic_db_core::{BatchReturn, BatchReturnErrorReason, DbError};
+        let invalid = || {
+            AppError::Db(DbError::BatchReturn {
+                reason: BatchReturnErrorReason::UnknownMode,
+                field: None,
+            })
+        };
+        match self.0 {
+            None => Ok(BatchReturn::Dataset),
+            Some(Value::String(mode)) => match mode.as_str() {
+                "dataset" => Ok(BatchReturn::Dataset),
+                "stats" => Ok(BatchReturn::Stats),
+                "changes" => Ok(BatchReturn::Changes),
+                _ => Err(invalid()),
+            },
+            Some(Value::Object(mode)) if mode.len() == 1 => {
+                let Some(Value::Object(projection)) = mode.get("projection") else {
+                    return Err(invalid());
+                };
+                if projection.len() != 1 {
+                    return Err(invalid());
+                }
+                let Some(Value::List(fields)) = projection.get("fields") else {
+                    return Err(invalid());
+                };
+                let fields = fields
+                    .iter()
+                    .map(|field| match field {
+                        Value::String(field) => Ok(field.clone()),
+                        _ => Err(invalid()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(BatchReturn::Projection { fields })
+            }
+            _ => Err(invalid()),
+        }
+    }
+}
+
+/// The batch reply; its fields depend on the `returning` mode.
+#[derive(SemanticType, IntoValue, FromValue)]
+struct BatchOutput {
+    stats: BatchStatsOutput,
+    /// Rows written, by collection and id (mode `dataset`).
+    dataset: Option<BTreeMap<String, BTreeMap<String, Object>>>,
+    /// Changed entities (modes `changes` and `projection`).
+    changes: Option<Vec<EntityChangeOutput>>,
+    /// Projected rows (mode `projection`).
+    rows: Option<Vec<EntityOutput>>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct BatchStatsOutput {
+    upserted: usize,
+    deleted: usize,
+    updated: usize,
+}
+
+impl From<BatchStats> for BatchStatsOutput {
+    fn from(stats: BatchStats) -> Self {
+        Self {
+            upserted: stats.upserted,
+            deleted: stats.deleted,
+            updated: stats.updated,
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+#[semantic(rename_all = "snake_case")]
+enum EntityChangeKindOutput {
+    Upsert,
+    Delete,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct EntityChangeOutput {
+    collection: String,
+    id: String,
+    kind: EntityChangeKindOutput,
+}
+
+impl From<semantic_db_core::BatchReply> for BatchOutput {
+    fn from(reply: semantic_db_core::BatchReply) -> Self {
+        use semantic_db_core::{BatchReply, EntityChangeKind};
+        let (stats, dataset, changes, rows) = match reply {
+            BatchReply::Dataset(outcome) => {
+                let dataset = outcome
+                    .dataset
+                    .into_iter()
+                    .map(|(collection, rows)| (collection, rows.into_iter().collect()))
+                    .collect();
+                (outcome.stats, Some(dataset), None, None)
+            }
+            BatchReply::Stats { stats, .. } => (stats, None, None, None),
+            BatchReply::Changes { stats, changes, .. } => (stats, None, Some(changes), None),
+            BatchReply::Projection {
+                stats,
+                changes,
+                rows,
+                ..
+            } => (stats, None, Some(changes), Some(rows)),
+        };
+        Self {
+            stats: stats.into(),
+            dataset,
+            changes: changes.map(|changes| {
+                changes
+                    .into_iter()
+                    .map(|change| EntityChangeOutput {
+                        collection: change.collection,
+                        id: change.id,
+                        kind: match change.kind {
+                            EntityChangeKind::Upsert => EntityChangeKindOutput::Upsert,
+                            EntityChangeKind::Delete => EntityChangeKindOutput::Delete,
+                        },
+                    })
+                    .collect()
+            }),
+            rows: rows.map(|rows| {
+                rows.into_iter()
+                    .map(|row| EntityOutput {
+                        collection: row.collection,
+                        id: row.id,
+                        object: row.object,
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ValidationViolationOutput {
+    collection: String,
+    id: String,
+    /// The validation error data, as in `validation_failed` errors.
+    error: Value,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct FileAnalyzePayload {
+    scope_id: Option<String>,
+    id: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct FileAnalyzeOutput {
+    id: String,
+    collection: String,
+    analyzed: bool,
+    #[semantic(required)]
+    analysis_kind: Option<String>,
+    attributes: Object,
+    object: Object,
+}
+
+type CommandFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AppError>> + Send + 'a>>;
 
 impl RpcCommand<AppRequestContext> for ScopeOpenCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: ScopeOpenPayload,
+    ) -> CommandFuture<'a, ScopeOpenOutput> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let uri = required_string(&object, "uri")?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let mode = match optional_string(&object, "mode")?.as_deref() {
-                Some("open_existing") => DbOpenMode::OpenExisting,
-                Some("auto_create") | None => DbOpenMode::AutoCreate,
-                Some(other) => {
-                    return Err(AppError::InvalidRequest(format!(
-                        "unsupported open mode '{other}'"
-                    )));
-                }
+            let mode = match payload.mode.unwrap_or_default() {
+                OpenMode::OpenExisting => DbOpenMode::OpenExisting,
+                OpenMode::AutoCreate => DbOpenMode::AutoCreate,
             };
-            let visibility = match optional_string(&object, "visibility")?.as_deref() {
-                Some("system") => ScopeVisibility::System,
-                Some("principal") | None => ScopeVisibility::Principal,
-                Some(other) => {
-                    return Err(AppError::InvalidRequest(format!(
-                        "unsupported scope visibility '{other}'"
-                    )));
-                }
-            };
-            let set_current = optional_bool(&object, "set_current")?.unwrap_or(true);
+            let set_current = payload.set_current.unwrap_or(true);
             let info = ctx
                 .app
                 .scopes()
                 .open_scope(
                     &ctx.principal,
                     ScopeOpenOptions {
-                        scope_id,
+                        scope_id: payload.scope_id.map(DbScopeId::new),
                         request: DbOpenRequest {
-                            uri: uri.clone(),
+                            uri: payload.uri,
                             mode,
                         },
-                        visibility,
+                        visibility: payload.visibility.unwrap_or(ScopeVisibility::Principal),
                         set_current,
                     },
                 )
                 .await?;
             let mut current = false;
-            if set_current {
-                if ctx.session.is_some() {
-                    ctx.set_session_scope(Some(info.scope_id.clone())).await?;
-                    current = true;
-                }
+            if set_current && ctx.session.is_some() {
+                ctx.set_session_scope(Some(info.scope_id.clone())).await?;
+                current = true;
             }
-            let mut out = scope_info_object(&info);
-            out.insert("current", Value::Bool(current));
-            Ok(Value::Object(out))
+            Ok(ScopeOpenOutput {
+                info: info.into(),
+                current,
+            })
         })
     }
 }
@@ -479,31 +982,21 @@ impl RpcCommand<AppRequestContext> for ScopeUseCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: Option<ScopeSelector>,
+    ) -> CommandFuture<'a, CurrentScope> {
         Box::pin(async move {
             let scope_id = match payload {
-                Value::Null | Value::Void => None,
-                Value::String(value) => Some(DbScopeId::new(value)),
-                Value::Object(object) => optional_string(&object, "scope_id")?.map(DbScopeId::new),
-                _ => {
-                    return Err(AppError::InvalidRequest(
-                        "expected scope id string, null, or object".to_string(),
-                    ));
-                }
+                None => None,
+                Some(ScopeSelector::Id(id)) => Some(DbScopeId::new(id)),
+                Some(ScopeSelector::Params(params)) => params.scope_id(),
             };
             if let Some(scope_id) = &scope_id {
                 let _ = ctx.resolve_db(Some(scope_id.clone())).await?;
             }
             ctx.set_session_scope(scope_id.clone()).await?;
-            let mut out = Object::new();
-            out.insert(
-                "scope_id",
-                scope_id
-                    .map(|scope_id| Value::String(scope_id.to_string()))
-                    .unwrap_or(Value::Null),
-            );
-            Ok(Value::Object(out))
+            Ok(CurrentScope {
+                scope_id: scope_id.map(|scope_id| scope_id.to_string()),
+            })
         })
     }
 }
@@ -512,18 +1005,13 @@ impl RpcCommand<AppRequestContext> for ScopeCurrentCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        _payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        _payload: Option<NoParams>,
+    ) -> CommandFuture<'a, CurrentScope> {
         Box::pin(async move {
             let scope_id = ctx.effective_scope_hint().await;
-            let mut out = Object::new();
-            out.insert(
-                "scope_id",
-                scope_id
-                    .map(|scope_id| Value::String(scope_id.to_string()))
-                    .unwrap_or(Value::Null),
-            );
-            Ok(Value::Object(out))
+            Ok(CurrentScope {
+                scope_id: scope_id.map(|scope_id| scope_id.to_string()),
+            })
         })
     }
 }
@@ -532,17 +1020,16 @@ impl RpcCommand<AppRequestContext> for ScopeListCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        _payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        _payload: Option<NoParams>,
+    ) -> CommandFuture<'a, Vec<ScopeInfoOutput>> {
         Box::pin(async move {
-            Ok(Value::List(
-                ctx.app
-                    .scopes()
-                    .list_scopes(&ctx.principal)
-                    .into_iter()
-                    .map(|info| Value::Object(scope_info_object(&info)))
-                    .collect(),
-            ))
+            Ok(ctx
+                .app
+                .scopes()
+                .list_scopes(&ctx.principal)
+                .into_iter()
+                .map(ScopeInfoOutput::from)
+                .collect())
         })
     }
 }
@@ -551,26 +1038,19 @@ impl RpcCommand<AppRequestContext> for DbCatalogCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: Option<ScopeParams>,
+    ) -> CommandFuture<'a, CatalogOutput> {
         Box::pin(async move {
-            let scope_id = match payload {
-                Value::Null | Value::Void => None,
-                Value::Object(object) => optional_string(&object, "scope_id")?.map(DbScopeId::new),
-                _ => {
-                    return Err(AppError::InvalidRequest(
-                        "expected object, null, or void payload".to_string(),
-                    ));
-                }
-            };
-            let db = ctx.resolve_db(scope_id).await?;
+            let db = ctx
+                .resolve_db(payload.unwrap_or_default().scope_id())
+                .await?;
             let catalog = db.catalog().await?;
             let catalog = facet_json::to_string(&catalog.to_storage_snapshot())
                 .map_err(|err| AppError::InvalidRequest(err.to_string()))?;
-            let mut out = Object::new();
-            out.insert("format", Value::String("facet-json".to_string()));
-            out.insert("catalog", Value::String(catalog));
-            Ok(Value::Object(out))
+            Ok(CatalogOutput {
+                format: DocumentFormat::FacetJson,
+                catalog,
+            })
         })
     }
 }
@@ -579,21 +1059,14 @@ impl RpcCommand<AppRequestContext> for DbPackageUpsertCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: PackageUpsertPayload,
+    ) -> CommandFuture<'a, PackageUpsertOutput> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let format = optional_string(&object, "format")?;
-            if !matches!(format.as_deref(), None | Some("facet-json")) {
-                return Err(AppError::InvalidRequest(format!(
-                    "unsupported package format '{}'",
-                    format.expect("checked above")
-                )));
-            }
-            let package = facet_json::from_str::<Package>(&required_string(&object, "package")?)
+            let package = facet_json::from_str::<Package>(&payload.package)
                 .map_err(|err| AppError::InvalidRequest(format!("invalid package: {err}")))?;
-            let scope_id = ctx.resolve_scope_id(scope_id).await?;
+            let scope_id = ctx
+                .resolve_scope_id(payload.scope_id.map(DbScopeId::new))
+                .await?;
             let outcome = ctx
                 .app
                 .scopes()
@@ -601,10 +1074,10 @@ impl RpcCommand<AppRequestContext> for DbPackageUpsertCommand {
                 .await?;
             let outcome = facet_json::to_string(&outcome)
                 .map_err(|err| AppError::InvalidRequest(err.to_string()))?;
-            let mut out = Object::new();
-            out.insert("format", Value::String("facet-json".to_string()));
-            out.insert("outcome", Value::String(outcome));
-            Ok(Value::Object(out))
+            Ok(PackageUpsertOutput {
+                format: DocumentFormat::FacetJson,
+                outcome,
+            })
         })
     }
 }
@@ -613,39 +1086,22 @@ impl RpcCommand<AppRequestContext> for DbQueryCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: QueryPayload,
+    ) -> CommandFuture<'a, QueryOutput> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let query = required_string(&object, "query")?;
-            let format = match optional_string(&object, "format")?.as_deref() {
-                Some("prql") => TextQueryFormat::Prql,
-                Some("sql") | None => TextQueryFormat::Sql,
-                Some(other) => {
-                    return Err(AppError::InvalidRequest(format!(
-                        "unsupported query format '{other}'"
-                    )));
-                }
+            let format = match payload.format.unwrap_or_default() {
+                QueryFormat::Sql => TextQueryFormat::Sql,
+                QueryFormat::Prql => TextQueryFormat::Prql,
             };
-            let db = ctx.resolve_db(scope_id).await?;
-            let params = match object.get("params") {
-                None => BTreeMap::new(),
-                Some(Value::Object(params)) => params.clone().into_iter().collect(),
-                Some(_) => {
-                    return Err(AppError::InvalidRequest(
-                        "field 'params' must be an object".to_string(),
-                    ));
-                }
-            };
+            let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
             let result = db
                 .query(TextQueryInput::Text {
                     format,
-                    query,
-                    params,
+                    query: payload.query,
+                    params: payload.params,
                 })
                 .await?;
-            Ok(query_result_to_value(result))
+            Ok(result.into())
         })
     }
 }
@@ -654,25 +1110,18 @@ impl RpcCommand<AppRequestContext> for DbGetCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: EntityPayload,
+    ) -> CommandFuture<'a, Option<EntityOutput>> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let collection = optional_string(&object, "collection")?
-                .unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(&object, "id")?;
-            let db = ctx.resolve_db(scope_id).await?;
-            match db.get(collection, id).await? {
-                Some(record) => {
-                    let mut out = Object::new();
-                    out.insert("collection", Value::String(record.collection));
-                    out.insert("id", Value::String(record.id));
-                    out.insert("object", Value::Object(record.object));
-                    Ok(Value::Object(out))
-                }
-                None => Ok(Value::Null),
-            }
+            let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
+            let record = db
+                .get(collection_or_default(payload.collection), payload.id)
+                .await?;
+            Ok(record.map(|record| EntityOutput {
+                collection: record.collection,
+                id: record.id,
+                object: record.object,
+            }))
         })
     }
 }
@@ -681,26 +1130,17 @@ impl RpcCommand<AppRequestContext> for DbInsertCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: InsertPayload,
+    ) -> CommandFuture<'a, ()> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let collection = optional_string(&object, "collection")?
-                .unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(&object, "id")?;
-            let row = match object.get("object") {
-                Some(Value::Object(object)) => object.clone(),
-                Some(_) => {
-                    return Err(AppError::InvalidRequest(
-                        "field 'object' must be an object".to_string(),
-                    ));
-                }
-                None => return Err(missing_field("object")),
-            };
-            let db = ctx.resolve_db(scope_id).await?;
-            db.insert(collection, id, row).await?;
-            Ok(Value::Void)
+            let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
+            db.insert(
+                collection_or_default(payload.collection),
+                payload.id,
+                payload.object,
+            )
+            .await?;
+            Ok(())
         })
     }
 }
@@ -709,17 +1149,13 @@ impl RpcCommand<AppRequestContext> for DbDeleteCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: EntityPayload,
+    ) -> CommandFuture<'a, ()> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let collection = optional_string(&object, "collection")?
-                .unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(&object, "id")?;
-            let db = ctx.resolve_db(scope_id).await?;
-            db.delete(collection, id).await?;
-            Ok(Value::Void)
+            let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
+            db.delete(collection_or_default(payload.collection), payload.id)
+                .await?;
+            Ok(())
         })
     }
 }
@@ -728,16 +1164,19 @@ impl RpcCommand<AppRequestContext> for DbBatchCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: BatchPayload,
+    ) -> CommandFuture<'a, BatchOutput> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let batch = batch_from_payload(&object)?;
-            let returning = batch_return_from_payload(&object)?;
-            let db = ctx.resolve_db(scope_id).await?;
+            let batch = payload
+                .operations
+                .into_iter()
+                .fold(Batch::new(), |batch, operation| {
+                    batch.with_op(operation.into())
+                });
+            let returning = payload.returning.parse()?;
+            let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
             let reply = db.execute_batch_returning(batch, returning).await?;
-            Ok(batch_reply_to_value(reply))
+            Ok(reply.into())
         })
     }
 }
@@ -746,29 +1185,19 @@ impl RpcCommand<AppRequestContext> for DbValidationPreflightCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        payload: ScopeParams,
+    ) -> CommandFuture<'a, Vec<ValidationViolationOutput>> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let db = ctx
-                .resolve_db(optional_string(&object, "scope_id")?.map(DbScopeId::new))
-                .await?;
+            let db = ctx.resolve_db(payload.scope_id()).await?;
             let violations = db.validation_preflight().await?;
-            Ok(Value::List(
-                violations
-                    .into_iter()
-                    .map(|violation| {
-                        let mut row = Object::new();
-                        row.insert("collection", violation.collection);
-                        row.insert("id", violation.id);
-                        row.insert(
-                            "error",
-                            crate::error::validation_error_data(violation.error),
-                        );
-                        Value::Object(row)
-                    })
-                    .collect(),
-            ))
+            Ok(violations
+                .into_iter()
+                .map(|violation| ValidationViolationOutput {
+                    collection: violation.collection,
+                    id: violation.id,
+                    error: crate::error::validation_error_data(violation.error),
+                })
+                .collect())
         })
     }
 }
@@ -777,15 +1206,12 @@ impl RpcCommand<AppRequestContext> for DbValidationActivateCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        payload: ScopeParams,
+    ) -> CommandFuture<'a, ()> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let db = ctx
-                .resolve_db(optional_string(&object, "scope_id")?.map(DbScopeId::new))
-                .await?;
+            let db = ctx.resolve_db(payload.scope_id()).await?;
             db.activate_validation().await?;
-            Ok(Value::Void)
+            Ok(())
         })
     }
 }
@@ -794,29 +1220,23 @@ impl RpcCommand<AppRequestContext> for FileAnalyzeCommand {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        payload: FileAnalyzePayload,
+    ) -> CommandFuture<'a, FileAnalyzeOutput> {
         Box::pin(async move {
-            let object = expect_object(payload)?;
-            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
-            let id = required_string(&object, "id")?;
             let outcome = ctx
                 .app
                 .files()
                 .media_analysis()
-                .analyze_persisted_file(ctx, scope_id, id)
+                .analyze_persisted_file(ctx, payload.scope_id.map(DbScopeId::new), payload.id)
                 .await?;
-            let mut out = Object::new();
-            out.insert("id", Value::String(outcome.id));
-            out.insert("collection", Value::String(outcome.collection));
-            out.insert("analyzed", Value::Bool(outcome.analyzed));
-            match outcome.analysis_kind {
-                Some(kind) => out.insert("analysis_kind", Value::String(kind.to_string())),
-                None => out.insert("analysis_kind", Value::Null),
-            };
-            out.insert("attributes", Value::Object(outcome.attributes));
-            out.insert("object", Value::Object(outcome.object));
-            Ok(Value::Object(out))
+            Ok(FileAnalyzeOutput {
+                id: outcome.id,
+                collection: outcome.collection,
+                analyzed: outcome.analyzed,
+                analysis_kind: outcome.analysis_kind.map(str::to_owned),
+                attributes: outcome.attributes,
+                object: outcome.object,
+            })
         })
     }
 }
@@ -828,202 +1248,6 @@ pub(crate) fn expect_object(value: Value) -> std::result::Result<Object, AppErro
             "expected object payload".to_string(),
         )),
     }
-}
-
-fn batch_return_from_payload(object: &Object) -> Result<semantic_db_core::BatchReturn, AppError> {
-    use semantic_db_core::{BatchReturn, BatchReturnErrorReason, DbError};
-    let invalid = || {
-        AppError::Db(DbError::BatchReturn {
-            reason: BatchReturnErrorReason::UnknownMode,
-            field: None,
-        })
-    };
-    match object.get("returning") {
-        None => Ok(BatchReturn::Dataset),
-        Some(Value::String(mode)) => match mode.as_str() {
-            "dataset" => Ok(BatchReturn::Dataset),
-            "stats" => Ok(BatchReturn::Stats),
-            "changes" => Ok(BatchReturn::Changes),
-            _ => Err(invalid()),
-        },
-        Some(Value::Object(mode)) if mode.len() == 1 => {
-            let Some(Value::Object(projection)) = mode.get("projection") else {
-                return Err(invalid());
-            };
-            if projection.len() != 1 {
-                return Err(invalid());
-            }
-            let Some(Value::List(fields)) = projection.get("fields") else {
-                return Err(invalid());
-            };
-            let fields = fields
-                .iter()
-                .map(|field| match field {
-                    Value::String(field) => Ok(field.clone()),
-                    _ => Err(invalid()),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(BatchReturn::Projection { fields })
-        }
-        _ => Err(invalid()),
-    }
-}
-
-fn batch_reply_to_value(reply: semantic_db_core::BatchReply) -> Value {
-    use semantic_db_core::{BatchReply, EntityChangeKind};
-    let (stats, changes, rows) = match reply {
-        BatchReply::Dataset(outcome) => return batch_outcome_to_value(outcome),
-        BatchReply::Stats { stats, .. } => (stats, None, None),
-        BatchReply::Changes { stats, changes, .. } => (stats, Some(changes), None),
-        BatchReply::Projection {
-            stats,
-            changes,
-            rows,
-            ..
-        } => (stats, Some(changes), Some(rows)),
-    };
-    let mut object = Object::new();
-    insert_batch_stats(&mut object, stats);
-    if let Some(changes) = changes {
-        object.insert(
-            "changes",
-            Value::List(
-                changes
-                    .into_iter()
-                    .map(|change| {
-                        let mut value = Object::new();
-                        value.insert("collection", change.collection);
-                        value.insert("id", change.id);
-                        value.insert(
-                            "kind",
-                            match change.kind {
-                                EntityChangeKind::Upsert => "upsert",
-                                EntityChangeKind::Delete => "delete",
-                            }
-                            .to_string(),
-                        );
-                        Value::Object(value)
-                    })
-                    .collect(),
-            ),
-        );
-    }
-    if let Some(rows) = rows {
-        object.insert(
-            "rows",
-            Value::List(
-                rows.into_iter()
-                    .map(|row| {
-                        let mut value = Object::new();
-                        value.insert("collection", row.collection);
-                        value.insert("id", row.id);
-                        value.insert("object", Value::Object(row.object));
-                        Value::Object(value)
-                    })
-                    .collect(),
-            ),
-        );
-    }
-    Value::Object(object)
-}
-
-fn batch_from_payload(object: &Object) -> std::result::Result<Batch, AppError> {
-    let operations = match object.get("operations") {
-        Some(Value::List(operations)) => operations,
-        Some(_) => {
-            return Err(AppError::InvalidRequest(
-                "field 'operations' must be a list".to_string(),
-            ));
-        }
-        None => return Err(missing_field("operations")),
-    };
-    let mut batch = Batch::new();
-    for operation in operations {
-        batch = batch.with_op(batch_operation_from_value(operation)?);
-    }
-    Ok(batch)
-}
-
-fn batch_operation_from_value(value: &Value) -> std::result::Result<BatchOperation, AppError> {
-    let Value::Object(object) = value else {
-        return Err(AppError::InvalidRequest(
-            "batch operation must be an object".to_string(),
-        ));
-    };
-    let kind = required_string(object, "kind")?;
-    match kind.as_str() {
-        "create" => {
-            let collection =
-                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(object, "id")?;
-            let object = required_object(object, "object")?;
-            Ok(BatchOperation::Create {
-                collection,
-                id,
-                object,
-            })
-        }
-        "upsert" => {
-            let collection =
-                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(object, "id")?;
-            let object = required_object(object, "object")?;
-            Ok(BatchOperation::Upsert {
-                collection,
-                id,
-                object,
-            })
-        }
-        "delete_by_id" => {
-            let collection =
-                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(object, "id")?;
-            Ok(BatchOperation::DeleteById { collection, id })
-        }
-        "delete_by_ids" => {
-            let collection =
-                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let ids = required_string_list(object, "ids")?;
-            Ok(BatchOperation::DeleteByIds { collection, ids })
-        }
-        other => Err(AppError::InvalidRequest(format!(
-            "unsupported batch operation kind '{other}'"
-        ))),
-    }
-}
-
-fn required_object(object: &Object, field: &str) -> std::result::Result<Object, AppError> {
-    match object.get(field) {
-        Some(Value::Object(value)) => Ok(value.clone()),
-        Some(_) => Err(AppError::InvalidRequest(format!(
-            "field '{field}' must be an object"
-        ))),
-        None => Err(missing_field(field)),
-    }
-}
-
-fn required_string_list(
-    object: &Object,
-    field: &str,
-) -> std::result::Result<Vec<String>, AppError> {
-    let values = match object.get(field) {
-        Some(Value::List(values)) => values,
-        Some(_) => {
-            return Err(AppError::InvalidRequest(format!(
-                "field '{field}' must be a list"
-            )));
-        }
-        None => return Err(missing_field(field)),
-    };
-    values
-        .iter()
-        .map(|value| match value {
-            Value::String(value) => Ok(value.clone()),
-            _ => Err(AppError::InvalidRequest(format!(
-                "field '{field}' must contain only strings"
-            ))),
-        })
-        .collect()
 }
 
 pub(crate) fn required_string(
@@ -1061,113 +1285,4 @@ pub(crate) fn optional_bool(
 
 fn missing_field(field: &str) -> AppError {
     AppError::InvalidRequest(format!("missing field '{field}'"))
-}
-
-fn scope_info_object(info: &ScopeInfo) -> Object {
-    let mut object = Object::new();
-    object.insert("scope_id", Value::String(info.scope_id.to_string()));
-    object.insert("owner", Value::String(info.owner.to_string()));
-    object.insert(
-        "visibility",
-        Value::String(match info.visibility {
-            ScopeVisibility::Principal => "principal".to_string(),
-            ScopeVisibility::System => "system".to_string(),
-        }),
-    );
-    object.insert("uri", Value::String(info.uri.clone()));
-    object.insert("loaded", Value::Bool(info.loaded));
-    object
-}
-
-fn query_result_to_value(result: QueryResult) -> Value {
-    let mut object = Object::new();
-    match result {
-        QueryResult::Select(rows) => {
-            object.insert("kind", Value::String("select".to_string()));
-            object.insert(
-                "rows",
-                Value::List(rows.into_iter().map(Value::Object).collect()),
-            );
-        }
-        QueryResult::Insert(result) => {
-            object.insert("kind", Value::String("insert".to_string()));
-            insert_insert_result(&mut object, result);
-        }
-        QueryResult::Update(result) => {
-            object.insert("kind", Value::String("update".to_string()));
-            insert_update_result(&mut object, result);
-        }
-        QueryResult::Delete(result) => {
-            object.insert("kind", Value::String("delete".to_string()));
-            insert_delete_result(&mut object, result);
-        }
-        QueryResult::Ddl(()) => {
-            object.insert("kind", Value::String("ddl".to_string()));
-        }
-    }
-    Value::Object(object)
-}
-
-fn batch_outcome_to_value(outcome: BatchOutcome) -> Value {
-    let mut object = Object::new();
-    insert_batch_stats(&mut object, outcome.stats);
-    object.insert(
-        "dataset",
-        Value::Object(
-            outcome
-                .dataset
-                .into_iter()
-                .map(|(collection, rows)| {
-                    (
-                        collection,
-                        Value::Object(
-                            rows.into_iter()
-                                .map(|(id, object)| (id, Value::Object(object)))
-                                .collect(),
-                        ),
-                    )
-                })
-                .collect(),
-        ),
-    );
-    Value::Object(object)
-}
-
-fn insert_batch_stats(object: &mut Object, stats: BatchStats) {
-    let mut stats_object = Object::new();
-    stats_object.insert("upserted", Value::U64(stats.upserted as u64));
-    stats_object.insert("deleted", Value::U64(stats.deleted as u64));
-    stats_object.insert("updated", Value::U64(stats.updated as u64));
-    object.insert("stats", Value::Object(stats_object));
-}
-
-fn insert_insert_result(object: &mut Object, result: InsertResult) {
-    object.insert("inserted", Value::U64(result.inserted as u64));
-    object.insert(
-        "returning",
-        Value::List(result.returning.into_iter().map(Value::Object).collect()),
-    );
-}
-
-fn insert_update_result(object: &mut Object, result: UpdateResult) {
-    insert_stats(object, result.stats);
-    object.insert(
-        "returning",
-        Value::List(result.returning.into_iter().map(Value::Object).collect()),
-    );
-}
-
-fn insert_delete_result(object: &mut Object, result: DeleteResult) {
-    object.insert("deleted", Value::U64(result.deleted as u64));
-    object.insert(
-        "returning",
-        Value::List(result.returning.into_iter().map(Value::Object).collect()),
-    );
-}
-
-fn insert_stats(object: &mut Object, stats: MutationStats) {
-    let mut stats_object = Object::new();
-    stats_object.insert("matched", Value::U64(stats.matched as u64));
-    stats_object.insert("affected", Value::U64(stats.affected as u64));
-    object.insert("stats", Value::Object(stats_object));
 }

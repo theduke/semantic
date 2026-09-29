@@ -406,7 +406,7 @@ mod tests {
         let (status, result) =
             post_command(&server, "/api/v1/rpc/semantic.db.query?scope=query", body).await;
         assert_eq!(status, http::StatusCode::BAD_REQUEST);
-        assert!(matches!(result, RpcResult::Err(err) if err.code == "invalid_request"));
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "invalid_payload"));
 
         let payload = value_object([("query", Value::String("select * from _".to_string()))]);
         let body =
@@ -448,7 +448,8 @@ mod tests {
         let RpcResult::Err(err) = response.result else {
             panic!("expected rpc error");
         };
-        assert_eq!(err.code, "invalid_request");
+        assert_eq!(err.code, "invalid_payload");
+        assert_eq!(err.message, "payload: expected object, found void");
     }
 
     #[tokio::test]

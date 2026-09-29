@@ -1194,6 +1194,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_list_with_schema_declares_typed_inputs() {
+        use semantic_data::schema::TypeKind;
+
+        let app = introspection_app();
+        let payload = Value::Object(Object::from_iter([(
+            "schema".to_string(),
+            Value::Bool(true),
+        )]));
+        let object = call_ok_object(&app, "semantic.command.list", payload).await;
+        let Some(Value::List(commands)) = object.get("commands") else {
+            panic!("expected commands list");
+        };
+        let input = |name: &str| {
+            let command = commands
+                .iter()
+                .find_map(|command| match command {
+                    Value::Object(command)
+                        if command.get("name").and_then(Value::as_str) == Some(name) =>
+                    {
+                        Some(command)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing command {name}"));
+            decode_type(command, "input")
+        };
+        let TypeKind::Record(get) = input("semantic.db.get").kind else {
+            panic!("db.get input should be a record");
+        };
+        assert!(get.fields["id"].required);
+        assert!(!get.fields["collection"].required);
+        assert!(!get.fields["scope_id"].required);
+        let TypeKind::Record(open) = input("semantic.scope.open").kind else {
+            panic!("scope.open input should be a record");
+        };
+        assert!(open.fields["uri"].required);
+        assert!(!open.fields["scope_id"].required);
+        assert!(matches!(
+            open.fields["mode"].ty.kind,
+            TypeKind::Optional(ref optional) if matches!(optional.inner.kind, TypeKind::Enum(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn command_get_returns_definition() {
         let app = introspection_app();
         let payload = Value::Object(Object::from_iter([(
