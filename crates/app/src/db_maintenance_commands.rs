@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
-use semantic_data::value::{Object, Value};
+use semantic_data::value::{FromValue, IntoValue, SemanticType};
 use semantic_db_core::embedded::StorageStats;
 use semantic_db_core::{
     DEFAULT_REWRITE_BATCH_SIZE, ReindexReport, ReindexTarget, VerifyOptions, VerifyReport,
@@ -19,7 +19,7 @@ use semantic_db_core::{
 use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
 
-use crate::command::{expect_object, optional_bool, optional_string, required_string};
+use crate::command::ScopeParams;
 use crate::{AppError, AppRequestContext, DbScopeId, PrincipalKind, SemanticDb};
 
 pub(crate) fn register(
@@ -44,10 +44,15 @@ struct RewritePayloads;
 struct Backup;
 
 macro_rules! maintenance_command {
-    ($ty:ty, $name:literal, |$db:ident, $payload:ident, $ctx:ident| $body:expr) => {
+    (
+        $ty:ty,
+        $name:literal,
+        $payload_ty:ty => $output:ty,
+        |$db:ident, $payload:ident, $ctx:ident| $body:expr
+    ) => {
         impl RpcCommandSpec for $ty {
-            type Payload = Value;
-            type Output = Value;
+            type Payload = $payload_ty;
+            type Output = $output;
             type Error = AppError;
 
             const NAME: &'static str = $name;
@@ -57,15 +62,15 @@ macro_rules! maintenance_command {
             fn call<'a>(
                 &'a self,
                 ctx: &'a AppRequestContext,
-                payload: Value,
-            ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+                payload: $payload_ty,
+            ) -> Pin<Box<dyn Future<Output = Result<$output, AppError>> + Send + 'a>> {
                 Box::pin(async move {
-                    let $payload = expect_object(payload)?;
                     let $ctx = ctx;
                     let $db = ctx
-                        .resolve_db(optional_string(&$payload, "scope_id")?.map(DbScopeId::new))
+                        .resolve_db(payload.scope_id.clone().map(DbScopeId::new))
                         .await?;
                     let $db: &dyn SemanticDb = $db.as_ref();
+                    let $payload = payload;
                     $body
                 })
             }
@@ -76,244 +81,347 @@ macro_rules! maintenance_command {
 maintenance_command!(
     Reindex,
     "semantic.db.maintenance.reindex",
+    ReindexPayload => ReindexOutput,
     |db, payload, _ctx| {
-        let target = reindex_target(&payload)?;
-        Ok(Value::Object(reindex_object(db.reindex(target).await?)))
+        let target = payload.target()?;
+        Ok(db.reindex(target).await?.into())
     }
 );
 maintenance_command!(
     Verify,
     "semantic.db.maintenance.verify",
-    |db, payload, _ctx| {
-        let options = verify_options(&payload)?;
-        Ok(Value::Object(verify_object(db.verify(options).await?)))
-    }
+    VerifyPayload => VerifyOutput,
+    |db, payload, _ctx| Ok(db.verify(payload.options()).await?.into())
 );
 maintenance_command!(
     Repair,
     "semantic.db.maintenance.repair",
+    VerifyPayload => RepairOutput,
     |db, payload, _ctx| {
-        let report = db.repair(verify_options(&payload)?).await?;
-        let mut out = Object::new();
-        out.insert("before", Value::Object(verify_object(report.before)));
-        out.insert("rebuilt", Value::Object(reindex_object(report.rebuilt)));
-        out.insert("after", Value::Object(verify_object(report.after)));
-        Ok(Value::Object(out))
+        let report = db.repair(payload.options()).await?;
+        Ok(RepairOutput {
+            before: report.before.into(),
+            rebuilt: report.rebuilt.into(),
+            after: report.after.into(),
+        })
     }
 );
 maintenance_command!(
     Compact,
     "semantic.db.maintenance.compact",
+    ScopeParams => CompactOutput,
     |db, _payload, _ctx| {
         let report = db.compact_storage().await?;
-        let mut out = Object::new();
-        out.insert("before", Value::Object(stats_object(report.before)));
-        out.insert("after", Value::Object(stats_object(report.after)));
-        out.insert("compacted", Value::Bool(report.compacted));
-        out.insert("freed_bytes", optional_u64(report.freed_bytes));
-        out.insert("duration_ms", duration_ms(report.duration));
-        Ok(Value::Object(out))
+        Ok(CompactOutput {
+            before: report.before.into(),
+            after: report.after.into(),
+            compacted: report.compacted,
+            freed_bytes: report.freed_bytes,
+            duration_ms: duration_ms(report.duration),
+        })
     }
 );
 maintenance_command!(
     Stats,
     "semantic.db.maintenance.stats",
-    |db, _payload, _ctx| Ok(Value::Object(stats_object(db.storage_stats().await?)))
+    ScopeParams => StatsOutput,
+    |db, _payload, _ctx| Ok(db.storage_stats().await?.into())
 );
 maintenance_command!(
     RewritePayloads,
     "semantic.db.maintenance.rewrite_payloads",
+    RewritePayloadsPayload => RewritePayloadsOutput,
     |db, payload, _ctx| {
-        let batch_size = match payload.get("batch_size") {
-            None | Some(Value::Null) | Some(Value::Void) => DEFAULT_REWRITE_BATCH_SIZE,
-            Some(value) => value
-                .as_i64()
-                .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value > 0)
-                .ok_or_else(|| {
-                    AppError::InvalidRequest("field 'batch_size' must be a positive integer".into())
-                })?,
+        let batch_size = match payload.batch_size {
+            None => DEFAULT_REWRITE_BATCH_SIZE,
+            Some(0) => {
+                return Err(AppError::InvalidRequest(
+                    "field 'batch_size' must be a positive integer".into(),
+                ));
+            }
+            Some(batch_size) => batch_size,
         };
         let report = db.rewrite_payloads(batch_size).await?;
-        let mut out = Object::new();
-        out.insert("scanned", Value::U64(report.scanned));
-        out.insert("rewritten", Value::U64(report.rewritten));
-        out.insert("batches", Value::U64(report.batches));
-        out.insert("duration_ms", duration_ms(report.duration));
-        Ok(Value::Object(out))
+        Ok(RewritePayloadsOutput {
+            scanned: report.scanned,
+            rewritten: report.rewritten,
+            batches: report.batches,
+            duration_ms: duration_ms(report.duration),
+        })
     }
 );
 maintenance_command!(
     Backup,
     "semantic.db.maintenance.backup",
+    BackupPayload => BackupOutput,
     |db, payload, ctx| {
         if ctx.principal.kind != PrincipalKind::System {
             return Err(AppError::InvalidRequest(
                 "database backups write server files and require a system principal".into(),
             ));
         }
-        let path = PathBuf::from(required_string(&payload, "path")?);
-        let report = db.backup(path).await?;
-        let mut out = Object::new();
-        out.insert("path", Value::String(report.path.display().to_string()));
-        out.insert("revision", optional_u64(report.revision));
-        out.insert("entries", Value::U64(report.entries));
-        out.insert("bytes", optional_u64(report.bytes));
-        out.insert("duration_ms", duration_ms(report.duration));
-        Ok(Value::Object(out))
+        let report = db.backup(PathBuf::from(payload.path)).await?;
+        Ok(BackupOutput {
+            path: report.path.display().to_string(),
+            revision: report.revision,
+            entries: report.entries,
+            bytes: report.bytes,
+            duration_ms: duration_ms(report.duration),
+        })
     }
 );
 
-/// `collection` and `index` select the reindexed indexes; without either
-/// every index is rebuilt.
-fn reindex_target(payload: &Object) -> Result<ReindexTarget, AppError> {
-    match (
-        optional_string(payload, "collection")?,
-        optional_string(payload, "index")?,
-    ) {
-        (None, None) => Ok(ReindexTarget::All),
-        (Some(collection), None) => Ok(ReindexTarget::Collection(collection)),
-        (Some(collection), Some(name)) => Ok(ReindexTarget::Index { collection, name }),
-        (None, Some(_)) => Err(AppError::InvalidRequest(
-            "field 'index' requires 'collection'".into(),
-        )),
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ReindexPayload {
+    scope_id: Option<String>,
+    /// Rebuild only the indexes of this collection.
+    collection: Option<String>,
+    /// Rebuild only this index of `collection`.
+    index: Option<String>,
+}
+
+impl ReindexPayload {
+    /// Without `collection` and `index` every index is rebuilt.
+    fn target(self) -> Result<ReindexTarget, AppError> {
+        match (self.collection, self.index) {
+            (None, None) => Ok(ReindexTarget::All),
+            (Some(collection), None) => Ok(ReindexTarget::Collection(collection)),
+            (Some(collection), Some(name)) => Ok(ReindexTarget::Index { collection, name }),
+            (None, Some(_)) => Err(AppError::InvalidRequest(
+                "field 'index' requires 'collection'".into(),
+            )),
+        }
     }
 }
 
 /// Every check runs unless disabled by its `check_*` field.
-fn verify_options(payload: &Object) -> Result<VerifyOptions, AppError> {
-    let check = |field| Ok::<_, AppError>(optional_bool(payload, field)?.unwrap_or(true));
-    let mut options = VerifyOptions {
-        check_indexes: check("check_indexes")?,
-        check_reverse_references: check("check_reverse_references")?,
-        check_relationship_edges: check("check_relationship_edges")?,
-        check_stats: check("check_stats")?,
-        check_storage_integrity: check("check_storage_integrity")?,
-        check_payloads: check("check_payloads")?,
-        ..VerifyOptions::all()
-    };
-    if let Some(value) = payload.get("max_problems") {
-        options.max_problems = value
-            .as_i64()
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or_else(|| {
-                AppError::InvalidRequest("field 'max_problems' must be a count".into())
-            })?;
-    }
-    Ok(options)
+#[derive(SemanticType, IntoValue, FromValue)]
+struct VerifyPayload {
+    scope_id: Option<String>,
+    check_indexes: Option<bool>,
+    check_reverse_references: Option<bool>,
+    check_relationship_edges: Option<bool>,
+    check_stats: Option<bool>,
+    check_storage_integrity: Option<bool>,
+    check_payloads: Option<bool>,
+    max_problems: Option<usize>,
 }
 
-fn verify_object(report: VerifyReport) -> Object {
-    let mut out = Object::new();
-    out.insert("ok", Value::Bool(report.is_ok()));
-    out.insert("revision", optional_u64(report.revision));
-    out.insert("problem_count", Value::U64(report.problem_count));
-    out.insert(
-        "problems",
-        Value::List(
-            report
+impl VerifyPayload {
+    fn options(&self) -> VerifyOptions {
+        let check = |value: Option<bool>| value.unwrap_or(true);
+        let all = VerifyOptions::all();
+        VerifyOptions {
+            check_indexes: check(self.check_indexes),
+            check_reverse_references: check(self.check_reverse_references),
+            check_relationship_edges: check(self.check_relationship_edges),
+            check_stats: check(self.check_stats),
+            check_storage_integrity: check(self.check_storage_integrity),
+            check_payloads: check(self.check_payloads),
+            max_problems: self.max_problems.unwrap_or(all.max_problems),
+            ..all
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct RewritePayloadsPayload {
+    scope_id: Option<String>,
+    /// A positive batch size.
+    batch_size: Option<usize>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct BackupPayload {
+    scope_id: Option<String>,
+    /// The server file path to write the backup to.
+    path: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct VerifyOutput {
+    ok: bool,
+    #[semantic(required)]
+    revision: Option<u64>,
+    problem_count: u64,
+    problems: Vec<VerifyProblemOutput>,
+    checked: VerifyCountsOutput,
+    skipped: Vec<String>,
+    duration_ms: u64,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct VerifyProblemOutput {
+    kind: String,
+    #[semantic(required)]
+    collection: Option<String>,
+    #[semantic(required)]
+    index: Option<String>,
+    #[semantic(required)]
+    entity_id: Option<String>,
+    detail: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct VerifyCountsOutput {
+    collections: u64,
+    rows: u64,
+    indexes: u64,
+    index_entries: u64,
+    reverse_references: u64,
+    relationship_edges: u64,
+    counters: u64,
+}
+
+impl From<VerifyReport> for VerifyOutput {
+    fn from(report: VerifyReport) -> Self {
+        let checked = report.checked;
+        Self {
+            ok: report.is_ok(),
+            revision: report.revision,
+            problem_count: report.problem_count,
+            problems: report
                 .problems
                 .into_iter()
-                .map(|problem| {
-                    let mut row = Object::new();
-                    row.insert("kind", Value::String(problem.kind.as_str().into()));
-                    row.insert("collection", optional_string_value(problem.collection));
-                    row.insert("index", optional_string_value(problem.index));
-                    row.insert("entity_id", optional_string_value(problem.entity_id));
-                    row.insert("detail", Value::String(problem.detail));
-                    Value::Object(row)
+                .map(|problem| VerifyProblemOutput {
+                    kind: problem.kind.as_str().into(),
+                    collection: problem.collection,
+                    index: problem.index,
+                    entity_id: problem.entity_id,
+                    detail: problem.detail,
                 })
                 .collect(),
-        ),
-    );
-    let checked = report.checked;
-    let mut counts = Object::new();
-    for (name, count) in [
-        ("collections", checked.collections),
-        ("rows", checked.rows),
-        ("indexes", checked.indexes),
-        ("index_entries", checked.index_entries),
-        ("reverse_references", checked.reverse_references),
-        ("relationship_edges", checked.relationship_edges),
-        ("counters", checked.counters),
-    ] {
-        counts.insert(name, Value::U64(count));
+            checked: VerifyCountsOutput {
+                collections: checked.collections,
+                rows: checked.rows,
+                indexes: checked.indexes,
+                index_entries: checked.index_entries,
+                reverse_references: checked.reverse_references,
+                relationship_edges: checked.relationship_edges,
+                counters: checked.counters,
+            },
+            skipped: report.skipped,
+            duration_ms: duration_ms(report.duration),
+        }
     }
-    out.insert("checked", Value::Object(counts));
-    out.insert(
-        "skipped",
-        Value::List(report.skipped.into_iter().map(Value::String).collect()),
-    );
-    out.insert("duration_ms", duration_ms(report.duration));
-    out
 }
 
-fn reindex_object(report: ReindexReport) -> Object {
-    let mut out = Object::new();
-    out.insert(
-        "indexes",
-        Value::List(
-            report
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ReindexOutput {
+    indexes: Vec<ReindexedIndexOutput>,
+    derived: Vec<String>,
+    duration_ms: u64,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ReindexedIndexOutput {
+    collection: String,
+    index: String,
+    rows: u64,
+    #[semantic(required)]
+    entries: Option<u64>,
+}
+
+impl From<ReindexReport> for ReindexOutput {
+    fn from(report: ReindexReport) -> Self {
+        Self {
+            indexes: report
                 .indexes
                 .into_iter()
-                .map(|index| {
-                    let mut row = Object::new();
-                    row.insert("collection", Value::String(index.collection));
-                    row.insert("index", Value::String(index.index));
-                    row.insert("rows", Value::U64(index.rows));
-                    row.insert("entries", optional_u64(index.entries));
-                    Value::Object(row)
+                .map(|index| ReindexedIndexOutput {
+                    collection: index.collection,
+                    index: index.index,
+                    rows: index.rows,
+                    entries: index.entries,
                 })
                 .collect(),
-        ),
-    );
-    out.insert(
-        "derived",
-        Value::List(
-            report
+            derived: report
                 .derived
                 .into_iter()
-                .map(|derived| Value::String(derived.as_str().into()))
+                .map(|derived| derived.as_str().into())
                 .collect(),
-        ),
-    );
-    out.insert("duration_ms", duration_ms(report.duration));
-    out
+            duration_ms: duration_ms(report.duration),
+        }
+    }
 }
 
-fn stats_object(stats: StorageStats) -> Object {
-    let mut out = Object::new();
-    out.insert("file_size_bytes", optional_u64(stats.file_size_bytes));
-    out.insert("entries", optional_u64(stats.entries));
-    out.insert("allocated_bytes", optional_u64(stats.allocated_bytes));
-    out.insert("stored_bytes", optional_u64(stats.stored_bytes));
-    out.insert("fragmented_bytes", optional_u64(stats.fragmented_bytes));
-    out.insert(
-        "tables",
-        Value::List(
-            stats
+#[derive(SemanticType, IntoValue, FromValue)]
+struct RepairOutput {
+    before: VerifyOutput,
+    rebuilt: ReindexOutput,
+    after: VerifyOutput,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct StatsOutput {
+    #[semantic(required)]
+    file_size_bytes: Option<u64>,
+    #[semantic(required)]
+    entries: Option<u64>,
+    #[semantic(required)]
+    allocated_bytes: Option<u64>,
+    #[semantic(required)]
+    stored_bytes: Option<u64>,
+    #[semantic(required)]
+    fragmented_bytes: Option<u64>,
+    tables: Vec<TableStatsOutput>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct TableStatsOutput {
+    name: String,
+    entries: u64,
+}
+
+impl From<StorageStats> for StatsOutput {
+    fn from(stats: StorageStats) -> Self {
+        Self {
+            file_size_bytes: stats.file_size_bytes,
+            entries: stats.entries,
+            allocated_bytes: stats.allocated_bytes,
+            stored_bytes: stats.stored_bytes,
+            fragmented_bytes: stats.fragmented_bytes,
+            tables: stats
                 .tables
                 .into_iter()
-                .map(|table| {
-                    let mut row = Object::new();
-                    row.insert("name", Value::String(table.name));
-                    row.insert("entries", Value::U64(table.entries));
-                    Value::Object(row)
+                .map(|table| TableStatsOutput {
+                    name: table.name,
+                    entries: table.entries,
                 })
                 .collect(),
-        ),
-    );
-    out
+        }
+    }
 }
 
-fn optional_u64(value: Option<u64>) -> Value {
-    value.map_or(Value::Null, Value::U64)
+#[derive(SemanticType, IntoValue, FromValue)]
+struct CompactOutput {
+    before: StatsOutput,
+    after: StatsOutput,
+    compacted: bool,
+    #[semantic(required)]
+    freed_bytes: Option<u64>,
+    duration_ms: u64,
 }
 
-fn optional_string_value(value: Option<String>) -> Value {
-    value.map_or(Value::Null, Value::String)
+#[derive(SemanticType, IntoValue, FromValue)]
+struct RewritePayloadsOutput {
+    scanned: u64,
+    rewritten: u64,
+    batches: u64,
+    duration_ms: u64,
 }
 
-fn duration_ms(duration: Duration) -> Value {
-    Value::U64(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+#[derive(SemanticType, IntoValue, FromValue)]
+struct BackupOutput {
+    path: String,
+    #[semantic(required)]
+    revision: Option<u64>,
+    entries: u64,
+    #[semantic(required)]
+    bytes: Option<u64>,
+    duration_ms: u64,
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
