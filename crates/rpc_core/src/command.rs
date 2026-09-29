@@ -1,10 +1,9 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use semantic_data::schema::{AnyType, Type, TypeKind};
-use semantic_data::value::Value;
+use semantic_data::schema::Type;
+use semantic_data::value::{FromValue, IntoValue, SemanticType, Value};
 
-use crate::convert::{RpcDecode, RpcEncode};
 use crate::error::RpcError;
 
 /// Typed definition of a command: its name plus payload and output types.
@@ -23,26 +22,22 @@ impl CommandDef {
             output,
         }
     }
-
-    /// A definition accepting and returning any value.
-    pub fn untyped(name: impl Into<String>) -> Self {
-        Self::new(
-            name,
-            Type::new(TypeKind::Any(AnyType)),
-            Type::new(TypeKind::Any(AnyType)),
-        )
-    }
 }
 
 pub trait RpcCommandSpec {
-    type Payload: RpcEncode + RpcDecode + Send + 'static;
-    type Output: RpcEncode + RpcDecode + Send + 'static;
+    type Payload: SemanticType + IntoValue + FromValue + Send + 'static;
+    type Output: SemanticType + IntoValue + FromValue + Send + 'static;
     type Error: Send + 'static;
 
     const NAME: &'static str;
 
+    /// Derived from the payload and output types by default.
     fn definition(&self) -> CommandDef {
-        CommandDef::untyped(Self::NAME)
+        CommandDef::new(
+            Self::NAME,
+            Self::Payload::semantic_type(),
+            Self::Output::semantic_type(),
+        )
     }
 }
 
@@ -125,13 +120,15 @@ where
         payload: Value,
     ) -> Pin<Box<dyn Future<Output = Result<Value, CallError<E>>> + Send + 'a>> {
         Box::pin(async move {
-            let payload = C::Payload::decode_rpc(payload).map_err(CallError::InvalidPayload)?;
+            let payload = C::Payload::from_value(payload).map_err(|err| {
+                CallError::InvalidPayload(RpcError::invalid_payload(err.describe("payload")))
+            })?;
             let output = self
                 .command
                 .call(ctx, payload)
                 .await
                 .map_err(|err| CallError::Command(err.into()))?;
-            output.encode_rpc().map_err(CallError::InvalidOutput)
+            Ok(output.into_value())
         })
     }
 }

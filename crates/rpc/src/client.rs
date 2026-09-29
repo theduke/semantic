@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use futures::future::BoxFuture;
 #[cfg(all(feature = "client", target_arch = "wasm32"))]
 use futures::future::LocalBoxFuture;
-use semantic_data::value::Value;
+use semantic_data::value::{FromValue, IntoValue, Value};
 
 #[cfg(feature = "client")]
 use crate::file::{
@@ -18,7 +18,6 @@ use crate::file::{
 #[cfg(feature = "client")]
 use bytes::Bytes;
 use semantic_rpc_core::command::RpcCommandSpec;
-use semantic_rpc_core::convert::{RpcDecode, RpcEncode};
 use semantic_rpc_core::error::RpcClientError;
 use semantic_rpc_core::protocol::{RpcRequest, RpcResponse, RpcResult};
 
@@ -239,9 +238,6 @@ where
     F: FnOnce(String, Value) -> Fut,
     Fut: Future<Output = Result<Value, RpcClientError>>,
 {
-    let payload = payload
-        .encode_rpc()
-        .map_err(|err| RpcClientError::Encode(err.message))?;
-    let output = invoke(C::NAME.to_owned(), payload).await?;
-    C::Output::decode_rpc(output).map_err(|err| RpcClientError::Decode(err.message))
+    let output = invoke(C::NAME.to_owned(), payload.into_value()).await?;
+    C::Output::from_value(output).map_err(|err| RpcClientError::Decode(err.describe("output")))
 }
