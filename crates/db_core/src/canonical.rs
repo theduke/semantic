@@ -984,6 +984,9 @@ fn canonicalize_field_name(
     collection: &CollectionSchema,
     context: &'static str,
 ) -> CanonicalResult<String> {
+    if collection.is_raw_system_collection() {
+        return Ok(collection.canonical_field_name(field).to_string());
+    }
     if let Some(field) = catalog.class_named_collection_field_for_alias(collection, field) {
         return Ok(field);
     }
@@ -1206,6 +1209,51 @@ mod tests {
             err,
             QueryCanonicalizationError::AmbiguousField { field, .. } if field == "title"
         ));
+    }
+
+    #[test]
+    fn raw_system_collection_ignores_ambiguous_attribute_aliases() {
+        let mut catalog = Catalog::new();
+        for id in ["semantic:relation", "shared:blog:relation"] {
+            let _ = catalog.upsert_attribute(AttributeType {
+                id: id.to_string(),
+                name: "relation".to_string(),
+                ty: Type {
+                    kind: TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            });
+        }
+        let _ = catalog
+            .upsert_collection(
+                "__semantic.edges",
+                CollectionKind::Polymorphic,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        catalog
+            .set_collection_internal("__semantic.edges", true)
+            .unwrap();
+        let collection = catalog.collection_by_name("__semantic.edges").unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("__semantic.edges")
+            .with_order_by(vec![crate::OrderBy {
+                expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["relation"]))),
+                direction: SortDirection::Asc,
+            }]);
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        assert_eq!(
+            canonical.order_by[0].expr,
+            Expr::Operand(Operand::Field(FieldPath::from_fields(["relation"])))
+        );
     }
 
     #[test]

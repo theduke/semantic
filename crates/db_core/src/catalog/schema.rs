@@ -193,6 +193,12 @@ impl CollectionSchema {
     pub fn knows_field(&self, canonical_field: &str) -> bool {
         self.field_types.contains_key(canonical_field)
     }
+
+    /// Internal `__`-prefixed collections store raw field names that are
+    /// never resolved through attribute aliases.
+    pub fn is_raw_system_collection(&self) -> bool {
+        self.internal && self.name.starts_with("__")
+    }
 }
 
 #[derive(Debug, Clone)]
