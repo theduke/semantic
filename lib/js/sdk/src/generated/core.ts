@@ -81,16 +81,17 @@ export type ValidationViolation = {
 };
 
 export type JobRecord = {
+  type: "semantic:jobs:job";
   id: string;
-  kind: string;
-  status: JobStatus;
-  progress: JobProgress;
-  error: JobError | null;
-  created_at: DateTime;
-  started_at: datetime_DateTime | null;
-  updated_at: DateTime;
-  finished_at: datetime_DateTime | null;
-  snapshot_seq: number | bigint;
+  "semantic:jobs:job:kind": string;
+  "semantic:jobs:job:status": JobStatus;
+  "semantic:jobs:job:progress": JobProgress;
+  "semantic:jobs:job:error"?: JobError;
+  "semantic:jobs:job:created_at": DateTime;
+  "semantic:jobs:job:started_at"?: datetime_DateTime;
+  "semantic:jobs:job:updated_at": DateTime;
+  "semantic:jobs:job:finished_at"?: datetime_DateTime;
+  "semantic:jobs:job:snapshot_seq": number | bigint;
 };
 
 export type JobListQuery = {
@@ -266,9 +267,9 @@ export type JobStatus =
 
 export type JobProgress = {
   completed: number | bigint;
-  total: number | bigint | null;
-  unit: string | null;
-  phase: string | null;
+  total?: number | bigint;
+  unit?: string;
+  phase?: string;
 };
 
 export type JobError = { code: string; message: string };
@@ -280,16 +281,17 @@ export type datetime_DateTime = number | bigint;
 export type JobListCursor = { created_at: DateTime; id: string };
 
 export type jobs_JobRecord = {
+  type: "semantic:jobs:job";
   id: string;
-  kind: string;
-  status: JobStatus;
-  progress: JobProgress;
-  error: JobError | null;
-  created_at: DateTime;
-  started_at: datetime_DateTime | null;
-  updated_at: DateTime;
-  finished_at: datetime_DateTime | null;
-  snapshot_seq: number | bigint;
+  "semantic:jobs:job:kind": string;
+  "semantic:jobs:job:status": JobStatus;
+  "semantic:jobs:job:progress": JobProgress;
+  "semantic:jobs:job:error"?: JobError;
+  "semantic:jobs:job:created_at": DateTime;
+  "semantic:jobs:job:started_at"?: datetime_DateTime;
+  "semantic:jobs:job:updated_at": DateTime;
+  "semantic:jobs:job:finished_at"?: datetime_DateTime;
+  "semantic:jobs:job:snapshot_seq": number | bigint;
 };
 
 export type query_Query =

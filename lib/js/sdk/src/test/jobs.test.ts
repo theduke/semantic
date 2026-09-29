@@ -10,33 +10,36 @@ import type {
 
 test("jobs wire values match generated records and cursor input", () => {
   const timestamp = 1_800_000_000_000_000_001n;
+  // Job records are entities keyed by attribute ids; unset optional fields
+  // are omitted.
   const record: JobRecord = {
+    type: "semantic:jobs:job",
     id: "job",
-    kind: "example",
-    status: "queued",
-    progress: {
-      completed: 18_446_744_073_709_551_615n,
-      total: null,
-      unit: null,
-      phase: null,
-    },
-    error: null,
-    created_at: timestamp,
-    started_at: null,
-    updated_at: timestamp,
-    finished_at: null,
-    snapshot_seq: 1,
+    "semantic:jobs:job:kind": "example",
+    "semantic:jobs:job:status": "queued",
+    "semantic:jobs:job:progress": { completed: 18_446_744_073_709_551_615n },
+    "semantic:jobs:job:created_at": timestamp,
+    "semantic:jobs:job:updated_at": timestamp,
+    "semantic:jobs:job:snapshot_seq": 1,
   };
   const wire = encodeTagged(
     {
       ...record,
-      created_at: value.dateTimeNanos(timestamp),
-      updated_at: value.dateTimeNanos(timestamp),
+      "semantic:jobs:job:created_at": value.dateTimeNanos(timestamp),
+      "semantic:jobs:job:updated_at": value.dateTimeNanos(timestamp),
     },
     "u64",
   );
   const decoded = decodeTagged(wire) as JobRecord;
-  assert.deepEqual({ ...decoded, progress: { ...decoded.progress } }, record);
+  assert.deepEqual(
+    {
+      ...decoded,
+      "semantic:jobs:job:progress": {
+        ...decoded["semantic:jobs:job:progress"],
+      },
+    },
+    record,
+  );
   const page: JobListPage = {
     records: [record],
     next_cursor: { id: "job", created_at: timestamp },

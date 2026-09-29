@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use crate::schema::*;
-use crate::value::{DateTime, FromValue, IntoValue, Object, SemanticType, Value};
+use crate::value::{Class, DateTime, FromValue, IntoValue, SemanticType};
 
 pub const PACKAGE_NAME: &str = "semantic.jobs";
 pub const COLLECTION: &str = "semantic_jobs";
@@ -87,18 +87,22 @@ impl JobStatus {
     }
 }
 
-// The RPC types always encode optional fields, as null, matching the exported Facet types.
+// Jobs are entities of the class `semantic:jobs:job`, with one derived codec for
+// storage and RPC. Their progress and error are the plain records declared by the
+// `001_init` migration. Unset optional job fields are omitted, since the declared
+// fields are optional but not nullable; the Facet attributes mirror that wire shape
+// for the SDK export.
 
 #[derive(
     facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, Default, PartialEq, Eq,
 )]
 pub struct JobProgress {
     pub completed: u64,
-    #[semantic(required)]
+    #[facet(skip_serializing_if = Option::is_none)]
     pub total: Option<u64>,
-    #[semantic(required)]
+    #[facet(skip_serializing_if = Option::is_none)]
     pub unit: Option<String>,
-    #[semantic(required)]
+    #[facet(skip_serializing_if = Option::is_none)]
     pub phase: Option<String>,
 }
 
@@ -131,21 +135,38 @@ pub struct JobKindDescriptor {
     pub description: Option<String>,
 }
 
-/// Portable RPC representation; storage attribute names never cross this boundary.
-#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
+/// A job entity, as stored and as returned over RPC.
+#[derive(facet::Facet, Class, Clone, Debug, PartialEq, Eq)]
+#[semantic(id = "semantic:jobs:job")]
 pub struct JobRecord {
+    #[semantic(attr = crate::attr::AttrId)]
     pub id: JobId,
+    #[facet(rename = "semantic:jobs:job:kind")]
     pub kind: JobKindId,
+    #[facet(rename = "semantic:jobs:job:status")]
     pub status: JobStatus,
+    #[facet(rename = "semantic:jobs:job:progress")]
     pub progress: JobProgress,
-    #[semantic(required)]
+    #[facet(
+        rename = "semantic:jobs:job:error",
+        skip_serializing_if = Option::is_none
+    )]
     pub error: Option<JobError>,
+    #[facet(rename = "semantic:jobs:job:created_at")]
     pub created_at: DateTime,
-    #[semantic(required)]
+    #[facet(
+        rename = "semantic:jobs:job:started_at",
+        skip_serializing_if = Option::is_none
+    )]
     pub started_at: Option<DateTime>,
+    #[facet(rename = "semantic:jobs:job:updated_at")]
     pub updated_at: DateTime,
-    #[semantic(required)]
+    #[facet(
+        rename = "semantic:jobs:job:finished_at",
+        skip_serializing_if = Option::is_none
+    )]
     pub finished_at: Option<DateTime>,
+    #[facet(rename = "semantic:jobs:job:snapshot_seq")]
     pub snapshot_seq: u64,
 }
 
@@ -237,242 +258,105 @@ impl JobRecord {
         }
         Ok(())
     }
-
-    /// Qualified storage codec, including wide counters and native UTC timestamps.
-    pub fn to_object(&self) -> Object {
-        let mut object = Object::new();
-        object.insert(crate::builtin::ATTR_TYPE, CLASS_ID.to_string());
-        object.insert(crate::builtin::ATTR_ID, self.id.0.clone());
-        let mut put = |name: &str, value: Value| {
-            object.insert(format!("{PREFIX}{name}"), value);
-        };
-        put("kind", self.kind.0.clone().into());
-        put("status", self.status.as_str().to_string().into());
-        let mut progress = Object::new();
-        progress.insert("completed", self.progress.completed);
-        if let Some(v) = self.progress.total {
-            progress.insert("total", v);
-        }
-        if let Some(v) = &self.progress.unit {
-            progress.insert("unit", v.clone());
-        }
-        if let Some(v) = &self.progress.phase {
-            progress.insert("phase", v.clone());
-        }
-        put("progress", Value::Object(progress));
-        if let Some(error) = &self.error {
-            let mut value = Object::new();
-            value.insert("code", error.code.clone());
-            value.insert("message", error.message.clone());
-            put("error", Value::Object(value));
-        }
-        put("created_at", Value::DateTime(self.created_at));
-        put("updated_at", Value::DateTime(self.updated_at));
-        if let Some(v) = self.started_at {
-            put("started_at", Value::DateTime(v));
-        }
-        if let Some(v) = self.finished_at {
-            put("finished_at", Value::DateTime(v));
-        }
-        put("snapshot_seq", Value::U64(self.snapshot_seq));
-        object
-    }
-
-    pub fn from_object(id: JobId, object: &Object) -> Result<Self, String> {
-        if object
-            .get(crate::builtin::ATTR_TYPE)
-            .and_then(Value::as_str)
-            != Some(CLASS_ID)
-        {
-            return Err("invalid job class".into());
-        }
-        if object.get(crate::builtin::ATTR_ID).and_then(Value::as_str) != Some(id.0.as_str()) {
-            return Err("job entity identity mismatch".into());
-        }
-        if let Some(key) = object.keys().find(|key| {
-            key.as_str() != crate::builtin::ATTR_ID
-                && key.as_str() != crate::builtin::ATTR_TYPE
-                && ![
-                    "kind",
-                    "status",
-                    "progress",
-                    "error",
-                    "created_at",
-                    "started_at",
-                    "updated_at",
-                    "finished_at",
-                    "snapshot_seq",
-                ]
-                .iter()
-                .any(|name| *key == &format!("{PREFIX}{name}"))
-        }) {
-            return Err(format!("unexpected job metadata field: {key}"));
-        }
-        let get = |name: &str| object.get(&format!("{PREFIX}{name}"));
-        let string = |name: &str| {
-            get(name)
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| format!("invalid job {name}"))
-        };
-        let date = |name: &str| -> Result<Option<DateTime>, String> {
-            match get(name) {
-                None => Ok(None),
-                Some(Value::DateTime(v)) => Ok(Some(*v)),
-                _ => Err(format!("invalid job {name}")),
-            }
-        };
-        let progress = match get("progress") {
-            Some(Value::Object(v)) => v,
-            _ => return Err("invalid job progress".into()),
-        };
-        if progress
-            .keys()
-            .any(|key| !["completed", "total", "unit", "phase"].contains(&key.as_str()))
-        {
-            return Err("unexpected job progress field".into());
-        }
-        let optional_string = |name: &str| -> Result<Option<String>, String> {
-            match progress.get(name) {
-                None => Ok(None),
-                Some(Value::String(v)) => Ok(Some(v.clone())),
-                _ => Err(format!("invalid progress {name}")),
-            }
-        };
-        let error = match get("error") {
-            None => None,
-            Some(Value::Object(v)) => Some(JobError {
-                code: v
-                    .get("code")
-                    .and_then(Value::as_str)
-                    .ok_or("invalid error code")?
-                    .into(),
-                message: v
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .ok_or("invalid error message")?
-                    .into(),
-            }),
-            _ => return Err("invalid job error".into()),
-        };
-        let record = Self {
-            id,
-            kind: JobKindId(string("kind")?),
-            status: JobStatus::parse(&string("status")?).ok_or("unknown job status")?,
-            progress: JobProgress {
-                completed: uint(progress.get("completed"))?,
-                total: progress.get("total").map(|v| uint(Some(v))).transpose()?,
-                unit: optional_string("unit")?,
-                phase: optional_string("phase")?,
-            },
-            error,
-            created_at: date("created_at")?.ok_or("missing created_at")?,
-            updated_at: date("updated_at")?.ok_or("missing updated_at")?,
-            started_at: date("started_at")?,
-            finished_at: date("finished_at")?,
-            snapshot_seq: uint(get("snapshot_seq"))?,
-        };
-        record.validate()?;
-        Ok(record)
-    }
-}
-
-fn uint(value: Option<&Value>) -> Result<u64, String> {
-    match value {
-        Some(Value::U64(v)) => Ok(*v),
-        Some(v) => v
-            .as_i64()
-            .and_then(|v| u64::try_from(v).ok())
-            .ok_or("invalid unsigned counter".into()),
-        None => Err("missing unsigned counter".into()),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn operational_codec_is_lossless_and_has_no_payload_fields() {
+    use crate::value::{Object, Value};
+
+    fn record(status: JobStatus) -> JobRecord {
         let now = DateTime::now_utc();
+        JobRecord {
+            id: JobId("job".into()),
+            kind: JobKindId("unknown.kind".into()),
+            status,
+            progress: JobProgress {
+                completed: u64::MAX,
+                total: Some(u64::MAX),
+                ..Default::default()
+            },
+            error: matches!(status, JobStatus::Failed | JobStatus::Interrupted)
+                .then(|| JobError::new("error", "message")),
+            created_at: now,
+            updated_at: now,
+            started_at: (status != JobStatus::Queued).then_some(now),
+            finished_at: status.is_terminal().then_some(now),
+            snapshot_seq: 1,
+        }
+    }
+
+    fn object(value: Value) -> Object {
+        match value {
+            Value::Object(object) => object,
+            other => panic!("expected object, found {other:?}"),
+        }
+    }
+
+    /// The field names of a declared record type.
+    fn record_fields(ty: &Type) -> Vec<&str> {
+        match &ty.kind {
+            TypeKind::Record(record) => record.fields.keys().map(String::as_str).collect(),
+            other => panic!("expected record type, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn codec_matches_the_declared_class_and_is_lossless() {
+        let package = package();
+        let attributes = &package.root.attributes;
+        let class = &package.root.classes[CLASS_ID];
         for status in JobStatus::ALL {
-            let record = JobRecord {
-                id: JobId("job".into()),
-                kind: JobKindId("unknown.kind".into()),
-                status,
-                progress: JobProgress {
-                    completed: u64::MAX,
-                    total: Some(u64::MAX),
-                    ..Default::default()
-                },
-                error: matches!(status, JobStatus::Failed | JobStatus::Interrupted)
-                    .then(|| JobError::new("error", "message")),
-                created_at: now,
-                updated_at: now,
-                started_at: (status != JobStatus::Queued).then_some(now),
-                finished_at: status.is_terminal().then_some(now),
-                snapshot_seq: 1,
-            };
-            let object = record.to_object();
-            let Value::Object(wire) = record.clone().into_value() else {
-                panic!("record object")
-            };
-            assert_eq!(wire.keys().count(), 10);
-            assert!(wire.keys().all(|key| !key.contains(':')));
-            assert_eq!(
-                wire.get("kind").and_then(Value::as_str),
-                Some("unknown.kind")
-            );
-            assert_eq!(wire.get("created_at"), Some(&Value::DateTime(now)));
-            assert_eq!(wire.get("snapshot_seq"), Some(&Value::U64(1)));
-            let Some(Value::Object(progress)) = wire.get("progress") else {
-                panic!("progress object")
-            };
+            let record = record(status);
+            let wire = object(record.clone().into_value());
+            assert_eq!(wire.get("type").and_then(Value::as_str), Some(CLASS_ID));
+            assert_eq!(wire.get("id").and_then(Value::as_str), Some("job"));
+            for (key, value) in wire.iter() {
+                if key == "id" || key == "type" {
+                    continue;
+                }
+                let attribute = attributes
+                    .get(key)
+                    .unwrap_or_else(|| panic!("undeclared job attribute {key}"));
+                assert_ne!(value, &Value::Null, "{key} is not nullable");
+                if let Value::Object(fields) = value {
+                    let declared = record_fields(&attribute.ty);
+                    assert!(fields.keys().all(|name| declared.contains(&name.as_str())));
+                    assert!(fields.values().all(|value| value != &Value::Null));
+                }
+            }
+            for attribute in class.attributes.values().filter(|a| a.required) {
+                assert!(wire.contains_key(&attribute.attribute.id));
+            }
+            let get = |name: &str| wire.get(&format!("{PREFIX}{name}"));
+            assert_eq!(get("status").and_then(Value::as_str), Some(status.as_str()));
+            assert_eq!(get("created_at"), Some(&Value::DateTime(record.created_at)));
+            assert_eq!(get("snapshot_seq"), Some(&Value::U64(1)));
+            let progress = object(get("progress").cloned().unwrap());
             assert_eq!(progress.get("completed"), Some(&Value::U64(u64::MAX)));
-            assert_eq!(progress.get("unit"), Some(&Value::Null));
+            assert_eq!(progress.get("unit"), None);
+            if status == JobStatus::Queued {
+                assert_eq!(get("error"), None);
+                assert_eq!(get("started_at"), None);
+                assert_eq!(get("finished_at"), None);
+            }
             assert_eq!(
                 JobRecord::from_value(Value::Object(wire.clone())).unwrap(),
                 record
             );
-            let tagged = crate::value::serde::typed::TypedValue(Value::Object(wire.clone()));
+            let tagged = crate::value::serde::typed::TypedValue(Value::Object(wire));
             let json = serde_json::to_string(&tagged).unwrap();
             assert!(json.contains("\"u64\":18446744073709551615"));
             assert!(json.contains("\"date_time\":"));
-            assert!(!json.contains(PREFIX));
             assert_eq!(
                 serde_json::from_str::<crate::value::serde::typed::TypedValue>(&json).unwrap(),
                 tagged
             );
-            if status == JobStatus::Queued {
-                assert_eq!(wire.get("error"), Some(&Value::Null));
-                assert_eq!(wire.get("started_at"), Some(&Value::Null));
-                assert_eq!(wire.get("finished_at"), Some(&Value::Null));
-            }
-            assert_eq!(
-                record,
-                JobRecord::from_object(record.id.clone(), &object).unwrap()
-            );
-            assert!(object.keys().all(|k| {
-                k == "id"
-                    || k == "type"
-                    || [
-                        "kind",
-                        "status",
-                        "progress",
-                        "error",
-                        "created_at",
-                        "started_at",
-                        "updated_at",
-                        "finished_at",
-                        "snapshot_seq",
-                    ]
-                    .iter()
-                    .any(|name| k == &format!("{PREFIX}{name}"))
-            }));
             let page = JobListPage {
-                records: vec![record],
+                records: vec![record.clone()],
                 next_cursor: Some(JobListCursor {
                     id: JobId("job".into()),
-                    created_at: now,
+                    created_at: record.created_at,
                 }),
             };
             assert_eq!(
@@ -480,6 +364,17 @@ mod tests {
                 JobListPage::from_value(page.clone().into_value()).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn decoding_rejects_other_classes() {
+        assert_eq!(
+            <JobRecord as crate::attr::ClassDescriptorConst>::ID,
+            CLASS_ID
+        );
+        let mut wire = object(record(JobStatus::Queued).into_value());
+        wire.insert("type", Value::String("semantic:other".into()));
+        assert!(JobRecord::from_value(Value::Object(wire)).is_err());
     }
 
     #[test]
@@ -508,9 +403,15 @@ mod tests {
         let TypeKind::Record(record) = JobRecord::semantic_type().kind else {
             panic!("object record")
         };
-        assert!(record.fields.values().all(|field| field.required));
+        let class = &package().root.classes[CLASS_ID];
+        for attribute in class.attributes.values() {
+            assert_eq!(
+                record.fields[&attribute.attribute.id].required,
+                attribute.required
+            );
+        }
         assert!(matches!(
-            record.fields["status"].ty.kind,
+            record.fields["semantic:jobs:job:status"].ty.kind,
             TypeKind::Enum(EnumType {
                 repr: EnumRepr::String,
                 ..

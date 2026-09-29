@@ -1,6 +1,12 @@
 use crate::SemanticDb;
 use async_trait::async_trait;
-use semantic_data::{Value, builtin::ATTR_ID, jobs::*, query::*};
+use semantic_data::{
+    Object, Value,
+    builtin::ATTR_ID,
+    jobs::*,
+    query::*,
+    value::{FromValue, IntoValue},
+};
 use semantic_db_core::{
     Batch, BatchOperation, QueryResult,
     catalog::{CollectionKind, IntegrityMode},
@@ -20,6 +26,12 @@ impl DbJobStore {
 }
 fn read_error(error: impl std::fmt::Display) -> JobStoreError {
     JobStoreError::definitive(error.to_string())
+}
+/// Decode and validate a stored job entity.
+fn decode(object: Object) -> Result<JobRecord, JobStoreError> {
+    let record = JobRecord::from_value(Value::Object(object)).map_err(read_error)?;
+    record.validate().map_err(read_error)?;
+    Ok(record)
 }
 fn write_error(error: impl std::fmt::Display) -> JobStoreError {
     JobStoreError::unknown(error.to_string(), true)
@@ -88,19 +100,20 @@ impl JobStore for DbJobStore {
             .get(COLLECTION.into(), id.0.clone())
             .await
             .map_err(read_error)?
-            .map(|record| {
-                JobRecord::from_object(JobId(record.id), &record.object).map_err(read_error)
-            })
+            .map(|record| decode(record.object))
             .transpose()
     }
     async fn put(&self, record: &JobRecord) -> Result<(), JobStoreError> {
         record.validate().map_err(read_error)?;
+        let Value::Object(object) = record.clone().into_value() else {
+            unreachable!("classes encode as objects")
+        };
         self.db
             .execute_batch(Batch {
                 operations: vec![BatchOperation::Upsert {
                     collection: COLLECTION.into(),
                     id: record.id.0.clone(),
-                    object: record.to_object(),
+                    object,
                 }],
             })
             .await
@@ -179,13 +192,7 @@ impl JobStore for DbJobStore {
         };
         let mut records = rows
             .into_iter()
-            .map(|object| {
-                let id = object
-                    .get(ATTR_ID)
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| read_error("job row missing id"))?;
-                JobRecord::from_object(JobId(id.into()), &object).map_err(read_error)
-            })
+            .map(decode)
             .collect::<Result<Vec<_>, _>>()?;
         let more = records.len() > query.limit as usize;
         records.truncate(query.limit as usize);

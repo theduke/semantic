@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
 
 use facet::{Def, Facet, NumericType, Shape, StructKind, Type, UserType};
+use semantic_data::attr::ClassDescriptorConst;
 use semantic_data::schema::Package;
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -60,7 +61,9 @@ fn generate_core_types() -> String {
         <semantic_data::jobs::ClearCompletedResult as Facet>::SHAPE,
         <semantic_data::query::QueryInput as Facet>::SHAPE,
     ];
-    let mut output = TypeScriptGenerator::new().render(&roots);
+    let mut output = TypeScriptGenerator::new()
+        .with_class::<semantic_data::jobs::JobRecord>()
+        .render(&roots);
     output.push_str(&generate_core_schema_constants());
     output.push_str(include_str!("jobs_commands.ts"));
     output
@@ -136,6 +139,8 @@ struct TypeScriptGenerator {
     names: HashMap<usize, String>,
     owners: BTreeMap<String, usize>,
     queue: VecDeque<&'static Shape>,
+    /// Class entity types, rendered with the built-in `type`.
+    classes: Vec<(facet::ConstTypeId, &'static str)>,
 }
 
 impl TypeScriptGenerator {
@@ -144,7 +149,13 @@ impl TypeScriptGenerator {
             names: HashMap::new(),
             owners: BTreeMap::new(),
             queue: VecDeque::new(),
+            classes: Vec::new(),
         }
+    }
+
+    fn with_class<T: Facet<'static> + ClassDescriptorConst>(mut self) -> Self {
+        self.classes.push((T::SHAPE.id, T::ID));
+        self
     }
 
     fn render(mut self, roots: &[&'static Shape]) -> String {
@@ -304,7 +315,14 @@ impl TypeScriptGenerator {
                     "number".to_string()
                 }
             }
-            Type::User(UserType::Struct(ty)) => self.struct_type(ty.kind, ty.fields),
+            Type::User(UserType::Struct(ty)) => {
+                let class = self
+                    .classes
+                    .iter()
+                    .find(|(id, _)| *id == shape.id)
+                    .map(|(_, class)| *class);
+                self.struct_type(ty.kind, ty.fields, class)
+            }
             Type::User(UserType::Enum(ty)) => ty
                 .variants
                 .iter()
@@ -322,7 +340,7 @@ impl TypeScriptGenerator {
                         }
                         _ => format!(
                             "{{ {name}: {} }}",
-                            self.struct_type(variant.data.kind, variant.data.fields)
+                            self.struct_type(variant.data.kind, variant.data.fields, None)
                         ),
                     }
                 })
@@ -332,7 +350,13 @@ impl TypeScriptGenerator {
         }
     }
 
-    fn struct_type(&mut self, kind: StructKind, fields: &'static [facet::Field]) -> String {
+    /// Fields skipped when `None` are optional; classes start with their `type`.
+    fn struct_type(
+        &mut self,
+        kind: StructKind,
+        fields: &'static [facet::Field],
+        class: Option<&'static str>,
+    ) -> String {
         match kind {
             StructKind::Unit => "Record<string, never>".to_string(),
             StructKind::Tuple | StructKind::TupleStruct if fields.is_empty() => {
@@ -348,14 +372,23 @@ impl TypeScriptGenerator {
             ),
             StructKind::Struct => format!(
                 "{{ {} }}",
-                fields
-                    .iter()
-                    .filter(|field| !field.flags.contains(facet::FieldFlags::SKIP))
-                    .map(|field| format!(
-                        "{}: {}",
-                        json_string(field.rename.unwrap_or(field.name)),
-                        self.reference(field.shape.get())
-                    ))
+                class
+                    .map(|class| format!("\"type\": {}", json_string(class)))
+                    .into_iter()
+                    .chain(
+                        fields
+                            .iter()
+                            .filter(|field| !field.flags.contains(facet::FieldFlags::SKIP))
+                            .map(|field| {
+                                let name = json_string(field.rename.unwrap_or(field.name));
+                                match field.shape.get().def {
+                                    Def::Option(def) if field.skip_serializing_if.is_some() => {
+                                        format!("{name}?: {}", self.reference(def.t))
+                                    }
+                                    _ => format!("{name}: {}", self.reference(field.shape.get())),
+                                }
+                            })
+                    )
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
@@ -442,8 +475,11 @@ mod tests {
     fn jobs_types_match_decoded_rpc_values() {
         let output = generate_core_types();
         assert!(output.contains("export type DateTime = number | bigint;"));
-        assert!(output.contains("\"total\": number | bigint | null"));
-        assert!(output.contains("\"error\": JobError | null"));
+        assert!(output.contains("\"total\"?: number | bigint;"));
+        assert!(output.contains(
+            "{ \"type\": \"semantic:jobs:job\"; \"id\": string; \"semantic:jobs:job:kind\": string;"
+        ));
+        assert!(output.contains("\"semantic:jobs:job:error\"?: JobError;"));
         assert!(output.contains("\"description\": string | null"));
         assert!(
             output.contains(
@@ -451,6 +487,5 @@ mod tests {
             )
         );
         assert!(output.contains("cursor?: JobListCursorInput | null"));
-        assert!(!output.contains("semantic:jobs:job:"));
     }
 }
