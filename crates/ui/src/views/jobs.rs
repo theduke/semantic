@@ -1,9 +1,11 @@
 use dioxus::prelude::*;
 use semantic_data::{
     Object, Value,
+    attr::{AttrDescriptorConst, AttrId},
     jobs::*,
     value::{FromValue, IntoValue},
 };
+use semantic_rpc_core::AttrScopeId;
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 use std::time::Duration;
 
@@ -41,31 +43,25 @@ fn JobsView(scope: Option<String>) -> Element {
         async move {
             let mut payload = Object::new();
             if let Some(scope) = &scope {
-                payload.insert("scope_id", scope.clone());
+                payload.insert(AttrScopeId::ID, scope.clone());
             }
-            if let Ok(Value::List(kinds)) = rpc
+            if let Ok(kinds) = rpc
                 .invoke_value("semantic.jobs.kinds", Value::Object(payload))
                 .await
+                .map(Vec::<JobKindDescriptor>::from_value)
             {
                 titles.set(
                     kinds
-                        .iter()
-                        .filter_map(|v| {
-                            let Value::Object(v) = v else {
-                                return None;
-                            };
-                            Some((
-                                v.get("id")?.as_str()?.to_owned(),
-                                v.get("title")?.as_str()?.to_owned(),
-                            ))
-                        })
+                        .into_iter()
+                        .flatten()
+                        .map(|kind| (kind.id.0, kind.title))
                         .collect(),
                 );
             }
             loop {
                 let mut payload = query.clone().into_value();
                 if let (Some(scope), Value::Object(payload)) = (&scope, &mut payload) {
-                    payload.insert("scope_id", scope.clone());
+                    payload.insert(AttrScopeId::ID, scope.clone());
                 }
                 match rpc.invoke_value("semantic.jobs.list", payload).await {
                     Ok(value) => match decode_page(value) {
@@ -87,10 +83,10 @@ fn JobsView(scope: Option<String>) -> Element {
         spawn(async move {
             let mut payload = Object::new();
             if let Some(scope) = scope {
-                payload.insert("scope_id", scope);
+                payload.insert(AttrScopeId::ID, scope);
             }
             if let Some(id) = id {
-                payload.insert("id", id);
+                payload.insert(AttrId::ID, id);
             }
             match rpc.invoke_value(command, Value::Object(payload)).await {
                 Ok(_) => refresh += 1,

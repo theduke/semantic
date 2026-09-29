@@ -1,9 +1,10 @@
 use crate::command::ScopeParams;
 use crate::{AppError, AppRequestContext, DbScopeId};
+use semantic_data::attr::AttrId;
 use semantic_data::jobs::*;
 use semantic_data::value::{FromValue, IntoValue, SemanticType};
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
+use semantic_rpc_core::{AttrScopeId, RpcCommand, RpcCommandSpec};
 use std::{future::Future, pin::Pin};
 
 pub(crate) fn register(
@@ -19,6 +20,7 @@ pub(crate) fn register(
 
 #[derive(SemanticType, IntoValue, FromValue, Default)]
 struct ListPayload {
+    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
     #[semantic(flatten)]
     query: JobListQuery,
@@ -26,7 +28,9 @@ struct ListPayload {
 
 #[derive(SemanticType, IntoValue, FromValue)]
 struct IdPayload {
+    #[semantic(attr = AttrScopeId)]
     scope_id: Option<String>,
+    #[semantic(attr = AttrId)]
     id: JobId,
 }
 

@@ -6,6 +6,11 @@ use semantic_data::value::{FromValue, IntoValue, SemanticType, Value};
 
 use crate::error::RpcError;
 
+semantic_data::attr!(
+    /// The scope a command applies to; commands default to the current scope.
+    pub AttrScopeId, "semantic:scope:id", String, name = "scope_id"
+);
+
 /// Typed definition of a command: its name plus payload and output types.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandDef {

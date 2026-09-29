@@ -145,9 +145,9 @@ pub struct JobKindDescriptor {
     pub description: Option<String>,
 }
 
-/// Portable RPC representation, keyed by the job attribute ids. Storage uses the
-/// separate codec [`Self::to_object`], which also carries the class and omits
-/// unset fields.
+/// Portable RPC representation, keyed by the job attribute ids.
+// Storage uses the separate codec `to_object`/`from_object`, which also carries
+// the class and omits unset fields.
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 #[semantic(namespace = "semantic:jobs:job")]
 pub struct JobRecord {
