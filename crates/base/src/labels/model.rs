@@ -1,7 +1,8 @@
 use crate::schema::labels::*;
 use semantic_data::{
     attr::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_PARENT, ATTR_UPDATED_AT},
-    value::{DateTime, Object, Value},
+    schema::{EnumRepr, EnumType, EnumVariant, Field, Meta, RecordType, Type, TypeKind},
+    value::{DateTime, FromValue, FromValueError, IntoValue, Object, SemanticType, Value},
 };
 use semantic_rpc_core::RpcError;
 use std::collections::{BTreeMap, BTreeSet};
@@ -134,6 +135,78 @@ impl Label {
             }
         }
         object
+    }
+}
+
+/// Labels are encoded as their entity objects, see [`Label::to_object`].
+impl SemanticType for Label {
+    fn semantic_type() -> Type {
+        fn string_enum(names: &[&str]) -> Type {
+            Type::new(TypeKind::Enum(EnumType {
+                repr: EnumRepr::String,
+                variants: names
+                    .iter()
+                    .map(|name| EnumVariant {
+                        name: (*name).into(),
+                        value: None,
+                        symbol: Some((*name).into()),
+                        meta: Meta::default(),
+                    })
+                    .collect(),
+            }))
+        }
+        let field = |ty: Type, required: bool| Field {
+            ty,
+            required,
+            readonly: false,
+            writeonly: false,
+            default: None,
+            meta: Meta::default(),
+        };
+        let string = || String::semantic_type();
+        let fields = [
+            ("id", field(string(), true)),
+            (
+                "type",
+                field(string_enum(&[CLASS_ID, GROUP_CLASS_ID]), true),
+            ),
+            (ATTR_NAME, field(string(), true)),
+            (
+                ATTR_SELECTION_MODE,
+                field(string_enum(&[MODE_MULTIPLE, MODE_EXCLUSIVE]), false),
+            ),
+            (ATTR_DESCRIPTION, field(string(), false)),
+            (ATTR_PARENT, field(string(), false)),
+            (ATTR_COLOR, field(string(), false)),
+            (ATTR_CREATED_AT, field(DateTime::semantic_type(), false)),
+            (ATTR_UPDATED_AT, field(DateTime::semantic_type(), false)),
+        ];
+        Type::new(TypeKind::Record(RecordType {
+            fields: fields
+                .into_iter()
+                .map(|(name, field)| (name.to_owned(), field))
+                .collect(),
+            open: false,
+            additional: None,
+            required_order: None,
+        }))
+    }
+}
+
+impl IntoValue for Label {
+    fn into_value(self) -> Value {
+        Value::Object(self.to_object())
+    }
+}
+
+impl FromValue for Label {
+    fn from_value(value: Value) -> Result<Self, FromValueError> {
+        match value {
+            Value::Object(object) => {
+                Self::from_object(&object).map_err(|err| FromValueError::new(err.message))
+            }
+            other => Err(FromValueError::expected("label object", &other)),
+        }
     }
 }
 

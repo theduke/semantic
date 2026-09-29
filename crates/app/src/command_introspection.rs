@@ -5,17 +5,13 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use semantic_data::schema::{
-    Field, ListType, Meta, OptionalType, RecordType, StringType, Type, TypeKind,
-};
-use semantic_data::value::{Object, Value};
+use semantic_data::schema::Type;
+use semantic_data::value::{FromValue, IntoValue, SemanticType};
 use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
 
-use crate::command::{expect_object, optional_bool, required_string};
+use crate::command::DocumentFormat;
 use crate::{AppError, AppRequestContext};
-
-const TYPE_FORMAT: &str = "facet-json";
 
 pub(crate) fn register(
     registry: &mut RpcRegistry<AppRequestContext, AppError>,
@@ -28,152 +24,119 @@ pub(crate) fn register(
 struct List;
 struct Get;
 
+type CommandFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AppError>> + Send + 'a>>;
+
+#[derive(SemanticType, IntoValue, FromValue, Default)]
+struct ListPayload {
+    /// Include the encoded input and output types.
+    schema: Option<bool>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ListOutput {
+    /// The type encoding, with `schema`.
+    format: Option<DocumentFormat>,
+    commands: Vec<CommandEntry>,
+}
+
+/// A command's name, plus its encoded types with `schema`.
+#[derive(SemanticType, IntoValue, FromValue)]
+struct CommandEntry {
+    name: String,
+    input: Option<String>,
+    output: Option<String>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct GetPayload {
+    name: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct GetOutput {
+    format: DocumentFormat,
+    name: String,
+    input: String,
+    output: String,
+}
+
 impl RpcCommandSpec for List {
-    type Payload = Value;
-    type Output = Value;
+    /// Null and void are accepted as an empty payload.
+    type Payload = Option<ListPayload>;
+    type Output = ListOutput;
     type Error = AppError;
 
     const NAME: &'static str = "semantic.command.list";
-
-    fn definition(&self) -> CommandDef {
-        let entry = record(vec![
-            ("name", string(), true),
-            ("input", string(), false),
-            ("output", string(), false),
-        ]);
-        CommandDef::new(
-            Self::NAME,
-            record(vec![("schema", optional(Type::new_bool()), false)]),
-            record(vec![
-                ("format", string(), false),
-                ("commands", list(entry), true),
-            ]),
-        )
-    }
 }
 
 impl RpcCommand<AppRequestContext> for List {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        payload: Option<ListPayload>,
+    ) -> CommandFuture<'a, ListOutput> {
         Box::pin(async move {
-            let schema = match payload {
-                Value::Void | Value::Null => false,
-                payload => optional_bool(&expect_object(payload)?, "schema")?.unwrap_or(false),
-            };
+            let schema = payload.unwrap_or_default().schema.unwrap_or(false);
             let commands = ctx
                 .app
                 .registry()
                 .commands()
-                .map(|command| command_value(command.definition(), schema).map(Value::Object))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut out = Object::new();
-            if schema {
-                out.insert("format", TYPE_FORMAT.to_string());
-            }
-            out.insert("commands", Value::List(commands));
-            Ok(Value::Object(out))
+                .map(|command| {
+                    let definition = command.definition();
+                    let (input, output) = if schema {
+                        (
+                            Some(encode_type(&definition.input)?),
+                            Some(encode_type(&definition.output)?),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    Ok(CommandEntry {
+                        name: definition.name.clone(),
+                        input,
+                        output,
+                    })
+                })
+                .collect::<Result<Vec<_>, AppError>>()?;
+            Ok(ListOutput {
+                format: schema.then_some(DocumentFormat::FacetJson),
+                commands,
+            })
         })
     }
 }
 
 impl RpcCommandSpec for Get {
-    type Payload = Value;
-    type Output = Value;
+    type Payload = GetPayload;
+    type Output = GetOutput;
     type Error = AppError;
 
     const NAME: &'static str = "semantic.command.get";
-
-    fn definition(&self) -> CommandDef {
-        CommandDef::new(
-            Self::NAME,
-            record(vec![("name", string(), true)]),
-            record(vec![
-                ("format", string(), true),
-                ("name", string(), true),
-                ("input", string(), true),
-                ("output", string(), true),
-            ]),
-        )
-    }
 }
 
 impl RpcCommand<AppRequestContext> for Get {
     fn call<'a>(
         &'a self,
         ctx: &'a AppRequestContext,
-        payload: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        payload: GetPayload,
+    ) -> CommandFuture<'a, GetOutput> {
         Box::pin(async move {
-            let name = required_string(&expect_object(payload)?, "name")?;
             let command = ctx
                 .app
                 .registry()
-                .get(&name)
-                .ok_or(AppError::UnknownCommand(name))?;
-            let mut out = command_value(command.definition(), true)?;
-            out.insert("format", TYPE_FORMAT.to_string());
-            Ok(Value::Object(out))
+                .get(&payload.name)
+                .ok_or(AppError::UnknownCommand(payload.name))?;
+            let definition: &CommandDef = command.definition();
+            Ok(GetOutput {
+                format: DocumentFormat::FacetJson,
+                name: definition.name.clone(),
+                input: encode_type(&definition.input)?,
+                output: encode_type(&definition.output)?,
+            })
         })
     }
 }
 
-/// The command's name, plus its facet-json encoded types if `schema` is set.
-fn command_value(definition: &CommandDef, schema: bool) -> Result<Object, AppError> {
-    let mut out = Object::new();
-    out.insert("name", definition.name.clone());
-    if schema {
-        out.insert("input", encode_type(&definition.input)?);
-        out.insert("output", encode_type(&definition.output)?);
-    }
-    Ok(out)
-}
-
 fn encode_type(ty: &Type) -> Result<String, AppError> {
     facet_json::to_string(ty).map_err(|err| AppError::InvalidRequest(err.to_string()))
-}
-
-fn string() -> Type {
-    Type::new(TypeKind::String(StringType {
-        format: None,
-        normalization: None,
-    }))
-}
-
-fn optional(ty: Type) -> Type {
-    Type::new(TypeKind::Optional(OptionalType {
-        inner: Box::new(ty),
-    }))
-}
-
-fn list(ty: Type) -> Type {
-    Type::new(TypeKind::List(ListType {
-        items: Box::new(ty),
-    }))
-}
-
-fn record(fields: Vec<(&str, Type, bool)>) -> Type {
-    Type::new(TypeKind::Record(RecordType {
-        fields: fields
-            .into_iter()
-            .map(|(name, ty, required)| {
-                (
-                    name.into(),
-                    Field {
-                        ty,
-                        required,
-                        readonly: false,
-                        writeonly: false,
-                        default: None,
-                        meta: Meta::default(),
-                    },
-                )
-            })
-            .collect(),
-        open: false,
-        additional: None,
-        required_order: None,
-    }))
 }

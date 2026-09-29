@@ -1,10 +1,7 @@
-use super::{
-    model::{optional_string, required_string},
-    *,
-};
+use super::*;
 use semantic_data::{
     builtin::DEFAULT_COLLECTION,
-    value::{Object, Value},
+    value::{FromValue, IntoValue, Null, SemanticType, Value},
 };
 use semantic_rpc_core::{CommandAdapter, DynCommand, RpcCommand, RpcCommandSpec, RpcError};
 use std::{future::Future, pin::Pin};
@@ -19,11 +16,11 @@ pub trait LabelContext: Sync + 'static {
 }
 
 macro_rules! command {
-    ($type:ident, $name:literal, $op:ident) => {
+    ($type:ident, $name:literal, $payload:ty => $output:ty, $run:ident) => {
         pub struct $type;
         impl RpcCommandSpec for $type {
-            type Payload = Value;
-            type Output = Value;
+            type Payload = $payload;
+            type Output = $output;
             type Error = RpcError;
             const NAME: &'static str = $name;
         }
@@ -31,31 +28,31 @@ macro_rules! command {
             fn call<'a>(
                 &'a self,
                 ctx: &'a Ctx,
-                payload: Value,
-            ) -> Pin<Box<dyn Future<Output = Result<Value, RpcError>> + Send + 'a>> {
-                Box::pin(execute(ctx, payload, Operation::$op))
+                payload: $payload,
+            ) -> Pin<Box<dyn Future<Output = Result<$output, RpcError>> + Send + 'a>> {
+                Box::pin($run(ctx, payload))
             }
         }
     };
 }
 
-#[derive(Clone, Copy)]
-enum Operation {
-    List,
-    Load,
-    Add,
-    Remove,
-    Replace,
-    Save,
-    Delete,
-}
-command!(ListLabels, "semantic.base.labels.list", List);
-command!(LoadEntityLabels, "semantic.base.labels.load", Load);
-command!(AddEntityLabels, "semantic.base.labels.add", Add);
-command!(RemoveEntityLabels, "semantic.base.labels.remove", Remove);
-command!(ReplaceEntityLabels, "semantic.base.labels.replace", Replace);
-command!(SaveLabel, "semantic.base.labels.save", Save);
-command!(DeleteLabel, "semantic.base.labels.delete", Delete);
+command!(ListLabels, "semantic.base.labels.list", LabelScopePayload => Vec<Label>, list);
+command!(LoadEntityLabels, "semantic.base.labels.load", EntityPayload => Vec<Label>, load);
+command!(AddEntityLabels, "semantic.base.labels.add", EntityLabelsPayload => Vec<Label>, add);
+command!(
+    RemoveEntityLabels,
+    "semantic.base.labels.remove",
+    EntityLabelsPayload => Vec<Label>,
+    remove
+);
+command!(
+    ReplaceEntityLabels,
+    "semantic.base.labels.replace",
+    EntityLabelsPayload => Vec<Label>,
+    replace
+);
+command!(SaveLabel, "semantic.base.labels.save", SaveLabelPayload => Label, save);
+command!(DeleteLabel, "semantic.base.labels.delete", DeleteLabelPayload => Null, delete);
 
 pub fn commands<Ctx, E>() -> Vec<Box<dyn DynCommand<Ctx, E>>>
 where
@@ -73,88 +70,134 @@ where
     ]
 }
 
-async fn execute(
-    ctx: &impl LabelContext,
-    payload: Value,
-    op: Operation,
-) -> Result<Value, RpcError> {
-    let Value::Object(object) = payload else {
-        return Err(RpcError::invalid_payload("Expected an object"));
-    };
-    let store = ctx
-        .label_store(optional_string(&object, "scope_id")?)
-        .await?;
-    match op {
-        Operation::List => Ok(encode_labels(list_labels(&store).await?)),
-        Operation::Save => {
-            let Some(Value::Object(label)) = object.get("label") else {
-                return Err(RpcError::invalid_payload("label is required"));
-            };
-            Ok(Value::Object(
-                save_label(&store, Label::from_object(label)?)
-                    .await?
-                    .to_object(),
-            ))
-        }
-        Operation::Delete => {
-            delete_label(&store, &required_string(&object, "id")?).await?;
-            Ok(Value::Null)
-        }
-        _ => {
-            let collection = optional_string(&object, "collection")?
-                .unwrap_or_else(|| DEFAULT_COLLECTION.into());
-            let id = required_string(&object, "id")?;
-            let result = match op {
-                Operation::Load => labels_for_entity(&store, &collection, &id).await?,
-                _ => {
-                    let ids = label_ids(&object)?;
-                    match op {
-                        Operation::Add => add_labels(&store, &collection, &id, &ids).await?,
-                        Operation::Remove => remove_labels(&store, &collection, &id, &ids).await?,
-                        Operation::Replace => {
-                            replace_labels(&store, &collection, &id, &ids).await?
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            };
-            Ok(encode_labels(result))
-        }
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug, Default)]
+pub struct LabelScopePayload {
+    pub scope_id: Option<String>,
+}
+
+/// Identifies an entity; `collection` defaults to the default collection.
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
+pub struct EntityPayload {
+    pub scope_id: Option<String>,
+    pub collection: Option<String>,
+    /// A nonempty entity id.
+    pub id: String,
+}
+
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
+pub struct EntityLabelsPayload {
+    pub scope_id: Option<String>,
+    pub collection: Option<String>,
+    /// A nonempty entity id.
+    pub id: String,
+    /// Nonempty label ids.
+    pub label_ids: Vec<String>,
+}
+
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
+pub struct SaveLabelPayload {
+    pub scope_id: Option<String>,
+    pub label: Label,
+}
+
+#[derive(SemanticType, IntoValue, FromValue, Clone, Debug)]
+pub struct DeleteLabelPayload {
+    pub scope_id: Option<String>,
+    /// A nonempty label id.
+    pub id: String,
+}
+
+fn non_empty(value: String, key: &str) -> Result<String, RpcError> {
+    if value.trim().is_empty() {
+        Err(RpcError::invalid_payload(format!("{key} is required")))
+    } else {
+        Ok(value)
     }
 }
 
-fn label_ids(object: &Object) -> Result<Vec<String>, RpcError> {
-    let Some(Value::List(ids)) = object.get("label_ids") else {
-        return Err(RpcError::invalid_payload("label_ids must be a list"));
-    };
-    ids.iter()
-        .map(|id| match id {
-            Value::String(id) if !id.trim().is_empty() => Ok(id.clone()),
-            _ => Err(RpcError::invalid_payload(
-                "label_ids must contain nonempty strings",
-            )),
-        })
-        .collect()
+fn label_ids(ids: Vec<String>) -> Result<Vec<String>, RpcError> {
+    if ids.iter().any(|id| id.trim().is_empty()) {
+        return Err(RpcError::invalid_payload(
+            "label_ids must contain nonempty strings",
+        ));
+    }
+    Ok(ids)
+}
+
+async fn list(ctx: &impl LabelContext, payload: LabelScopePayload) -> Result<Vec<Label>, RpcError> {
+    list_labels(&ctx.label_store(payload.scope_id).await?).await
+}
+
+async fn load(ctx: &impl LabelContext, payload: EntityPayload) -> Result<Vec<Label>, RpcError> {
+    let store = ctx.label_store(payload.scope_id).await?;
+    let collection = payload
+        .collection
+        .unwrap_or_else(|| DEFAULT_COLLECTION.into());
+    let id = non_empty(payload.id, "id")?;
+    labels_for_entity(&store, &collection, &id).await
+}
+
+#[derive(Clone, Copy)]
+enum Assignment {
+    Add,
+    Remove,
+    Replace,
+}
+
+async fn assign(
+    ctx: &impl LabelContext,
+    payload: EntityLabelsPayload,
+    assignment: Assignment,
+) -> Result<Vec<Label>, RpcError> {
+    let store = ctx.label_store(payload.scope_id).await?;
+    let collection = payload
+        .collection
+        .unwrap_or_else(|| DEFAULT_COLLECTION.into());
+    let id = non_empty(payload.id, "id")?;
+    let ids = label_ids(payload.label_ids)?;
+    match assignment {
+        Assignment::Add => add_labels(&store, &collection, &id, &ids).await,
+        Assignment::Remove => remove_labels(&store, &collection, &id, &ids).await,
+        Assignment::Replace => replace_labels(&store, &collection, &id, &ids).await,
+    }
+}
+
+async fn add(
+    ctx: &impl LabelContext,
+    payload: EntityLabelsPayload,
+) -> Result<Vec<Label>, RpcError> {
+    assign(ctx, payload, Assignment::Add).await
+}
+
+async fn remove(
+    ctx: &impl LabelContext,
+    payload: EntityLabelsPayload,
+) -> Result<Vec<Label>, RpcError> {
+    assign(ctx, payload, Assignment::Remove).await
+}
+
+async fn replace(
+    ctx: &impl LabelContext,
+    payload: EntityLabelsPayload,
+) -> Result<Vec<Label>, RpcError> {
+    assign(ctx, payload, Assignment::Replace).await
+}
+
+async fn save(ctx: &impl LabelContext, payload: SaveLabelPayload) -> Result<Label, RpcError> {
+    let store = ctx.label_store(payload.scope_id).await?;
+    save_label(&store, payload.label).await
+}
+
+async fn delete(ctx: &impl LabelContext, payload: DeleteLabelPayload) -> Result<Null, RpcError> {
+    let store = ctx.label_store(payload.scope_id).await?;
+    delete_label(&store, &non_empty(payload.id, "id")?).await?;
+    Ok(Null)
 }
 
 pub fn encode_labels(labels: Vec<Label>) -> Value {
-    Value::List(
-        labels
-            .into_iter()
-            .map(|label| Value::Object(label.to_object()))
-            .collect(),
-    )
+    labels.into_value()
 }
 
 pub fn decode_labels(value: Value) -> Result<Vec<Label>, RpcError> {
-    let Value::List(labels) = value else {
-        return Err(RpcError::invalid_output("Expected a label list"));
-    };
-    labels
-        .into_iter()
-        .map(|label| match label {
-            Value::Object(object) => Label::from_object(&object),
-            _ => Err(RpcError::invalid_output("Expected a label object")),
-        })
-        .collect()
+    Vec::<Label>::from_value(value).map_err(|err| RpcError::invalid_output(err.describe("output")))
 }

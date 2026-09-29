@@ -445,6 +445,7 @@ async fn migrated_group_assignments_remain_visible_and_removable() {
 
 #[tokio::test]
 async fn label_commands_route_scope_before_reading_or_writing() {
+    use semantic_data::value::{FromValue, IntoValue};
     use semantic_rpc_core::RpcCommand;
     struct Context {
         default: Store,
@@ -471,10 +472,10 @@ async fn label_commands_route_scope_before_reading_or_writing() {
         Value::List(vec![Value::String("topic".into())]),
     );
     payload.insert("scope_id", Value::String("other".into()));
-    AddEntityLabels
-        .call(&ctx, Value::Object(payload.clone()))
-        .await
-        .unwrap();
+    fn decode<T: FromValue>(payload: &Object) -> T {
+        T::from_value(Value::Object(payload.clone())).unwrap()
+    }
+    AddEntityLabels.call(&ctx, decode(&payload)).await.unwrap();
     assert!(
         labels_for_entity(&ctx.default, "entities", "entity")
             .await
@@ -484,9 +485,10 @@ async fn label_commands_route_scope_before_reading_or_writing() {
     assert_eq!(
         ids(decode_labels(
             LoadEntityLabels
-                .call(&ctx, Value::Object(payload.clone()))
+                .call(&ctx, decode(&payload))
                 .await
                 .unwrap()
+                .into_value()
         )
         .unwrap()),
         strings(&["topic"])
@@ -494,7 +496,7 @@ async fn label_commands_route_scope_before_reading_or_writing() {
     payload.insert("scope_id", Value::String("denied".into()));
     assert_eq!(
         ReplaceEntityLabels
-            .call(&ctx, Value::Object(payload))
+            .call(&ctx, decode(&payload))
             .await
             .unwrap_err()
             .code,
