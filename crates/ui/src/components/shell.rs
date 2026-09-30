@@ -108,6 +108,7 @@ enum NavItem {
     Browse,
     Tree,
     Labels,
+    Tasks,
     CreateEntity,
     Upload,
     Record,
@@ -125,6 +126,7 @@ enum NavItem {
 pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
     let route = use_route::<Route>();
     let mut menu_open = use_signal(|| false);
+    let tasks_available = crate::views::tasks::use_tasks_available();
     let mut toggle = use_signal(|| None::<std::rc::Rc<MountedData>>);
 
     rsx! {
@@ -200,6 +202,14 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                     icon: rsx! { FolderTree { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Tree),
                     on_navigate: move |_| menu_open.set(false),
+                }
+                if tasks_available() == Some(true) {
+                    PrimaryNavLink {
+                        to: Route::TasksPage, label: "Tasks",
+                        icon: rsx! { ListTodo { width: 17, height: 17 } },
+                        active: nav_item_is_active(&route, NavItem::Tasks),
+                        on_navigate: move |_| menu_open.set(false),
+                    }
                 }
                 PrimaryNavLink {
                     to: Route::LabelsPage,
@@ -333,6 +343,10 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::BrowsePage { .. }, NavItem::Browse)
             | (Route::TreePage { .. }, NavItem::Tree)
             | (Route::LabelsPage, NavItem::Labels)
+            | (
+                Route::TasksPage | Route::TaskPage { .. } | Route::CreateTaskPage { .. },
+                NavItem::Tasks
+            )
             | (Route::CreateEntityPage, NavItem::CreateEntity)
             | (Route::CreateNotePage, NavItem::CreateEntity)
             | (Route::UploadPage, NavItem::Upload)

@@ -100,6 +100,12 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
     let target_key = entity_route(&target).to_string();
     let return_route = entity_return_route(&target);
 
+    if object.as_ref().is_some_and(|object| {
+        object.get("type").and_then(Value::as_str) == Some("semantic:tasks:task")
+    }) {
+        return rsx! { crate::views::TaskPage { id } };
+    }
+
     rsx! {
         section {
             key: "{target_key}",
@@ -149,7 +155,7 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
                         actions: true,
                     },
                     action_placement: EntityActionPlacement::Detail,
-                    excluded_action_ids: vec!["open".to_string()],
+                    excluded_action_ids: if object.get("type").and_then(Value::as_str) == Some("semantic:comments:comment") { vec!["open".into(), "edit".into(), "delete".into()] } else { vec!["open".into()] },
                     on_edit: move |target: EntityTarget| {
                         edit_navigation.begin_from_detail(target.clone());
                         navigator().push(entity_edit_route(&target));
@@ -162,6 +168,7 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
                         navigator().go_back();
                     },
                 }
+                semantic_ui_core::EntityComments { target: target.clone() }
             }
         }
     }

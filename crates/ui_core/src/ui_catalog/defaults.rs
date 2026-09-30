@@ -67,6 +67,7 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
     }
 
     super::notes::register_note_renderers(catalog);
+    super::tasks_comments::register_task_comment_renderers(catalog);
     super::files::register_file_renderers(catalog);
 
     let file_renderer = Rc::new(|ctx: RenderCtx, value: &Value, object: Option<&Object>| {
@@ -174,7 +175,25 @@ fn register_default_entity_actions(catalog: &mut UiCatalog) {
             EntityActionPlacement::Detail,
             EntityActionPlacement::BrowseRow,
         ],
-        enabled: Rc::new(|ctx: &EntityActionContext| !ctx.target.id.is_empty()),
+        enabled: Rc::new(|ctx: &EntityActionContext| {
+            let domain_lifecycle = |id: &str| {
+                matches!(
+                    id,
+                    semantic_base::tasks::schema::CLASS_ID
+                        | semantic_base::comments::schema::CLASS_ID
+                )
+            };
+            !ctx.target.id.is_empty()
+                && !ctx
+                    .class
+                    .as_ref()
+                    .is_some_and(|class| domain_lifecycle(&class.id))
+                && !ctx
+                    .object
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(domain_lifecycle)
+        }),
         render: Rc::new(|ctx: EntityActionContext| {
             rsx! {
                 EntityDeleteButton {

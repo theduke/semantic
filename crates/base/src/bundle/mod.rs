@@ -19,7 +19,11 @@ pub fn root_module() -> Module {
     for attribute in directory::attributes() {
         attributes.insert(attribute.id.clone(), attribute);
     }
-    for attribute in notes::attributes().into_iter().chain(labels::attributes()) {
+    for attribute in notes::attributes()
+        .into_iter()
+        .chain(labels::attributes())
+        .chain([crate::content::schema::attribute()])
+    {
         attributes.insert(attribute.id.clone(), attribute);
     }
     attributes

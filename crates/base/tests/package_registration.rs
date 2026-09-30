@@ -48,6 +48,10 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
         legacy.modules.clear();
         legacy.migrations.truncate(9);
         if current.name == semantic_base::PACKAGE_NAME {
+            legacy
+                .root
+                .attributes
+                .remove(semantic_base::content::ATTR_MAIN_CONTENT);
             let old_note_class = legacy.migrations[2]
                 .operations
                 .iter()
@@ -89,6 +93,14 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
         let mut expected = vec![semantic_data::bundles::shared::migration_v1()];
         if current.name == semantic_base::PACKAGE_NAME {
             expected.push(semantic_base::migrations::note_markdown_default_migration());
+            expected.push(
+                current
+                    .migrations
+                    .iter()
+                    .find(|migration| migration.name == "012_main_content")
+                    .unwrap()
+                    .clone(),
+            );
         }
         assert_eq!(
             outcome

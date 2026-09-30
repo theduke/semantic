@@ -1,3 +1,5 @@
+pub(crate) mod tasks;
+pub use tasks::{CreateTaskPage, TaskPage, TasksPage};
 mod labels;
 pub use labels::LabelsPage;
 mod browse;
@@ -43,6 +45,12 @@ pub enum Route {
     JobsPage,
     #[route("/import")]
     ImportPage,
+    #[route("/tasks")]
+    TasksPage,
+    #[route("/tasks/create?:parent")]
+    CreateTaskPage { parent: Option<String> },
+    #[route("/tasks/:id")]
+    TaskPage { id: String },
     #[route("/labels")]
     LabelsPage,
     #[route("/data")]

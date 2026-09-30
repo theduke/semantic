@@ -7546,3 +7546,60 @@ html:has(.semantic-note-form) {
     opacity: 1;
   }
 }
+
+/* Task workspace: quiet surfaces, aligned metadata, and a readable detail column. */
+.semantic-tasks { max-width: 1200px; margin-inline: auto; }
+.semantic-task-toolbar { display: flex; flex-wrap: wrap; gap: .65rem; padding: 1rem; margin: 1.5rem 0 1rem; background: var(--semantic-surface); border: 1px solid var(--semantic-border-soft); border-radius: var(--semantic-radius-lg); align-items: end; }
+.semantic-task-toolbar label { display: flex; flex-direction: column; gap: .35rem; font-size: .75rem; color: var(--semantic-text-muted); }
+.semantic-task-toolbar label:first-child { flex: 1 1 210px; }
+.semantic-task-toolbar input, .semantic-task-toolbar select, .semantic-task-field input, .semantic-task-field select { min-height: 38px; padding: .5rem .65rem; color: var(--semantic-text); background: var(--semantic-surface); border: 1px solid var(--semantic-border); border-radius: var(--semantic-radius-sm); min-width: 0; width: 100%; }
+.semantic-task-toolbar input:focus-visible, .semantic-task-toolbar select:focus-visible, .semantic-task-field input:focus-visible, .semantic-task-field select:focus-visible { outline: 2px solid var(--semantic-accent); outline-offset: 2px; }
+.semantic-task-summary { display: flex; justify-content: space-between; color: var(--semantic-text-muted); font-size: .85rem; margin: 1rem 0; }
+.semantic-task-list { border: 1px solid var(--semantic-border-soft); border-radius: var(--semantic-radius-lg); overflow: hidden; background: var(--semantic-surface); }
+.semantic-task-row { display: grid; grid-template-columns: minmax(180px, 1fr) 110px 85px 110px 90px; align-items: center; gap: 1rem; padding: 1.1rem 1.25rem; color: var(--semantic-text); text-decoration: none; border-bottom: 1px solid var(--semantic-border-soft); }
+.semantic-task-row:last-child { border-bottom: none; }
+.semantic-task-row:hover { background: var(--semantic-surface-muted); }
+.semantic-task-row:focus-visible { outline: 2px solid var(--semantic-accent); outline-offset: -2px; }
+.semantic-task-row__title { font-weight: 600; overflow-wrap: anywhere; }
+.semantic-task-row__meta { display: flex; gap: .5rem; font-size: .75rem; font-weight: 400; margin-top: .35rem; color: var(--semantic-text-muted); }
+.semantic-task-status { font-size: .75rem; font-weight: 600; background: var(--semantic-surface-muted); color: var(--semantic-text-muted); border-radius: var(--semantic-radius-pill); padding: .3rem .65rem; width: fit-content; }
+.semantic-task-status[data-status="done"] { color: var(--semantic-color-success); background: var(--semantic-color-success-surface); }
+.semantic-task-status[data-status="in_progress"] { color: var(--semantic-color-info); background: var(--semantic-color-info-surface); }
+.semantic-task-status[data-status="blocked"] { color: var(--semantic-color-warning); background: var(--semantic-color-warning-surface); }
+.semantic-task-priority, .semantic-task-due { font-size: .8rem; color: var(--semantic-text-muted); }
+.semantic-task-due[data-overdue="true"] { color: var(--semantic-color-danger); }
+.semantic-task-progress { display: flex; align-items: center; gap: .5rem; font-size: .7rem; color: var(--semantic-text-muted); }
+.semantic-task-progress progress { height: 5px; width: 50px; accent-color: var(--semantic-accent); }
+.semantic-task-empty { padding: 4rem 1.5rem; text-align: center; border: 1px dashed var(--semantic-border); border-radius: var(--semantic-radius-lg); background: var(--semantic-surface); }
+.semantic-task-empty h2 { font-size: 1.35rem; margin-bottom: .6rem; }
+.semantic-task-empty p { color: var(--semantic-text-muted); max-width: 440px; margin: 0 auto 1.4rem; line-height: 1.65; }
+.semantic-task-empty__mark { display: inline-grid; place-items: center; width: 54px; height: 54px; border-radius: 16px; background: var(--semantic-color-info-surface); color: var(--semantic-accent); margin-bottom: 1.25rem; font-size: 1.6rem; }
+.semantic-task-detail { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 2rem; margin-top: 1.5rem; }
+.semantic-task-description, .semantic-task-properties, .semantic-task-subtasks { padding: 1.4rem; background: var(--semantic-surface); border: 1px solid var(--semantic-border-soft); border-radius: var(--semantic-radius-lg); }
+.semantic-task-properties { align-self: start; display: flex; flex-direction: column; gap: 1.1rem; }
+.semantic-task-field { display: flex; flex-direction: column; gap: .4rem; font-size: .8rem; font-weight: 600; }
+.semantic-task-field small { color: var(--semantic-text-muted); font-weight: 400; }
+.semantic-task-field--title { margin-bottom: 1.4rem; }
+.semantic-task-field--title input { font-size: 1.4rem; font-weight: 600; padding: .65rem; }
+.semantic-task-description h2, .semantic-task-properties h2, .semantic-task-subtasks h2 { font-size: .9rem; margin: 0 0 1rem; }
+.semantic-task-detail__main { min-width: 0; display: flex; flex-direction: column; gap: 1.4rem; }
+.semantic-task-actions { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: 1.2rem; }
+.semantic-task-subtasks__heading { display: flex; align-items: center; justify-content: space-between; gap: .7rem; }
+.semantic-task-subtasks__row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .85rem 0; border-top: 1px solid var(--semantic-border-soft); color: var(--semantic-text); text-decoration: none; }
+.semantic-task-subtasks__row:hover { color: var(--semantic-accent); }
+.semantic-task-breadcrumb { display: flex; flex-wrap: wrap; gap: .6rem; font-size: .8rem; color: var(--semantic-text-muted); }
+.semantic-task-breadcrumb a { color: inherit; text-decoration: none; }
+.semantic-task-breadcrumb a:hover { color: var(--semantic-accent); }
+.semantic-task-loadmore { display: flex; justify-content: center; padding: 1.25rem; }
+@media (max-width: 760px) {
+ .semantic-task-detail { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+ .semantic-task-properties { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); order: -1; }
+ .semantic-task-properties h2, .semantic-task-properties .semantic-task-actions, .semantic-task-field--parent { grid-column: 1 / -1; }
+ .semantic-task-row { grid-template-columns: minmax(0, 1fr) auto; padding: 1rem; gap: .6rem; }
+ .semantic-task-row .semantic-task-priority, .semantic-task-row .semantic-task-due { display: none; }
+ .semantic-task-row .semantic-task-progress { grid-column: 2; }
+ .semantic-task-row__title { grid-row: 1 / 3; }
+ .semantic-task-toolbar label { flex: 1 1 130px; }
+ .semantic-task-toolbar { padding: .85rem; }
+ .semantic-task-description, .semantic-task-properties, .semantic-task-subtasks { padding: 1rem; }
+}

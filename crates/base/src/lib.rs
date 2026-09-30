@@ -1,3 +1,13 @@
+pub mod comments;
+pub mod content;
+mod domain_support;
+#[cfg(test)]
+mod domain_tests;
+#[allow(dead_code)]
+mod migration_support_v1;
+pub mod tasks;
+pub use comments::CommentsPackage;
+pub use tasks::TasksPackage;
 pub mod bundle;
 pub mod directory_query;
 pub mod labels;
@@ -41,7 +51,7 @@ mod tests {
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         let shared = &package.modules[semantic_data::bundles::shared::MODULE_NAME];
         assert_eq!(package.modules.len(), 1);
-        assert_eq!(package.migrations.len(), 11);
+        assert_eq!(package.migrations.len(), 12);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
@@ -136,7 +146,7 @@ mod tests {
         );
         assert_eq!(
             crate::package().migrations.last().unwrap().name,
-            migrations::NOTE_MARKDOWN_DEFAULT_MIGRATION_NAME
+            "012_main_content"
         );
     }
 

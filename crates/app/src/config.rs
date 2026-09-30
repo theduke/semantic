@@ -6,6 +6,10 @@ pub struct AppConfig {
     pub data_dir: Option<PathBuf>,
     pub temp_dir: Option<PathBuf>,
     pub auto_analyze_media: bool,
+    /// Enable task commands and schema in initialized scopes. Tasks imply comments.
+    pub tasks_enabled: bool,
+    /// Enable generic comments independently of tasks.
+    pub comments_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -15,6 +19,8 @@ impl Default for AppConfig {
             data_dir: default_data_dir(),
             temp_dir: None,
             auto_analyze_media: true,
+            tasks_enabled: true,
+            comments_enabled: true,
         }
     }
 }
@@ -36,6 +42,16 @@ impl AppConfig {
 
     pub fn with_auto_analyze_media(mut self, enabled: bool) -> Self {
         self.auto_analyze_media = enabled;
+        self
+    }
+
+    pub fn with_tasks(mut self, enabled: bool) -> Self {
+        self.tasks_enabled = enabled;
+        self
+    }
+
+    pub fn with_comments(mut self, enabled: bool) -> Self {
+        self.comments_enabled = enabled;
         self
     }
 
@@ -66,6 +82,14 @@ impl AppConfig {
             data_dir,
             temp_dir,
             auto_analyze_media,
+            tasks_enabled: std::env::var("SEMANTIC_TASKS")
+                .ok()
+                .and_then(|v| parse_bool(&v))
+                .unwrap_or(true),
+            comments_enabled: std::env::var("SEMANTIC_COMMENTS")
+                .ok()
+                .and_then(|v| parse_bool(&v))
+                .unwrap_or(true),
         }
     }
 

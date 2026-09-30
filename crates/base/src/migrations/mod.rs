@@ -6,6 +6,7 @@ use crate::{
     schema::{common, web_bookmark},
 };
 
+mod content_v1;
 mod notes_v1;
 mod notes_v2;
 
@@ -66,6 +67,7 @@ pub fn all() -> Vec<Migration> {
     migrations.push(label_creatable_in_ui_migration());
     migrations.push(semantic_data::bundles::shared::migration_v1());
     migrations.push(note_markdown_default_migration());
+    migrations.push(content_v1::migration());
     migrations
 }
 
@@ -147,4 +149,10 @@ fn label_creatable_in_ui_migration() -> Migration {
             .collect(),
         meta: Meta::default(),
     }
+}
+
+pub(crate) fn content_dependency_attributes() -> Vec<semantic_data::schema::AttributeType> {
+    let mut attributes = notes_v1::attributes();
+    attributes.push(content_v1::attribute());
+    attributes
 }

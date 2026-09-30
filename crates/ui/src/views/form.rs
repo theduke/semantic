@@ -255,6 +255,18 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
     let status_message = edit_status_message(submitting(), dirty(), &submit_feedback.read());
     let form_key = edit_route_key(scope_id.as_deref(), collection.as_deref(), &id);
     let cancel_route = detail_route.clone();
+    if class
+        .as_ref()
+        .is_some_and(|class| class.id == "semantic:tasks:task")
+    {
+        return rsx! { crate::views::TaskPage { id } };
+    }
+    if class
+        .as_ref()
+        .is_some_and(|class| class.id == "semantic:comments:comment")
+    {
+        return rsx! { section { class: "semantic-page", h1 { "Edit comments in their conversation" } p { "Open the entity this comment belongs to and use its comment actions." } Link { to: detail_route, "View comment" } } };
+    }
 
     rsx! {
         FormPage {

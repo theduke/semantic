@@ -63,6 +63,8 @@ pub struct SemanticAppBuilder {
     jobs_registry: semantic_jobs::JobsRegistry,
     jobs_config: semantic_jobs::JobsConfig,
     plugins: semantic_plugin::PluginRegistry,
+    tasks_enabled: bool,
+    comments_enabled: bool,
 }
 
 impl SemanticApp {
@@ -108,6 +110,8 @@ impl SemanticApp {
             jobs_registry: semantic_jobs::JobsRegistry::default(),
             jobs_config: semantic_jobs::JobsConfig::default(),
             plugins: semantic_plugin::PluginRegistry::new().with_host_providers(),
+            tasks_enabled: true,
+            comments_enabled: true,
         }
     }
 
@@ -234,7 +238,19 @@ impl SemanticAppBuilder {
         self
     }
 
+    pub fn with_tasks(mut self, enabled: bool) -> Self {
+        self.tasks_enabled = enabled;
+        self
+    }
+
+    pub fn with_comments(mut self, enabled: bool) -> Self {
+        self.comments_enabled = enabled;
+        self
+    }
+
     pub fn with_config(mut self, config: AppConfig) -> Self {
+        self.tasks_enabled = config.tasks_enabled;
+        self.comments_enabled = config.comments_enabled;
         self.jobs_config = config.jobs.clone();
         self.media_analysis_config = MediaAnalysisConfig::from(&config);
         self
@@ -295,6 +311,7 @@ impl SemanticAppBuilder {
         crate::jobs::register_commands(&mut self.registry)?;
         crate::import_commands::register(&mut self.registry)?;
         crate::command_introspection::register(&mut self.registry)?;
+        crate::capabilities::register(&mut self.registry)?;
         Ok(self)
     }
 
@@ -331,6 +348,12 @@ impl SemanticAppBuilder {
         #[cfg(feature = "base")]
         {
             self = self.register_package(semantic_base::BasePackage)?;
+            if self.comments_enabled || self.tasks_enabled {
+                self = self.register_package(semantic_base::CommentsPackage)?;
+            }
+            if self.tasks_enabled {
+                self = self.register_package(semantic_base::TasksPackage)?;
+            }
         }
         self.packages.push(semantic_data::filestore::package());
         self.packages.push(import_package);

@@ -125,6 +125,16 @@ async fn abandoned_application_calls_cancel_describe_probe_and_pending_fetch() {
                 session: None,
                 request_scope: None,
             };
+            // Package migrations are fixture setup, outside the cancellation deadline.
+            context.resolve_db(None).await.unwrap();
+            // Plugin initialization validates and installs its schema too. Warm
+            // the runtime before timing entry into the controlled invocation.
+            app.plugins(&context.principal, DbScopeId::new("main"))
+                .await
+                .unwrap()
+                .runtime
+                .bindings()
+                .await;
             let (client, server, transport_disconnect) = app_session_with_disconnect(
                 semantic_app::interface::implementation(context).unwrap(),
             );

@@ -1,4 +1,5 @@
 mod auth;
+mod capabilities;
 mod command;
 mod command_introspection;
 mod config;
@@ -20,6 +21,10 @@ pub mod plugins;
 mod scope;
 mod session;
 pub mod storage;
+#[cfg(all(test, feature = "base"))]
+mod task_comment_tests;
+#[cfg(feature = "base")]
+mod task_comments;
 pub mod transfer;
 
 pub use auth::{Principal, PrincipalId, PrincipalKind};
@@ -118,7 +123,7 @@ mod tests {
             assert_eq!(response.result, RpcResult::Ok(Value::U8(42)));
         }
         #[cfg(feature = "base")]
-        assert_eq!(db.package_count.load(Ordering::Relaxed), 4);
+        assert_eq!(db.package_count.load(Ordering::Relaxed), 6);
     }
 
     #[test]
@@ -407,7 +412,7 @@ mod tests {
 
         assert_eq!(select_db_name(response), "default");
         #[cfg(feature = "base")]
-        assert_eq!(package_count.load(Ordering::Relaxed), 3);
+        assert_eq!(package_count.load(Ordering::Relaxed), 5);
     }
 
     #[cfg(feature = "base")]
@@ -488,7 +493,7 @@ mod tests {
             .await;
 
         assert_eq!(select_db_name(response), "mock://default");
-        assert_eq!(package_count.load(Ordering::Relaxed), 3);
+        assert_eq!(package_count.load(Ordering::Relaxed), 5);
     }
 
     #[tokio::test]

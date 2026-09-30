@@ -1,4 +1,11 @@
+pub use components::{
+    CommentComposer, CommentComposerProps, CommentTree, CommentTreeProps, EntityComments,
+    EntityCommentsProps,
+};
 pub use components::{EntityLabelsButton, LabelEditor, LabelEditorProps};
+pub use components::{
+    MainContentEditor, MainContentEditorProps, MainContentView, MainContentViewProps,
+};
 pub mod context;
 #[cfg(feature = "markdown")]
 mod editor_entity_links;

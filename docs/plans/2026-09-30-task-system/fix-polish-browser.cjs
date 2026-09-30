@@ -1,0 +1,35 @@
+// Refresh screenshots and persisted-state acceptance after the final parent-field polish.
+const {chromium}=require('../../../crates/dxeditor/web/node_modules/playwright');
+const assert=require('node:assert/strict');const fs=require('node:fs');
+(async()=>{
+ const out='/tmp/semantic-task-browser-evidence/fixes';
+ const {child,parent}=JSON.parse(fs.readFileSync(`${out}/result.json`));
+ const browser=await chromium.launch({headless:true,executablePath:'/etc/profiles/per-user/theduke/bin/chromium',args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];
+ page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});page.setDefaultTimeout(20000);
+ await page.goto(child.url);await page.getByLabel('Task title').waitFor();
+ const selector=page.getByLabel('Parent task',{exact:true});
+ await selector.locator(`option[value="${parent.id}"]`).waitFor({state:'attached'});
+ assert.equal(await selector.inputValue(),parent.id);
+ assert.match(await selector.locator('option:checked').innerText(),/\(archived\)/);
+ await page.locator('.semantic-comment').nth(99).waitFor();
+ await page.getByRole('button',{name:'Load more comments',exact:true}).click();
+ await page.locator('.semantic-comment').nth(106).waitFor();
+ assert.equal(await page.locator('.semantic-comment').count(),107);
+ await page.getByText('This comment was deleted.',{exact:true}).waitFor();
+ assert.equal(await page.locator('.semantic-comment').nth(1).getByText('Posted reply beyond initial hundred',{exact:true}).count(),1);
+ await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:`${out}/detail-desktop.png`});
+ await page.locator('.semantic-comments__header').evaluate(el => { el.scrollIntoView({block:'start'}); window.scrollBy(0,-90); });await page.screenshot({path:`${out}/comments-desktop.png`});
+ await page.setViewportSize({width:390,height:844});await page.evaluate(()=>scrollTo(0,0));
+ const bounds=await selector.boundingBox();assert(bounds.width>300,`parent field width ${bounds.width}`);
+ await page.screenshot({path:`${out}/detail-mobile.png`});
+ await page.locator('.semantic-comments__header').evaluate(el => { el.scrollIntoView({block:'start'}); window.scrollBy(0,-90); });await page.screenshot({path:`${out}/comments-mobile.png`});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await page.setViewportSize({width:1440,height:1000});
+ await page.goto(`http://localhost:8080/browse?view=table&sql=${encodeURIComponent("inline:SELECT * FROM entities WHERE type = 'semantic:comments:comment' LIMIT 25")}`);
+ await page.locator('.semantic-entity-list__actions-cell').first().waitFor();
+ assert.equal(await page.getByRole('button',{name:'Delete entity',exact:true}).count(),0);
+ await page.screenshot({path:`${out}/generic-comment-table.png`});
+ assert.deepEqual(errors,[]);console.log('PASS FINAL_MOBILE_PARENT_WIDTH_ARCHIVED_SELECTION_LOAD_MORE_TOMBSTONE_AND_REPLY',JSON.stringify({errors}));
+ await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

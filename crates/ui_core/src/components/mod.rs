@@ -1,3 +1,12 @@
+mod comments;
+pub use comments::{
+    CommentComposer, CommentComposerProps, CommentTree, CommentTreeProps, EntityComments,
+    EntityCommentsProps,
+};
+mod main_content;
+pub use main_content::{
+    MainContentEditor, MainContentEditorProps, MainContentView, MainContentViewProps,
+};
 pub mod labels;
 pub use labels::{EntityLabelsButton, LabelEditor, LabelEditorProps};
 mod class;

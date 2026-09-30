@@ -61,6 +61,47 @@ mod tests {
         assert_eq!(ids, vec!["global", "exact", "inherited"]);
     }
 
+    #[test]
+    fn default_delete_respects_domain_lifecycle_in_every_placement() {
+        let task = semantic_base::tasks::schema::CLASS_ID;
+        let comment = semantic_base::comments::schema::CLASS_ID;
+        let catalog = UiCatalog::builder(snapshot_with_classes(vec![
+            class(task, None),
+            class(comment, None),
+            class("note", None),
+        ]))
+        .build();
+        for placement in [
+            EntityActionPlacement::Card,
+            EntityActionPlacement::Detail,
+            EntityActionPlacement::BrowseRow,
+        ] {
+            // Object type still protects records if catalog metadata is unavailable.
+            for include_metadata in [true, false] {
+                for (class_id, expected) in [(task, false), (comment, false), ("note", true)] {
+                    let mut object = Object::new();
+                    object.insert("type", Value::String(class_id.into()));
+                    let ctx = EntityActionContext {
+                        target: EntityTarget::default_collection("existing"),
+                        object,
+                        class: include_metadata
+                            .then(|| catalog.class_by_id(class_id).unwrap().clone()),
+                        placement,
+                        on_delete: None,
+                    };
+                    assert_eq!(
+                        catalog
+                            .entity_actions_for(&ctx)
+                            .iter()
+                            .any(|action| action.id == "delete"),
+                        expected,
+                        "class {class_id}, placement {placement:?}, metadata {include_metadata}"
+                    );
+                }
+            }
+        }
+    }
+
     fn action(id: &str, class_id: Option<&str>, enabled: bool) -> EntityActionRegistration {
         EntityActionRegistration {
             id: id.to_string(),

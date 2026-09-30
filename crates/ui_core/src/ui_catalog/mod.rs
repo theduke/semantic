@@ -12,6 +12,7 @@ mod notes;
 mod provider;
 mod render_registry;
 mod renderer;
+mod tasks_comments;
 
 pub use catalog::{UiCatalog, UiCatalogBuilder, UiCatalogConfig};
 pub use entity_actions::{EntityActionContext, EntityActionPlacement, EntityActionRegistration};
