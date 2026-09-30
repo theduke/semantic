@@ -42,7 +42,7 @@ pub enum Route {
     #[layout(AppShell)]
     #[route("/")]
     HomePage,
-    #[route("/jobs")]
+    #[route("/data/jobs")]
     JobsPage,
     #[route("/import")]
     ImportPage,

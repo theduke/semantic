@@ -102,7 +102,6 @@ fn SemanticBrand() -> Element {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NavItem {
-    Jobs,
     Import,
     Home,
     Browse,
@@ -226,13 +225,6 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
-                    to: Route::JobsPage,
-                    label: "Jobs",
-                    icon: rsx! { ListTodo { width: 17, height: 17 } },
-                    active: nav_item_is_active(&route, NavItem::Jobs),
-                    on_navigate: move |_| menu_open.set(false),
-                }
-                PrimaryNavLink {
                     to: Route::DataPage,
                     label: "Data",
                     icon: rsx! { Database { width: 17, height: 17 } },
@@ -333,7 +325,6 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
     matches!(
         (route, item),
         (Route::HomePage, NavItem::Home)
-            | (Route::JobsPage, NavItem::Jobs)
             | (Route::ImportPage, NavItem::Import)
             | (Route::CollectionPage { .. }, NavItem::Browse)
             | (Route::DefaultEntityPage { .. }, NavItem::Browse)
@@ -352,6 +343,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::UploadPage, NavItem::Upload)
             | (Route::RecordPage, NavItem::Record)
             | (Route::PlayPage, NavItem::Player)
+            | (Route::JobsPage, NavItem::Data)
             | (Route::DataPage, NavItem::Data)
             | (Route::CatalogPage, NavItem::Data)
             | (Route::QueryPage, NavItem::Data)
@@ -409,6 +401,8 @@ mod tests {
 
         assert!(nav_item_is_active(&browse, NavItem::Browse));
         assert!(nav_item_is_active(&tree, NavItem::Tree));
+        assert!(nav_item_is_active(&Route::JobsPage, NavItem::Data));
+        assert_eq!(Route::JobsPage.to_string(), "/data/jobs");
         assert!(nav_item_is_active(&Route::DataPage, NavItem::Data));
         assert!(nav_item_is_active(&Route::CatalogPage, NavItem::Data));
         assert!(nav_item_is_active(&Route::QueryPage, NavItem::Data));

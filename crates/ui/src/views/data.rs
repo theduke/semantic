@@ -9,7 +9,7 @@ pub fn DataPage() -> Element {
             PageHeader {
                 title: "Data",
                 description: Some(
-                    "Inspect the data model or run a read-only query when you need a closer look."
+                    "Inspect the data model, run a read-only query, or monitor background jobs."
                         .to_string(),
                 ),
             }
@@ -28,6 +28,13 @@ pub fn DataPage() -> Element {
                     h2 { "Query" }
                     p { "Run read-only SQL and inspect the returned rows." }
                     span { aria_hidden: "true", "Open query →" }
+                }
+                Link {
+                    to: Route::JobsPage,
+                    class: "semantic-route-panel semantic-surface",
+                    h2 { "Jobs" }
+                    p { "Monitor background jobs, track progress, and cancel running work." }
+                    span { aria_hidden: "true", "Open jobs →" }
                 }
             }
         }
