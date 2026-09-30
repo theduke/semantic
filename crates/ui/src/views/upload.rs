@@ -212,7 +212,12 @@ pub fn UploadWorkspace(
     let has_fixed_destination = destination.is_some();
     use_effect(move || {
         if let Some(on_busy_change) = on_busy_change {
-            on_busy_change.call(busy);
+            on_busy_change.call(
+                queue
+                    .read()
+                    .iter()
+                    .any(|(_, item)| item.read().status.is_busy()),
+            );
         }
     });
     use_effect(move || {
@@ -270,20 +275,19 @@ pub fn UploadWorkspace(
             }
             if queue_len > 0 {
                 div { class: "semantic-upload__selection-actions",
-                    if !ready.is_empty() {
-                        dxcomp::Button {
-                            onclick: {
-                                let work_tx = work_tx.clone();
-                                let defaults = defaults.clone();
-                                move |_| {
-                                    for (_, item) in ready_to_start.iter().copied() {
-                                        start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
-                                    }
-                                    refresh_summary(queue, summary);
+                    dxcomp::Button {
+                        disabled: ready.is_empty(),
+                        onclick: {
+                            let work_tx = work_tx.clone();
+                            let defaults = defaults.clone();
+                            move |_| {
+                                for (_, item) in ready_to_start.iter().copied() {
+                                    start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
                                 }
-                            },
-                            "{upload_label}"
-                        }
+                                refresh_summary(queue, summary);
+                            }
+                        },
+                        "{upload_label}"
                     }
                     if has_retryable {
                         dxcomp::Button {
