@@ -420,6 +420,7 @@ pub fn package() -> Package {
         extends: vec![],
         strict_schema: true,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: BTreeMap::from([(
             "descriptor".into(),
             ClassAttribute {

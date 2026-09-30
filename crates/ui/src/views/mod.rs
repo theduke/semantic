@@ -11,6 +11,7 @@ mod form;
 mod home;
 mod import;
 mod jobs;
+mod listing;
 mod play;
 mod query;
 pub use import::ImportPage;

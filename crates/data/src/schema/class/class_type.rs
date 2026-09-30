@@ -17,6 +17,11 @@ pub struct ClassType {
     #[facet(rename = "semantic:ui:creatable_in_ui")]
     #[facet(default)]
     pub creatable_in_ui: Option<bool>,
+    /// Whether instances appear in generic UI listings. Only false excludes them;
+    /// omitted or null means included. Explicit queries and dedicated views are unaffected.
+    #[facet(rename = "semantic:ui:include_in_listings")]
+    #[facet(default, skip_serializing_if = Option::is_none)]
+    pub include_in_ui_listings: Option<bool>,
     /// Declared attributes that make up this class.
     pub attributes: BTreeMap<String, crate::schema::class::class_attribute::ClassAttribute>,
     /// Class-level constraints, including multi-field constraints.
@@ -29,6 +34,37 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::ClassType;
+
+    #[test]
+    fn listing_inclusion_round_trips_and_accepts_missing_or_null() {
+        let mut class = crate::filestore::file_class();
+        let legacy = facet_json::to_string(&class).unwrap();
+        assert!(!legacy.contains("semantic:ui:include_in_listings"));
+        for flag in [false, true] {
+            class.include_in_ui_listings = Some(flag);
+            let encoded = facet_json::to_string(&class).unwrap();
+            assert!(encoded.contains(&format!("\"semantic:ui:include_in_listings\":{flag}")));
+            assert_eq!(
+                facet_json::from_str::<ClassType>(&encoded)
+                    .unwrap()
+                    .include_in_ui_listings,
+                Some(flag)
+            );
+        }
+        assert_eq!(
+            facet_json::from_str::<ClassType>(&legacy)
+                .unwrap()
+                .include_in_ui_listings,
+            None
+        );
+        let with_null = legacy.replacen('{', "{\"semantic:ui:include_in_listings\":null,", 1);
+        assert_eq!(
+            facet_json::from_str::<ClassType>(&with_null)
+                .unwrap()
+                .include_in_ui_listings,
+            None
+        );
+    }
 
     #[test]
     fn creatable_in_ui_round_trips_and_is_optional() {
@@ -62,6 +98,7 @@ mod tests {
             extends: Vec::new(),
             strict_schema: true,
             creatable_in_ui: None,
+            include_in_ui_listings: None,
             attributes: BTreeMap::new(),
             constraints: Vec::new(),
             meta: crate::schema::Meta::default(),

@@ -411,6 +411,7 @@ mod tests {
             extends: Vec::new(),
             strict_schema: false,
             creatable_in_ui: None,
+            include_in_ui_listings: None,
             attributes: Default::default(),
             constraints: Vec::new(),
             meta: Default::default(),

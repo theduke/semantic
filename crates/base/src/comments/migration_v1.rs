@@ -102,3 +102,18 @@ pub(super) fn migration() -> Migration {
         meta: Meta::default(),
     }
 }
+
+/// Listing metadata added using the frozen comment definition.
+pub(super) fn include_in_listings_migration() -> Migration {
+    let mut class = classes().remove(0);
+    class.include_in_ui_listings = Some(false);
+    Migration {
+        module: "comments".into(),
+        name: "002_include_in_listings".into(),
+        description: Some("Exclude attached comments from generic UI listings.".into()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertClass { class },
+        )],
+        meta: Meta::default(),
+    }
+}

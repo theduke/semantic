@@ -122,6 +122,7 @@ mod tests {
             extends: Vec::new(),
             strict_schema: false,
             creatable_in_ui: None,
+            include_in_ui_listings: None,
             attributes: BTreeMap::new(),
             constraints: Vec::new(),
             meta: Meta::default(),

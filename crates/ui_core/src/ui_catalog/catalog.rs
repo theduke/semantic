@@ -324,6 +324,75 @@ mod tests {
         assert_eq!(catalog.classes().count(), 3);
     }
 
+    #[test]
+    fn listings_exclude_only_explicitly_disabled_classes() {
+        let mut catalog = UiCatalog::from_snapshot(empty_snapshot());
+        for (id, flag) in [
+            ("default", None),
+            ("allowed", Some(true)),
+            ("hidden", Some(false)),
+        ] {
+            let mut class = semantic_data::filestore::file_class();
+            class.id = id.to_string();
+            class.include_in_ui_listings = flag;
+            Rc::make_mut(&mut catalog.inner)
+                .classes_by_id
+                .insert(class.id.clone(), class);
+        }
+        assert_eq!(
+            catalog
+                .unlisted_classes()
+                .map(|class| class.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hidden"]
+        );
+    }
+
+    #[test]
+    fn listing_exclusions_include_transitive_relation_subclasses() {
+        let mut catalog = UiCatalog::from_snapshot(empty_snapshot());
+        for (id, parent, flag) in [
+            (semantic_data::attr::RELATION_CLASS_ID, None, None),
+            (
+                "example:link",
+                Some(semantic_data::attr::RELATION_CLASS_ID),
+                None,
+            ),
+            ("example:nested_link", Some("example:link"), Some(true)),
+            ("example:article", None, None),
+            ("example:internal", None, Some(false)),
+        ] {
+            let mut class = semantic_data::filestore::file_class();
+            class.id = id.to_string();
+            class.name = id.rsplit(':').next().unwrap().to_string();
+            class.inherits =
+                parent.map(|id| semantic_data::schema::ClassRef { id: id.to_string() });
+            class.include_in_ui_listings = flag;
+            Rc::make_mut(&mut catalog.inner)
+                .classes_by_name
+                .insert(class.name.clone(), class.clone());
+            Rc::make_mut(&mut catalog.inner)
+                .classes_by_id
+                .insert(class.id.clone(), class);
+        }
+        let excluded = catalog.listing_excluded_type_values(true);
+        for value in [
+            semantic_data::attr::RELATION_CLASS_ID,
+            "example:link",
+            "example:nested_link",
+            "link",
+            "nested_link",
+            "example:internal",
+        ] {
+            assert!(excluded.iter().any(|id| id == value), "missing {value}");
+        }
+        assert!(!excluded.iter().any(|id| id.contains("article")));
+        assert_eq!(
+            catalog.listing_excluded_type_values(false),
+            vec!["example:internal", "internal"]
+        );
+    }
+
     fn empty_snapshot() -> CatalogStorageSnapshot {
         CatalogStorageSnapshot {
             attributes: Vec::new(),

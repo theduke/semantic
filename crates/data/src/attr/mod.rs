@@ -245,6 +245,18 @@ fn parent_attribute() -> AttributeType {
 
 pub const ATTR_UI_CREATABLE_IN_UI: &str = "semantic:ui:creatable_in_ui";
 
+pub const ATTR_UI_INCLUDE_IN_LISTINGS: &str = "semantic:ui:include_in_listings";
+
+pub fn include_in_listings_attribute() -> AttributeType {
+    AttributeType {
+        id: ATTR_UI_INCLUDE_IN_LISTINGS.to_string(),
+        name: "include_in_listings".to_string(),
+        ty: crate::schema::Type::new(crate::schema::TypeKind::Bool(crate::schema::BoolType)),
+        constraints: Vec::new(),
+        meta: crate::schema::Meta::default(),
+    }
+}
+
 pub fn creatable_in_ui_attribute() -> AttributeType {
     AttributeType {
         id: ATTR_UI_CREATABLE_IN_UI.to_string(),

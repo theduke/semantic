@@ -68,7 +68,12 @@ pub fn all() -> Vec<Migration> {
     migrations.push(semantic_data::bundles::shared::migration_v1());
     migrations.push(note_markdown_default_migration());
     migrations.push(content_v1::migration());
+    migrations.push(include_in_listings_migration());
     migrations
+}
+
+pub fn include_in_listings_migration() -> Migration {
+    directory::include_in_listings_migration()
 }
 
 pub fn note_markdown_default_migration() -> Migration {
@@ -132,7 +137,10 @@ fn creatable_in_ui_migration() -> Migration {
         ),
         operations: directory::classes()
             .into_iter()
-            .map(|class| MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }))
+            .map(|mut class| {
+                class.include_in_ui_listings = None;
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class })
+            })
             .collect(),
         meta: Meta::default(),
     }

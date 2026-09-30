@@ -66,6 +66,7 @@ pub(crate) fn class(
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: attrs
             .iter()
             .enumerate()

@@ -87,6 +87,17 @@ pub fn package() -> Package {
             cleanup::migration(),
             reference_types_migration(),
             crate::bundles::shared::migration_v1(),
+            Migration {
+                module: MODULE_NAME.to_string(),
+                name: "011_include_in_listings".to_string(),
+                description: Some("Exclude cleanup intents from generic UI listings.".to_string()),
+                operations: vec![MigrationOperation::Ddl(
+                    MigrationDdlOperation::UpsertClass {
+                        class: cleanup::class(),
+                    },
+                )],
+                meta: Meta::default(),
+            },
         ],
         version: None,
         meta: Meta::default(),
@@ -715,6 +726,7 @@ fn file_class_with_attributes(attributes: &[(&str, &str, u32, Option<&'static st
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes,
         constraints: Vec::new(),
         meta: meta_with_title("File"),
@@ -963,7 +975,7 @@ mod tests {
         assert_eq!(package.root.name, MODULE_NAME);
         let shared = &package.modules[crate::bundles::shared::MODULE_NAME];
         assert_eq!(package.modules.len(), 1);
-        assert_eq!(package.migrations.len(), 10);
+        assert_eq!(package.migrations.len(), 11);
         assert_eq!(package.migrations[8].name, "009_reference_types");
         assert_eq!(package.migrations[7].name, "008_cleanup_intent");
         assert_eq!(

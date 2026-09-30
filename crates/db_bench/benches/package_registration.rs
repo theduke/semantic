@@ -49,6 +49,7 @@ fn seed_scale<S: EntityStorage>(db: &mut EmbeddedDb<S>, scale: Scale) {
                     extends: Vec::new(),
                     strict_schema: false,
                     creatable_in_ui: None,
+                    include_in_ui_listings: None,
                     attributes: Default::default(),
                     constraints: Vec::new(),
                     meta: Meta::default(),

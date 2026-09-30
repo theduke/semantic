@@ -4238,6 +4238,7 @@ mod tests {
                 extends: vec![],
                 strict_schema: false,
                 creatable_in_ui: None,
+                include_in_ui_listings: None,
                 attributes: BTreeMap::new(),
                 constraints: vec![],
                 meta: Meta::default(),
@@ -4459,6 +4460,7 @@ mod tests {
                         extends: vec![],
                         strict_schema: false,
                         creatable_in_ui: None,
+                        include_in_ui_listings: None,
                         attributes: BTreeMap::from([
                             ("local:test:Summary".to_string(), class_attribute("Title")),
                             ("title_alias".to_string(), class_attribute("Summary")),
@@ -4496,6 +4498,7 @@ mod tests {
             extends: vec![],
             strict_schema: false,
             creatable_in_ui: None,
+            include_in_ui_listings: None,
             attributes: BTreeMap::from([
                 ("title".to_string(), title),
                 ("summary".to_string(), summary),
@@ -4647,6 +4650,7 @@ mod tests {
                     extends: vec![],
                     strict_schema: false,
                     creatable_in_ui: None,
+                    include_in_ui_listings: None,
                     attributes: BTreeMap::new(),
                     constraints: vec![ClassConstraint::MultiFieldExpr {
                         expr: semantic_data::expr::Expr::Literal(

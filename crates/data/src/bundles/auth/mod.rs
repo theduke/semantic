@@ -60,6 +60,7 @@ pub fn user_class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: BTreeMap::from([
             (
                 "username".to_string(),
@@ -121,6 +122,7 @@ fn init_migration_user_class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: BTreeMap::from([
             (
                 "username".to_string(),

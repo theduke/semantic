@@ -541,6 +541,7 @@ fn register_table(
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: class_attrs,
         constraints: vec![pk_constraint],
         meta: Meta::default(),

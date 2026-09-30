@@ -37,7 +37,7 @@ pub fn attributes() -> Vec<AttributeType> {
     ]
 }
 pub fn classes() -> Vec<ClassType> {
-    let comment = crate::domain_support::class(
+    let mut comment = crate::domain_support::class(
         CLASS_ID,
         "Comment",
         &[
@@ -64,6 +64,7 @@ pub fn classes() -> Vec<ClassType> {
     relation.inherits = Some(ClassRef {
         id: RELATION_CLASS_ID.into(),
     });
+    comment.include_in_ui_listings = Some(false);
     vec![comment, relation]
 }
 pub fn relationship() -> RelationType {

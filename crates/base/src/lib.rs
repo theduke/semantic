@@ -51,7 +51,7 @@ mod tests {
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         let shared = &package.modules[semantic_data::bundles::shared::MODULE_NAME];
         assert_eq!(package.modules.len(), 1);
-        assert_eq!(package.migrations.len(), 12);
+        assert_eq!(package.migrations.len(), 13);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
@@ -146,7 +146,7 @@ mod tests {
         );
         assert_eq!(
             crate::package().migrations.last().unwrap().name,
-            "012_main_content"
+            "013_include_in_listings"
         );
     }
 

@@ -276,7 +276,17 @@ async fn generic_comments_ownership_threads_and_tombstone() {
 async fn old_base_upgrade_and_package_replay() {
     let db = Db::new(EmbeddedBackend::new(semantic_db_kv::open_memory().unwrap()));
     let mut old = crate::package();
-    old.migrations.pop();
+    let content_migration = old
+        .migrations
+        .iter()
+        .position(|migration| migration.name == "012_main_content")
+        .unwrap();
+    old.migrations.truncate(content_migration);
+    old.root
+        .classes
+        .get_mut(semantic_data::bundles::directory::DIRECTORY_NODE_CLASS_ID)
+        .unwrap()
+        .include_in_ui_listings = None;
     old.root
         .attributes
         .remove(crate::content::ATTR_MAIN_CONTENT);

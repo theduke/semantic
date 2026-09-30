@@ -39,6 +39,7 @@ pub(super) async fn test_compact_id_execution(db: &Db) {
                     extends: vec![],
                     strict_schema: false,
                     creatable_in_ui: None,
+                    include_in_ui_listings: None,
                     attributes: BTreeMap::from([(
                         "compact_owner".into(),
                         ClassAttribute {

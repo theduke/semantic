@@ -132,6 +132,7 @@ fn class(id: &str, name: &str, attributes: &[(&str, bool)]) -> ClassType {
         extends: Vec::new(),
         strict_schema: true,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: attributes
             .iter()
             .map(|(attribute, required)| {

@@ -233,6 +233,7 @@ fn setup_with_path_index(path_index: bool) -> (Db, Arc<Mutex<Vec<TxnAccess>>>) {
                 extends: vec![],
                 strict_schema: false,
                 creatable_in_ui: None,
+                include_in_ui_listings: None,
                 attributes: BTreeMap::from([
                     ("author".into(), class_attribute(AUTHOR)),
                     ("editor".into(), class_attribute(EDITOR)),

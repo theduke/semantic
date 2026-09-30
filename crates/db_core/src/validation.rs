@@ -1576,6 +1576,7 @@ mod tests {
                 extends: vec![],
                 strict_schema: false,
                 creatable_in_ui: None,
+                include_in_ui_listings: None,
                 attributes: BTreeMap::from([(
                     "title".to_string(),
                     ClassAttribute {
@@ -1657,6 +1658,7 @@ mod tests {
             extends: vec![],
             strict_schema,
             creatable_in_ui: None,
+            include_in_ui_listings: None,
             attributes: BTreeMap::from([(
                 alias.to_string(),
                 ClassAttribute {
@@ -1792,6 +1794,7 @@ mod tests {
                 extends: vec![],
                 strict_schema: false,
                 creatable_in_ui: None,
+                include_in_ui_listings: None,
                 attributes: BTreeMap::from([
                     (
                         "title".to_string(),

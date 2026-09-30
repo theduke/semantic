@@ -220,6 +220,8 @@ pub struct ClassType {
     pub name: String,
     pub inherits: Option<ClassRef>,              // single base class
     pub extends: Vec<ClassRef>,                   // mixin-style extensions
+    pub creatable_in_ui: Option<bool>,
+    pub include_in_ui_listings: Option<bool>,
     pub attributes: BTreeMap<String, ClassAttribute>,  // attribute -> per-class config
     pub constraints: Vec<ClassConstraint>,
     pub meta: Meta,
@@ -243,6 +245,16 @@ pub struct ClassAttribute {
 The entity create form initializes fields from literal `default` expressions.
 Other expressions remain part of the class schema for consumers that can
 evaluate them.
+
+`semantic:ui:include_in_listings` controls whether instances of a class appear in
+generic UI listings such as `/browse` and collection pages. Only `false` excludes
+them; `true`, `null`, and an omitted attribute include them. This setting applies
+to each class independently. It does not restrict explicit SQL queries, entity
+detail pages, or dedicated views such as the directory browser. Relation entities
+and their subclasses are separately excluded from default entity browsing.
+
+`semantic:ui:creatable_in_ui` separately controls whether generic creation forms
+offer a class.
 
 ### Relations
 

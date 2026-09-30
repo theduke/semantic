@@ -11,6 +11,7 @@ pub async fn test_validation(db: &Db) {
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes,
         constraints: vec![],
         meta: Meta::default(),

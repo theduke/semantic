@@ -46,6 +46,67 @@ impl UiCatalog {
             .filter(|class| class.creatable_in_ui != Some(false))
     }
 
+    /// Classes excluded from generic listings. Missing or null metadata includes a class.
+    pub fn unlisted_classes(&self) -> impl Iterator<Item = &ClassType> {
+        self.classes()
+            .filter(|class| class.include_in_ui_listings == Some(false))
+    }
+
+    /// Stored type values excluded from generic listings, including relation subclasses
+    /// when requested. Explicit listing metadata applies to each class independently.
+    pub fn listing_excluded_type_values(&self, exclude_relations: bool) -> Vec<String> {
+        let mut types = std::collections::BTreeSet::new();
+        for class in self.classes().filter(|class| {
+            class.include_in_ui_listings == Some(false)
+                || (exclude_relations && self.is_relation_class(&class.id))
+        }) {
+            types.insert(class.id.clone());
+            if self
+                .class_by_name(&class.name)
+                .is_some_and(|resolved| resolved.id == class.id)
+            {
+                types.insert(class.name.clone());
+            }
+            let plain = semantic_db_core::catalog::nameset_for_qualified(&class.id).plain_name;
+            // Avoid excluding a short name that could resolve to another class.
+            if self
+                .classes()
+                .filter(|candidate| {
+                    semantic_db_core::catalog::nameset_for_qualified(&candidate.id).plain_name
+                        == plain
+                })
+                .count()
+                == 1
+            {
+                types.insert(plain);
+            }
+        }
+        types.into_iter().collect()
+    }
+
+    fn is_relation_class(&self, class_id: &str) -> bool {
+        let mut pending = vec![class_id];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if id == semantic_data::attr::RELATION_CLASS_ID {
+                return true;
+            }
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(class) = self.class_by_id(id) {
+                pending.extend(
+                    class
+                        .inherits
+                        .iter()
+                        .chain(&class.extends)
+                        .map(|parent| parent.id.as_str()),
+                );
+            }
+        }
+        false
+    }
+
     pub fn attributes(&self) -> impl Iterator<Item = &AttributeType> {
         self.attributes_by_id().values()
     }

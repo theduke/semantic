@@ -8,6 +8,7 @@ use semantic_ui_core::{
     use_active_scope_id, use_rpc_client, use_ui_catalog_context,
 };
 
+use super::listing::listing_predicate;
 use crate::{
     components::{
         DataToolbar, EntityExplorer, EntityResults, PageHeader, Pagination, ResultDensity,
@@ -24,6 +25,7 @@ struct CollectionQueryKey {
     collection: String,
     page: usize,
     page_size: usize,
+    listing_filter: Option<String>,
 }
 
 #[derive(Clone)]
@@ -90,6 +92,7 @@ pub fn CollectionPage(collection: String) -> Element {
             collection: collection.clone(),
             page: current_page,
             page_size: current_page_size,
+            listing_filter: listing_predicate(&collection, catalog_signal.read().as_ref()),
         },
         |key| key,
     ));
@@ -302,6 +305,7 @@ async fn query_collection_page(
             &key.collection,
             key.page,
             key.page_size,
+            key.listing_filter.as_deref(),
         )),
     );
     payload.insert("format", Value::String("sql".to_string()));
@@ -334,12 +338,20 @@ async fn query_collection_page(
     })
 }
 
-fn collection_page_query(collection: &str, page: usize, page_size: usize) -> String {
+fn collection_page_query(
+    collection: &str,
+    page: usize,
+    page_size: usize,
+    listing_filter: Option<&str>,
+) -> String {
     let page = clamp_page(page);
     let page_size = clamp_page_size(page_size);
     format!(
-        "SELECT * FROM {} LIMIT {} OFFSET {}",
+        "SELECT * FROM {}{} LIMIT {} OFFSET {}",
         sql_identifier(collection),
+        listing_filter
+            .map(|predicate| format!(" WHERE {predicate}"))
+            .unwrap_or_default(),
         page_size.saturating_add(1),
         page.saturating_mul(page_size)
     )
@@ -369,7 +381,7 @@ mod tests {
     #[test]
     fn collection_page_query_quotes_identifiers_and_fetches_a_sentinel_row() {
         assert_eq!(
-            collection_page_query("media:with\"quote", 2, 50),
+            collection_page_query("media:with\"quote", 2, 50, None),
             "SELECT * FROM \"media:with\"\"quote\" LIMIT 51 OFFSET 100"
         );
     }
@@ -377,8 +389,16 @@ mod tests {
     #[test]
     fn collection_page_query_clamps_unbounded_route_state() {
         assert_eq!(
-            collection_page_query("entities", usize::MAX, usize::MAX),
+            collection_page_query("entities", usize::MAX, usize::MAX, None),
             "SELECT * FROM \"entities\" LIMIT 201 OFFSET 200000000"
+        );
+    }
+
+    #[test]
+    fn collection_page_query_filters_before_fetching_the_sentinel_row() {
+        assert_eq!(
+            collection_page_query("entities", 1, 25, Some("type NOT IN ('example:hidden')")),
+            "SELECT * FROM \"entities\" WHERE type NOT IN ('example:hidden') LIMIT 26 OFFSET 25"
         );
     }
 }

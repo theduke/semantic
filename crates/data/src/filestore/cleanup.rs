@@ -18,6 +18,12 @@ pub(super) fn attributes() -> Vec<AttributeType> {
 }
 
 pub(super) fn class() -> ClassType {
+    let mut class = class_v1();
+    class.include_in_ui_listings = Some(false);
+    class
+}
+
+fn class_v1() -> ClassType {
     let attributes = attributes()
         .into_iter()
         .map(|attribute| {
@@ -33,6 +39,7 @@ pub(super) fn class() -> ClassType {
         extends: Vec::new(),
         strict_schema: true,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes,
         constraints: Vec::new(),
         meta: Meta::default(),
@@ -47,7 +54,7 @@ pub(super) fn migration() -> Migration {
         })
         .collect();
     operations.push(MigrationOperation::Ddl(
-        MigrationDdlOperation::UpsertClass { class: class() },
+        MigrationDdlOperation::UpsertClass { class: class_v1() },
     ));
     Migration {
         module: MODULE_NAME.into(),

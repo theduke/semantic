@@ -203,6 +203,7 @@ fn class_type(id: &str, attributes: &[&str]) -> ClassType {
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: attributes
             .iter()
             .map(|attribute| {

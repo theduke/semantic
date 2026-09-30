@@ -14,6 +14,22 @@ use crate::schema::{
 
 pub const MODULE_NAME: &str = "base";
 pub const DIRECTORIES_MIGRATION_NAME: &str = "002_directories";
+
+/// Forward migration built from the frozen directory schema.
+pub fn include_in_listings_migration() -> Migration {
+    let mut class = migration_directory_node_class();
+    class.creatable_in_ui = Some(false);
+    class.include_in_ui_listings = Some(false);
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: "013_include_in_listings".to_string(),
+        description: Some("Exclude directory nodes from generic UI listings.".to_string()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertClass { class },
+        )],
+        meta: Meta::default(),
+    }
+}
 pub const ENTITIES_COLLECTION: &str = DEFAULT_COLLECTION;
 
 pub const DIRECTORY_CLASS_ID: &str = "semantic:base:directory";
@@ -92,6 +108,7 @@ pub fn directory_class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: BTreeMap::from([
             (
                 "title".to_string(),
@@ -125,6 +142,7 @@ pub fn directory_node_class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: Some(false),
         attributes: BTreeMap::from([
             (
                 "relation".to_string(),
@@ -238,6 +256,7 @@ fn migration_directory_class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: BTreeMap::from([
             (
                 "title".to_string(),
@@ -271,6 +290,7 @@ fn migration_directory_node_class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         creatable_in_ui: None,
+        include_in_ui_listings: None,
         attributes: BTreeMap::from([
             (
                 "relation".to_string(),

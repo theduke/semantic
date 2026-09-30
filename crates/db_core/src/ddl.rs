@@ -508,6 +508,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -521,6 +522,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: std::collections::BTreeMap::new(),
         constraints: vec![],
         meta: Meta::default(),
@@ -586,6 +588,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         extends: vec![],
         strict_schema: false,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: relation_attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -910,6 +913,12 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
 }
 
 pub fn core_schema_migrations() -> Vec<Migration> {
+    let mut migrations = historical_core_schema_migrations();
+    migrations.push(include_in_listings_migration(&migrations));
+    migrations
+}
+
+fn historical_core_schema_migrations() -> Vec<Migration> {
     vec![
         Migration {
             module: CORE_SCHEMA_MODULE.to_string(),
@@ -978,6 +987,51 @@ pub fn core_schema_migrations() -> Vec<Migration> {
         registration_proofs_migration(),
         timestamp_indexes_migration(),
     ]
+}
+
+fn include_in_listings_migration(previous: &[Migration]) -> Migration {
+    // Use the final historical definitions, preserving all intervening schema changes.
+    let mut class = previous
+        .iter()
+        .flat_map(|migration| &migration.operations)
+        .rev()
+        .find_map(|operation| match operation {
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class })
+                if class.id == CORE_CATALOG_CLASS_ENTRY_CLASS_ID =>
+            {
+                Some(class.clone())
+            }
+            _ => None,
+        })
+        .expect("core defines CatalogClass");
+    let attribute_id = semantic_data::attr::ATTR_UI_INCLUDE_IN_LISTINGS;
+    class.attributes.insert(
+        attribute_id.to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: attribute_id.to_string(),
+            },
+            required: false,
+            ui_order: None,
+            computed: None,
+            default: None,
+            constraints: Vec::new(),
+            meta: Meta::default(),
+        },
+    );
+    let operations = vec![
+        MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+            attribute: semantic_data::attr::include_in_listings_attribute(),
+        }),
+        MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }),
+    ];
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: "011_include_in_listings".to_string(),
+        description: Some("Add optional UI listing metadata to class definitions.".to_string()),
+        operations,
+        meta: Meta::default(),
+    }
 }
 
 fn registration_proofs_migration() -> Migration {
@@ -1522,7 +1576,16 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 10);
+        assert_eq!(first_run.len(), 11);
+        let class = catalog
+            .class_by_lid(catalog.class_id(CORE_CATALOG_CLASS_ENTRY_CLASS_ID).unwrap())
+            .unwrap();
+        assert!(!class.class.attributes[semantic_data::attr::ATTR_UI_INCLUDE_IN_LISTINGS].required);
+        assert!(
+            catalog
+                .classes()
+                .all(|(_, class)| class.class.include_in_ui_listings.is_none())
+        );
         for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
             let attribute = catalog.attribute_by_id(id).unwrap();
             let TypeKind::Ref(reference) = &attribute.attribute.ty.kind else {
@@ -1739,6 +1802,7 @@ mod tests {
             extends: vec![],
             strict_schema: false,
             creatable_in_ui: None,
+            include_in_ui_listings: None,
             attributes: BTreeMap::from([(
                 "payload".to_string(),
                 ClassAttribute {

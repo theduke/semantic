@@ -493,6 +493,7 @@ pub fn package() -> Package {
         extends: vec![],
         strict_schema: true,
         creatable_in_ui: Some(false),
+        include_in_ui_listings: None,
         attributes: fields
             .iter()
             .map(|(name, _, required)| {

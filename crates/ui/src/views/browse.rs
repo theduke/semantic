@@ -4,16 +4,14 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
-use semantic_data::{
-    attr::{ATTR_CREATED_AT, RELATION_CLASS_ID},
-    builtin::DEFAULT_COLLECTION,
-};
+use semantic_data::{attr::ATTR_CREATED_AT, builtin::DEFAULT_COLLECTION};
 use semantic_ui_core::{
     EntityDisplayMode, EntityDisplayRenderer,
     components::{EmptyState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator},
     use_active_scope_id, use_rpc_client, use_ui_catalog_context,
 };
 
+use super::listing::listing_predicate;
 use crate::{
     components::{
         DataToolbar, EntityExplorer, EntityResults, PageHeader, Pagination, QueryEditor,
@@ -98,6 +96,7 @@ pub fn BrowsePage(
         }
     });
 
+    let listing_filter = listing_predicate(&collection_name, catalog_signal.read().as_ref());
     let applied_query = match &decoded_filters {
         Err(error) if !custom_sql => Err(error.clone()),
         _ => resolve_applied_query(
@@ -107,11 +106,12 @@ pub fn BrowsePage(
             sql.as_deref(),
             (!custom_sql).then_some(&applied_filters),
             &query_fields(),
+            listing_filter.as_deref(),
         ),
     };
     let draft_source = match sql.as_deref() {
         Some(reference) => load_sql_reference(reference).unwrap_or_default(),
-        None => default_query(&collection_name, page_size, page),
+        None => default_query(&collection_name, page_size, page, listing_filter.as_deref()),
     };
     let mut sql_input = use_signal(|| draft_source.clone());
     let mut sql_error = use_signal(|| None::<String>);
@@ -590,6 +590,7 @@ fn resolve_applied_query(
     reference: Option<&str>,
     filters: Option<&StructuredQuery>,
     fields: &[crate::components::QueryField],
+    listing_filter: Option<&str>,
 ) -> std::result::Result<String, String> {
     match reference {
         Some(reference) => {
@@ -610,13 +611,19 @@ fn resolve_applied_query(
                 page_size,
                 page,
                 predicate.as_deref(),
+                listing_filter,
             ))
         }
     }
 }
 
-fn default_query(collection: &str, page_size: usize, page: usize) -> String {
-    collection_query(collection, page_size, page, None)
+fn default_query(
+    collection: &str,
+    page_size: usize,
+    page: usize,
+    listing_filter: Option<&str>,
+) -> String {
+    collection_query(collection, page_size, page, None, listing_filter)
 }
 
 fn collection_query(
@@ -624,10 +631,11 @@ fn collection_query(
     page_size: usize,
     page: usize,
     predicate: Option<&str>,
+    listing_filter: Option<&str>,
 ) -> String {
     let mut predicates = Vec::new();
-    if collection == DEFAULT_COLLECTION {
-        predicates.push(format!("type != '{RELATION_CLASS_ID}'"));
+    if let Some(listing_filter) = listing_filter {
+        predicates.push(listing_filter.to_string());
     }
     if let Some(predicate) = predicate {
         predicates.push(format!("({predicate})"));
@@ -866,7 +874,12 @@ mod tests {
     #[test]
     fn default_entities_query_excludes_relation_entities() {
         assert_eq!(
-            default_query(DEFAULT_COLLECTION, 50, 2),
+            default_query(
+                DEFAULT_COLLECTION,
+                50,
+                2,
+                listing_predicate(DEFAULT_COLLECTION, None).as_deref()
+            ),
             "SELECT * FROM \"entities\" WHERE type != 'semantic:relation' ORDER BY \"semantic:created_at\" DESC, id ASC LIMIT 50 OFFSET 100"
         );
     }
@@ -874,7 +887,7 @@ mod tests {
     #[test]
     fn default_non_entities_query_does_not_add_entity_type_filter() {
         assert_eq!(
-            default_query("events", 25, 1),
+            default_query("events", 25, 1, None),
             "SELECT * FROM \"events\" ORDER BY \"semantic:created_at\" DESC, id ASC LIMIT 25 OFFSET 25"
         );
     }
@@ -909,6 +922,25 @@ mod tests {
     }
 
     #[test]
+    fn explicit_sql_can_include_unlisted_classes() {
+        let query = "SELECT * FROM entities LIMIT 10";
+        let reference = store_sql_reference(query);
+        assert_eq!(
+            resolve_applied_query(
+                DEFAULT_COLLECTION,
+                25,
+                0,
+                Some(&reference),
+                None,
+                &[],
+                Some("type NOT IN ('example:hidden')")
+            )
+            .unwrap(),
+            query
+        );
+    }
+
+    #[test]
     fn structured_filters_keep_normal_pagination_and_default_constraints() {
         let filters = StructuredQuery {
             root: FilterGroup {
@@ -929,9 +961,19 @@ mod tests {
             deprecated: false,
             choices: Vec::new(),
         }];
-        let query = resolve_applied_query(DEFAULT_COLLECTION, 25, 2, None, Some(&filters), &fields)
-            .unwrap();
+        let listing_filter = "type != 'semantic:relation' AND type NOT IN ('example:hidden')";
+        let query = resolve_applied_query(
+            DEFAULT_COLLECTION,
+            25,
+            2,
+            None,
+            Some(&filters),
+            &fields,
+            Some(listing_filter),
+        )
+        .unwrap();
         assert!(query.contains("type != 'semantic:relation'"));
+        assert!(query.contains("type NOT IN ('example:hidden')"));
         assert!(query.contains("(\"score\" > 7)"));
         assert!(query.contains("ORDER BY \"semantic:created_at\" DESC, id ASC"));
         assert!(query.ends_with("LIMIT 25 OFFSET 50"));

@@ -89,6 +89,7 @@ async fn http_validation_preflight_activation_and_structured_nested_errors() {
                     extends: vec![],
                     strict_schema: false,
                     creatable_in_ui: None,
+                    include_in_ui_listings: None,
                     attributes: BTreeMap::from([(
                         "payload".into(),
                         ClassAttribute {

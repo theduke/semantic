@@ -10,13 +10,18 @@ pub use model::*;
 pub use service::*;
 pub const PACKAGE_NAME: &str = "semantic.comments";
 pub fn package() -> semantic_data::schema::Package {
-    crate::domain_support::with_content_dependency(crate::domain_support::package(
-        PACKAGE_NAME,
-        "comments",
-        schema::attributes(),
-        schema::classes(),
-        migration_v1::migration(),
-    ))
+    let mut package =
+        crate::domain_support::with_content_dependency(crate::domain_support::package(
+            PACKAGE_NAME,
+            "comments",
+            schema::attributes(),
+            schema::classes(),
+            migration_v1::migration(),
+        ));
+    package
+        .migrations
+        .push(migration_v1::include_in_listings_migration());
+    package
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CommentsPackage;
