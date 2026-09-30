@@ -6,6 +6,7 @@ use semantic_data::{
 };
 
 use crate::{
+    EntityComments,
     ui_catalog::{EntityTarget, use_ui_catalog},
     use_active_scope_id, use_rpc_client,
 };
@@ -49,6 +50,7 @@ pub(super) fn EntityAssociations(target: EntityTarget) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let mut selected = use_signal(|| None::<AssociationKind>);
+    let mut show_comments = use_signal(|| false);
     let mut page = use_signal(|| 0usize);
     let mut resource = use_resource({
         let target = target.clone();
@@ -100,11 +102,27 @@ pub(super) fn EntityAssociations(target: EntityTarget) -> Element {
                         class: "semantic-entity-associations__tab",
                         aria_pressed: selected() == Some(kind),
                         onclick: move |_| {
+                            show_comments.set(false);
                             page.set(0);
                             selected.set((selected() != Some(kind)).then_some(kind));
                         },
                         "{kind.label()}"
                     }
+                }
+                button {
+                    type: "button",
+                    class: "semantic-entity-associations__tab",
+                    aria_pressed: show_comments(),
+                    onclick: move |_| {
+                        selected.set(None);
+                        show_comments.toggle();
+                    },
+                    "Comments"
+                }
+            }
+            if show_comments() {
+                div { class: "semantic-entity-associations__panel",
+                    EntityComments { target: target.clone() }
                 }
             }
             if let Some(kind) = selected() {

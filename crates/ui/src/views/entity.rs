@@ -168,7 +168,6 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
                         navigator().go_back();
                     },
                 }
-                semantic_ui_core::EntityComments { target: target.clone() }
             }
         }
     }
