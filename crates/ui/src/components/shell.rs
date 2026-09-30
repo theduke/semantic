@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Tags};
+use dioxus_icons::lucide::{
+    CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Plus, Tags,
+};
 
 use super::{
     GlobalSearch,
@@ -70,32 +72,16 @@ pub fn PlayerShell() -> Element {
 fn AppFrameHeader(sidebar_toggle: bool) -> Element {
     rsx! {
         header { class: "semantic-ui__header",
-            div { class: "semantic-ui__identity",
-                div { class: "semantic-ui__brand-row",
-                    SemanticBrand {}
-                    if sidebar_toggle {
-                        SidebarToggle {}
-                    }
+            div { class: "semantic-ui__header-controls",
+                if sidebar_toggle {
+                    SidebarToggle {}
                 }
-                GlobalSearch { expanded: true }
-            }
-            div { class: "semantic-ui__header-actions",
                 NewMenu {}
+            }
+            GlobalSearch { expanded: true }
+            div { class: "semantic-ui__header-actions",
                 PrimaryNav { mobile: true }
             }
-        }
-    }
-}
-
-#[component]
-fn SemanticBrand() -> Element {
-    rsx! {
-        Link {
-            to: Route::HomePage,
-            class: "semantic-ui__brand",
-            aria_label: "Semantic home",
-            span { aria_hidden: "true", class: "semantic-ui__brand-mark", "S" }
-            span { class: "semantic-ui__brand-name", "Semantic" }
         }
     }
 }
@@ -227,6 +213,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                 PrimaryNavLink {
                     to: Route::DataPage,
                     label: "Data",
+                    secondary: true,
                     icon: rsx! { Database { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Data),
                     on_navigate: move |_| menu_open.set(false),
@@ -257,8 +244,8 @@ fn NewMenu() -> Element {
                 "data-active": active,
                 "data-tooltip": "New",
                 aria_haspopup: "menu",
-                span { aria_hidden: "true", "+" }
-                span { class: "semantic-new-menu__label", "New" }
+                aria_label: "New",
+                Plus { width: 18, height: 18 }
             }
             dxcomp::DropdownMenuContent {
                 id: "semantic-new-menu-options",
@@ -301,10 +288,12 @@ fn PrimaryNavLink(
     label: &'static str,
     icon: Element,
     active: bool,
+    #[props(default)] secondary: bool,
     on_navigate: EventHandler<()>,
 ) -> Element {
     rsx! {
         li {
+            class: secondary.then_some("semantic-primary-nav__item--secondary"),
             Link {
                 to,
                 class: "dx-button semantic-primary-nav__link",
