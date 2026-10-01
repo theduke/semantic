@@ -739,6 +739,7 @@ async fn websocket_fetch_import_replace_and_history_clear_preserve_files() {
             outgoing,
             provider_support::implementation().await,
             Some("1".into()),
+            semantic_rpc::plugin::ExportMatch::Exact,
             |_| async { Ok(()) },
         )
         .await
@@ -804,6 +805,7 @@ async fn idle_websocket_disconnect_marks_plugin_unavailable_and_cancels_binding(
             outgoing,
             provider_support::implementation().await,
             Some("1".into()),
+            semantic_rpc::plugin::ExportMatch::Exact,
             |_| async { Ok(()) },
         )
         .await

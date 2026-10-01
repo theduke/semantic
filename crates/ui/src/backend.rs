@@ -104,7 +104,12 @@ impl RpcClientDyn for EmbeddedRpcClient {
             request_scope: Some(self.scope_id.clone()),
         };
         Box::pin(async move {
-            semantic_app::interface::implementation(context)?
+            let implementation = if call.export == semantic_rpc::stream_command::COMMAND_EXPORT {
+                semantic_app::interface::command_implementation(context)?
+            } else {
+                semantic_app::interface::implementation(context)?
+            };
+            implementation
                 .invoke(call, semantic_rpc::interface::InvocationContext::default())
                 .await
         })

@@ -9,10 +9,27 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use http::HeaderMap;
+use semantic_rpc::interface::{ExportRouter, InterfaceImplementation};
+use semantic_rpc::plugin::ExportMatch;
 use semantic_rpc_core::interface::InvocationError;
 use semantic_rpc_core::interface_protocol::InterfaceMessage;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
+
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Both exports share one request context, so they share the session scope.
+fn implementation(
+    context: semantic_app::AppRequestContext,
+) -> Result<Arc<dyn InterfaceImplementation>, InvocationError> {
+    Ok(Arc::new(
+        ExportRouter::new()
+            .with(semantic_app::interface::implementation(context.clone())?)?
+            .with(semantic_app::interface::command_implementation(context)?)?,
+    ))
+}
 
 pub async fn handler(
     State(state): State<ServerState>,
@@ -38,13 +55,22 @@ pub async fn handler(
         )
             .into_response();
     }
+    // Like any other connection, the interface session owns a scope selection
+    // that `semantic.scope.use` changes for its subsequent calls.
+    let session = state.app.new_session(format!(
+        "interface-{}",
+        NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Some(scope_id) = scope_from_parts(&headers, &query, &state.config) {
+        session.set_current_scope(Some(scope_id)).await;
+    }
     let context = semantic_app::AppRequestContext {
         app: state.app,
         principal,
-        session: None,
-        request_scope: scope_from_parts(&headers, &query, &state.config),
+        session: Some(session),
+        request_scope: None,
     };
-    let implementation = match semantic_app::interface::implementation(context) {
+    let implementation = match implementation(context) {
         Ok(implementation) => implementation,
         Err(error) => {
             return (http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
@@ -87,11 +113,15 @@ pub async fn handler(
                 }
                 let _ = input.send(Err(failure("WebSocket disconnected")));
             });
-            if let Ok(session) =
-                semantic_rpc::plugin::accept(incoming, outgoing, implementation, None, |_| async {
-                    Ok(())
-                })
-                .await
+            if let Ok(session) = semantic_rpc::plugin::accept(
+                incoming,
+                outgoing,
+                implementation,
+                None,
+                ExportMatch::RequiredSubset,
+                |_| async { Ok(()) },
+            )
+            .await
             {
                 session.closed().await;
             }

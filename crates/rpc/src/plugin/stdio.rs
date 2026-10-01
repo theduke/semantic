@@ -1,5 +1,5 @@
 //! Content-Length framed JSON on portable asynchronous byte streams.
-use super::{ProviderConnection, error, negotiate};
+use super::{ExportMatch, ProviderConnection, error, negotiate};
 use crate::interface::{ImplementationDescriptor, InvocationError, session::Session};
 use semantic_data::value::Value;
 use semantic_rpc_core::interface_protocol::InterfaceMessage;
@@ -124,7 +124,15 @@ where
         }
         let _ = writer.shutdown().await;
     });
-    let result = super::accept(incoming, outgoing, implementation, revision, configure).await;
+    let result = super::accept(
+        incoming,
+        outgoing,
+        implementation,
+        revision,
+        ExportMatch::Exact,
+        configure,
+    )
+    .await;
     if let Ok(session) = &result {
         session.closed().await;
     }
@@ -245,7 +253,7 @@ pub async fn connect_with_cancellation(
     let result = tokio::select! {
         biased;
         _ = cancellation.cancelled() => Err(InvocationError::new("cancelled", "Plugin startup cancelled")),
-        result = negotiate(&mut incoming, &outgoing, &exports, revision, configuration) => result,
+        result = negotiate(&mut incoming, &outgoing, &exports, revision, configuration, ExportMatch::Exact) => result,
     };
     if let Err(failure) = result {
         drop(outgoing);

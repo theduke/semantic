@@ -1,5 +1,5 @@
 //! Plain ws:// plugin adapter. One text message contains one interface envelope.
-use super::{ProviderConnection, error, negotiate};
+use super::{ExportMatch, ProviderConnection, error, negotiate};
 use crate::interface::{ImplementationDescriptor, InvocationError, session::Session};
 use futures::{SinkExt, StreamExt};
 use semantic_data::value::Value;
@@ -46,6 +46,7 @@ pub async fn connect_with_cancellation(
         revision,
         configuration,
         PLUGIN_SUBPROTOCOL,
+        ExportMatch::Exact,
         cancellation,
     )
     .await
@@ -115,6 +116,7 @@ mod tests {
                 outgoing,
                 Arc::new(Fixture),
                 None,
+                ExportMatch::Exact,
                 |value| async move {
                     assert_eq!(value, Value::Bool(true));
                     Ok(())
@@ -221,6 +223,7 @@ pub(crate) async fn connect_protocol(
     revision: Option<String>,
     configuration: Value,
     subprotocol: &str,
+    export_match: ExportMatch,
 ) -> Result<ProviderConnection, InvocationError> {
     connect_protocol_cancellable(
         url,
@@ -228,6 +231,7 @@ pub(crate) async fn connect_protocol(
         revision,
         configuration,
         subprotocol,
+        export_match,
         tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -239,6 +243,7 @@ async fn connect_protocol_cancellable(
     revision: Option<String>,
     configuration: Value,
     subprotocol: &str,
+    export_match: ExportMatch,
     cancellation: tokio_util::sync::CancellationToken,
 ) -> Result<ProviderConnection, InvocationError> {
     let mut request = url.into_client_request().map_err(error)?;
@@ -314,15 +319,18 @@ async fn connect_protocol_cancellable(
     let result = tokio::select! {
         biased;
         _ = cancellation.cancelled() => Err(InvocationError::new("cancelled", "Plugin startup cancelled")),
-        result = negotiate(&mut incoming, &outgoing, &exports, revision, configuration) => result,
+        result = negotiate(&mut incoming, &outgoing, &exports, revision, configuration, export_match) => result,
     };
-    if let Err(failure) = result {
-        drop(outgoing);
-        let _ = writer.await;
-        reader.abort();
-        return Err(failure);
-    }
-    let session = Session::start(incoming, outgoing, None, exports);
+    let session_exports = match result {
+        Ok(exports) => exports,
+        Err(failure) => {
+            drop(outgoing);
+            let _ = writer.await;
+            reader.abort();
+            return Err(failure);
+        }
+    };
+    let session = Session::start(incoming, outgoing, None, session_exports);
     Ok(ProviderConnection {
         implementation: Arc::new(session.clone()),
         session,

@@ -96,6 +96,7 @@ async fn websocket_server() -> (
             outgoing,
             support::implementation().await,
             Some("1".into()),
+            plugin::ExportMatch::Exact,
             |_| async { Ok(()) },
         )
         .await

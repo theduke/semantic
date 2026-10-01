@@ -30,6 +30,7 @@ mod tests {
 
     use async_trait::async_trait;
     use axum::body::{Body, to_bytes};
+    use futures_util::StreamExt;
     use http::Request;
     use semantic_app::{DbScopeId, SemanticDb};
     use semantic_data::value::{Object, Value};
@@ -198,6 +199,79 @@ mod tests {
         }
     }
 
+    /// Streams `0..payload` followed by the end value `"done"`.
+    struct StreamCount;
+
+    impl semantic_rpc::stream_command::RpcStreamCommandSpec for StreamCount {
+        type Payload = u32;
+        type Input = ();
+        type Output = semantic_data::value::StreamOf<u32, String>;
+        type Error = semantic_app::AppError;
+
+        const NAME: &'static str = "test.stream.count";
+    }
+
+    impl semantic_rpc::stream_command::RpcStreamCommand<semantic_app::AppRequestContext>
+        for StreamCount
+    {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a semantic_app::AppRequestContext,
+            payload: u32,
+            _input: (),
+            _cancel: semantic_rpc::interface::CancellationToken,
+        ) -> futures_util::future::BoxFuture<
+            'a,
+            Result<semantic_rpc::stream_command::TypedStream<u32, String>, semantic_app::AppError>,
+        > {
+            use semantic_rpc::stream_command::{TypedEvent, TypedStream};
+            Box::pin(async move {
+                let items = futures_util::stream::iter(0..payload)
+                    .map(|item| Ok(TypedEvent::Item(item)))
+                    .chain(futures_util::stream::once(async {
+                        Ok(TypedEvent::End("done".to_owned()))
+                    }));
+                Ok(TypedStream::from_events(items))
+            })
+        }
+    }
+
+    /// Sums its input stream.
+    struct StreamSum;
+
+    impl semantic_rpc::stream_command::RpcStreamCommandSpec for StreamSum {
+        type Payload = ();
+        type Input = semantic_data::value::StreamOf<u32>;
+        type Output = semantic_rpc::stream_command::Single<u64>;
+        type Error = semantic_app::AppError;
+
+        const NAME: &'static str = "test.stream.sum";
+    }
+
+    impl semantic_rpc::stream_command::RpcStreamCommand<semantic_app::AppRequestContext> for StreamSum {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a semantic_app::AppRequestContext,
+            _payload: (),
+            mut input: semantic_rpc::stream_command::TypedStream<u32>,
+            _cancel: semantic_rpc::interface::CancellationToken,
+        ) -> futures_util::future::BoxFuture<'a, Result<u64, semantic_app::AppError>> {
+            use semantic_rpc::stream_command::TypedEvent;
+            Box::pin(async move {
+                let mut total = 0;
+                while let Some(event) = input.next().await {
+                    match event
+                        .map_err(|error| semantic_app::AppError::UnknownCommand(error.message))?
+                    {
+                        TypedEvent::Item(item) => total += u64::from(item),
+                        TypedEvent::End(()) => break,
+                    }
+                }
+                Ok(total)
+            })
+        }
+    }
+
     fn test_app() -> semantic_app::SemanticApp {
         let default_db = mock_db("default");
         let header_db = mock_db("header");
@@ -213,6 +287,10 @@ mod tests {
             .register_builtin_commands()
             .unwrap()
             .register_stream_command(StreamEcho)
+            .unwrap()
+            .register_stream_command(StreamCount)
+            .unwrap()
+            .register_stream_command(StreamSum)
             .unwrap()
             .build()
             .unwrap();
@@ -264,6 +342,226 @@ mod tests {
         drop(client);
         task.abort();
         app.shutdown().await.unwrap();
+    }
+
+    struct InterfaceFixture {
+        client: semantic_rpc::client::RpcClient,
+        task: tokio::task::JoinHandle<()>,
+        app: semantic_app::SemanticApp,
+    }
+
+    impl InterfaceFixture {
+        async fn start(server: impl FnOnce(SemanticServer) -> SemanticServer, query: &str) -> Self {
+            let app = test_app();
+            let server = server(SemanticServer::new(app.clone()));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(listener, server.router()).await.unwrap();
+            });
+            let client = semantic_rpc::transport::http_client::HttpRpcClient::new(format!(
+                "http://{address}/api/v1/rpc{query}"
+            ))
+            .into();
+            Self { client, task, app }
+        }
+
+        async fn invoke(
+            &self,
+            method: &str,
+            arguments: Vec<semantic_rpc::interface::InvocationArgument>,
+        ) -> Result<
+            semantic_rpc::interface::InvocationOutput,
+            semantic_rpc_core::interface::InvocationError,
+        > {
+            self.client
+                .invoke_interface(semantic_rpc::interface::ValidatedInvocation {
+                    export: semantic_rpc::stream_command::COMMAND_EXPORT.into(),
+                    method: method.into(),
+                    arguments,
+                })
+                .await
+        }
+
+        async fn stop(self) {
+            drop(self.client);
+            self.task.abort();
+            self.app.shutdown().await.unwrap();
+        }
+    }
+
+    fn payload(value: Value) -> semantic_rpc::interface::InvocationArgument {
+        semantic_rpc::interface::InvocationArgument::Value(value)
+    }
+
+    fn stream_argument<T: semantic_data::value::IntoValue + Send + 'static>(
+        items: impl IntoIterator<Item = T>,
+    ) -> semantic_rpc::interface::InvocationArgument {
+        use semantic_rpc::stream_command::{TypedEvent, TypedStream};
+        let events: Vec<_> = items
+            .into_iter()
+            .map(|item| Ok(TypedEvent::Item(item)))
+            .chain([Ok(TypedEvent::End(()))])
+            .collect();
+        semantic_rpc::interface::InvocationArgument::Stream(
+            TypedStream::<T>::from_events(futures_util::stream::iter(events)).into_owned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn command_export_streams_items_and_end_value_to_the_client() {
+        use semantic_rpc::stream_command::{TypedEvent, TypedStream};
+        let fixture = InterfaceFixture::start(|server| server, "").await;
+        let semantic_rpc::interface::InvocationOutput::Stream(stream) = fixture
+            .invoke("test.stream.count", vec![payload(Value::U32(150))])
+            .await
+            .unwrap()
+        else {
+            panic!("expected stream");
+        };
+        let events: Vec<_> = TypedStream::<u32, String>::from_owned(stream)
+            .collect()
+            .await;
+        assert_eq!(events.len(), 151);
+        for (index, event) in events[..150].iter().enumerate() {
+            assert_eq!(event, &Ok(TypedEvent::Item(index as u32)));
+        }
+        assert_eq!(events[150], Ok(TypedEvent::End("done".to_owned())));
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
+    async fn command_export_accepts_client_streams_and_bidirectional_streams() {
+        use semantic_rpc::interface::InvocationOutput;
+        use semantic_rpc::stream_command::{TypedEvent, TypedStream};
+        let fixture = InterfaceFixture::start(|server| server, "").await;
+        let output = fixture
+            .invoke(
+                "test.stream.sum",
+                vec![payload(Value::Null), stream_argument(1..=100u32)],
+            )
+            .await
+            .unwrap();
+        let InvocationOutput::Values(values) = output else {
+            panic!("expected values");
+        };
+        assert_eq!(values, vec![Value::U64(5050)]);
+
+        let input = TypedStream::<String, u64>::from_events(futures_util::stream::iter([
+            Ok(TypedEvent::Item("a".to_owned())),
+            Ok(TypedEvent::Item("b".to_owned())),
+            Ok(TypedEvent::End(7)),
+        ]));
+        let InvocationOutput::Stream(output) = fixture
+            .invoke(
+                "test.stream.echo",
+                vec![
+                    payload(Value::Null),
+                    semantic_rpc::interface::InvocationArgument::Stream(input.into_owned()),
+                ],
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected stream");
+        };
+        let events: Vec<_> = TypedStream::<String, u64>::from_owned(output)
+            .collect()
+            .await;
+        assert_eq!(
+            events,
+            vec![
+                Ok(TypedEvent::Item("a".to_owned())),
+                Ok(TypedEvent::Item("b".to_owned())),
+                Ok(TypedEvent::End(7)),
+            ]
+        );
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
+    async fn command_export_runs_unary_commands_in_one_session_scope() {
+        use semantic_rpc::interface::InvocationOutput;
+        let fixture = InterfaceFixture::start(|server| server, "?scope=query").await;
+        let current = |output: InvocationOutput| {
+            let InvocationOutput::Values(values) = output else {
+                panic!("expected values");
+            };
+            let [Value::Object(object)] = values.as_slice() else {
+                panic!("expected one object, got {values:?}");
+            };
+            object.get("scope_id").cloned()
+        };
+
+        let output = fixture
+            .invoke("semantic.scope.current", vec![payload(Value::Null)])
+            .await
+            .unwrap();
+        assert_eq!(current(output), Some(Value::String("query".into())));
+
+        fixture
+            .invoke(
+                "semantic.scope.use",
+                vec![payload(Value::String("header".into()))],
+            )
+            .await
+            .unwrap();
+        let output = fixture
+            .invoke("semantic.scope.current", vec![payload(Value::Void)])
+            .await
+            .unwrap();
+        assert_eq!(current(output), Some(Value::String("header".into())));
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
+    async fn command_export_reports_unknown_commands_and_invalid_payloads() {
+        let fixture = InterfaceFixture::start(|server| server, "").await;
+        let error = fixture
+            .invoke("test.missing", vec![payload(Value::Null)])
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "unknown_command");
+
+        let error = fixture
+            .invoke(
+                "test.stream.count",
+                vec![payload(Value::String("x".into()))],
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "invalid_argument");
+
+        let error = fixture
+            .invoke("test.stream.sum", vec![payload(Value::Null)])
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "invalid_argument");
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
+    async fn interface_websocket_requires_authentication() {
+        let fixture = InterfaceFixture::start(
+            |server| {
+                server.with_principal_resolver(HeaderPrincipalResolver::new(
+                    http::HeaderName::from_static("x-test-user"),
+                ))
+            },
+            "",
+        )
+        .await;
+        let error = fixture
+            .invoke("semantic.scope.current", vec![payload(Value::Null)])
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "connection_lost");
+        assert!(error.message.contains("401"), "{}", error.message);
+        fixture.stop().await;
     }
 
     fn value_object(fields: impl IntoIterator<Item = (&'static str, Value)>) -> Value {

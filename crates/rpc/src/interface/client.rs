@@ -33,6 +33,7 @@ impl InterfaceClient {
     }
 }
 
+/// The exports the client requires; the server may provide more.
 fn exports() -> Result<Vec<ImplementationDescriptor>, InvocationError> {
     let package = semantic_data::import::package();
     let interface = &package.root.interfaces["Application"];
@@ -103,6 +104,7 @@ async fn connect(url: &str) -> Result<Session, InvocationError> {
         None,
         Value::Null,
         "semantic.interface.v1",
+        crate::plugin::ExportMatch::RequiredSubset,
     )
     .await
     .map(|connection| connection.into_session())
@@ -169,8 +171,16 @@ async fn connect(url: &str) -> Result<Session, InvocationError> {
         let _ = input.send(Err(failure("WebSocket disconnected".into())));
     });
     let exports = exports()?;
-    crate::plugin::negotiate(&mut incoming, &outgoing, &exports, None, Value::Null).await?;
-    Ok(Session::start(incoming, outgoing, None, exports))
+    let provided = crate::plugin::negotiate(
+        &mut incoming,
+        &outgoing,
+        &exports,
+        None,
+        Value::Null,
+        crate::plugin::ExportMatch::RequiredSubset,
+    )
+    .await?;
+    Ok(Session::start(incoming, outgoing, None, provided))
 }
 
 #[cfg(test)]
