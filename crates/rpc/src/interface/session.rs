@@ -466,7 +466,38 @@ async fn run(
 }
 
 #[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    pub(crate) fn pair(implementation: Arc<dyn InterfaceImplementation>) -> (Session, Session) {
+        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
+        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
+        let (a_in_tx, a_in) = mpsc::unbounded_channel();
+        let (b_in_tx, b_in) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(message) = a_rx.recv().await {
+                if b_in_tx.send(Ok(message)).is_err() {
+                    break;
+                }
+            }
+        });
+        tokio::spawn(async move {
+            while let Some(message) = b_rx.recv().await {
+                if a_in_tx.send(Ok(message)).is_err() {
+                    break;
+                }
+            }
+        });
+        (
+            Session::start(a_in, a_tx, None, vec![]),
+            Session::start(b_in, b_tx, Some(implementation), vec![]),
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::testing::pair;
     use super::*;
     use futures::stream;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -522,30 +553,6 @@ mod tests {
         }
     }
 
-    fn pair(implementation: Arc<dyn InterfaceImplementation>) -> (Session, Session) {
-        let (a_tx, mut a_rx) = mpsc::unbounded_channel();
-        let (b_tx, mut b_rx) = mpsc::unbounded_channel();
-        let (a_in_tx, a_in) = mpsc::unbounded_channel();
-        let (b_in_tx, b_in) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Some(message) = a_rx.recv().await {
-                if b_in_tx.send(Ok(message)).is_err() {
-                    break;
-                }
-            }
-        });
-        tokio::spawn(async move {
-            while let Some(message) = b_rx.recv().await {
-                if a_in_tx.send(Ok(message)).is_err() {
-                    break;
-                }
-            }
-        });
-        (
-            Session::start(a_in, a_tx, None, vec![]),
-            Session::start(b_in, b_tx, Some(implementation), vec![]),
-        )
-    }
     fn call(method: &str, arguments: Vec<InvocationArgument>) -> ValidatedInvocation {
         ValidatedInvocation {
             export: "test".into(),

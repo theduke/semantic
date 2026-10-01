@@ -1,6 +1,7 @@
 //! Owned native interface invocation, independent of the legacy unary registry.
 #[cfg(any(feature = "client-http-native", feature = "client-http-web"))]
 pub(crate) mod client;
+pub mod registry;
 #[cfg(feature = "interface-session")]
 pub mod session;
 mod validation;
@@ -9,6 +10,7 @@ use semantic_data::value::Value;
 pub use semantic_rpc_core::interface::{ImplementationDescriptor, InterfaceRef, InvocationError};
 use std::{
     any::Any,
+    collections::BTreeMap,
     sync::{Arc, atomic::AtomicBool},
 };
 use std::{
@@ -29,6 +31,59 @@ pub trait InterfaceImplementation: Send + Sync + 'static {
         call: ValidatedInvocation,
         context: InvocationContext,
     ) -> InvocationFuture<'a>;
+}
+
+/// Serves several implementations as one, routing each call by its export.
+#[derive(Default)]
+pub struct ExportRouter {
+    routes: BTreeMap<String, Arc<dyn InterfaceImplementation>>,
+    descriptors: Vec<ImplementationDescriptor>,
+}
+
+impl ExportRouter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Route every export of `implementation` to it.
+    pub fn with(
+        mut self,
+        implementation: Arc<dyn InterfaceImplementation>,
+    ) -> Result<Self, InvocationError> {
+        for descriptor in implementation.descriptors() {
+            if self.routes.contains_key(&descriptor.export) {
+                return Err(InvocationError::new(
+                    "interface_incompatible",
+                    format!("duplicate implementation export '{}'", descriptor.export),
+                ));
+            }
+        }
+        for descriptor in implementation.descriptors() {
+            self.routes
+                .insert(descriptor.export.clone(), implementation.clone());
+            self.descriptors.push(descriptor.clone());
+        }
+        Ok(self)
+    }
+}
+
+impl InterfaceImplementation for ExportRouter {
+    fn descriptors(&self) -> &[ImplementationDescriptor] {
+        &self.descriptors
+    }
+
+    fn invoke<'a>(
+        &'a self,
+        call: ValidatedInvocation,
+        context: InvocationContext,
+    ) -> InvocationFuture<'a> {
+        match self.routes.get(&call.export) {
+            Some(implementation) => implementation.invoke(call, context),
+            None => {
+                Box::pin(async { Err(InvocationError::new("invalid_argument", "unknown export")) })
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
