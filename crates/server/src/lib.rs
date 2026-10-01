@@ -8,7 +8,6 @@ mod startup;
 mod storage;
 #[cfg(feature = "embed-ui")]
 mod ui;
-mod ws;
 
 pub use auth::{HeaderPrincipalResolver, NoAuthPrincipalResolver, PrincipalResolver};
 pub use config::ServerConfig;

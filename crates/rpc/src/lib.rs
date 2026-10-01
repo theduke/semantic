@@ -10,7 +10,7 @@ pub mod stream_command;
 #[cfg(feature = "client")]
 pub mod transport;
 
-#[cfg(any(feature = "server-axum", feature = "server-axum-ws"))]
+#[cfg(feature = "server-axum")]
 pub mod server;
 
 #[cfg(feature = "client")]

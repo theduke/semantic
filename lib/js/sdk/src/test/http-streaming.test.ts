@@ -8,8 +8,6 @@ import {
   HttpTransport,
   SemanticClient,
   TransportError,
-  WebSocketTransport,
-  type WebSocketLike,
   type SemanticValue,
 } from "../index.js";
 
@@ -538,57 +536,3 @@ test(
     }
   },
 );
-
-class Socket implements WebSocketLike {
-  readyState = 1;
-  sent: string[] = [];
-  listeners = new Map<string, ((event: any) => void)[]>();
-  send(data: string) {
-    this.sent.push(data);
-  }
-  close() {
-    this.readyState = 3;
-  }
-  addEventListener(type: string, listener: (event: any) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-  emit(type: string, event: unknown = {}) {
-    for (const listener of this.listeners.get(type) ?? []) listener(event);
-  }
-}
-
-test("WebSocket cancellation removes only the local request and ignores its late response", async () => {
-  const socket = new Socket();
-  const transport = new WebSocketTransport("ws://test", () => socket);
-  const abort = new AbortController();
-  const canceled = transport.invoke("one", {}, { signal: abort.signal });
-  const active = transport.invoke("two", {});
-  await tick();
-  abort.abort();
-  await assert.rejects(canceled, isAbort);
-  assert.equal(socket.readyState, 1);
-  assert.equal(socket.sent.length, 2);
-  for (const sent of socket.sent) {
-    const { id } = JSON.parse(sent) as { id: number };
-    socket.emit("message", {
-      data: JSON.stringify({ id, result: { ok: { string: "ok" } } }),
-    });
-  }
-  assert.equal(await active, "ok");
-  transport.close();
-});
-
-test("WebSocket requests can be canceled while connecting without closing the socket", async () => {
-  const socket = new Socket();
-  socket.readyState = 0;
-  const transport = new WebSocketTransport("ws://test", () => socket);
-  const controller = new AbortController();
-  const pending = transport.invoke("x", {}, { signal: controller.signal });
-  controller.abort();
-  await assert.rejects(pending, isAbort);
-  socket.readyState = 1;
-  socket.emit("open");
-  await transport.ready;
-  assert.equal(socket.sent.length, 0);
-  transport.close();
-});

@@ -81,10 +81,6 @@ impl SemanticServer {
                 &file_get_path,
                 get(crate::file::download_handler).delete(crate::file::delete_handler),
             )
-            .route(
-                &self.config.ws_path,
-                axum::routing::get(crate::ws::rpc_ws_handler),
-            )
             .with_state(state);
 
         #[cfg(feature = "embed-ui")]

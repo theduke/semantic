@@ -9180,7 +9180,6 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
- "futures-util",
  "gloo-net",
  "http",
  "js-sys",

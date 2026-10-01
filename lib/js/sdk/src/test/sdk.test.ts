@@ -10,7 +10,6 @@ import {
   FileClient,
   HttpTransport,
   PackageBuilder,
-  WebSocketTransport,
   decodeTagged,
   decodeTaggedExact,
   emptyMeta,
@@ -27,7 +26,6 @@ import type {
   SemanticObject,
   TypeDef,
   TypeNode,
-  WebSocketLike,
 } from "../index.js";
 
 test("tagged values preserve unsafe integers exactly", () => {
@@ -235,73 +233,6 @@ test("HTTP transport status errors include the endpoint and status text", async 
     new HttpTransport(endpoint, { fetch: fetcher }).invoke("x", {}),
     /HTTP RPC request to https:\/\/example\.test\/api\/v1\/rpc failed: 503 Service Unavailable/,
   );
-});
-
-class FakeSocket implements WebSocketLike {
-  readyState: number;
-  sent: string[] = [];
-  private listeners = new Map<string, Array<(event: any) => void>>();
-  constructor(state = 0) {
-    this.readyState = state;
-  }
-  send(data: string): void {
-    if (this.readyState !== 1) throw new Error("not open");
-    this.sent.push(data);
-  }
-  close(): void {
-    this.readyState = 3;
-    this.emit("close", {});
-  }
-  addEventListener(type: string, listener: (event: any) => void): void {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-  emit(type: string, event: any): void {
-    for (const listener of this.listeners.get(type) ?? []) listener(event);
-  }
-}
-
-test("WebSocket transport handles already-open and close-before-open sockets", async () => {
-  const open = new FakeSocket(1);
-  const transport = new WebSocketTransport("ws://test", () => open);
-  const response = transport.invoke("ping", {});
-  await Promise.resolve();
-  const envelope = parseJson(open.sent[0]!) as { id: number | bigint };
-  open.emit("message", {
-    data: stringifyJson({ id: envelope.id, result: { ok: "void" } }),
-  });
-  assert.equal(await response, undefined);
-  transport.close();
-
-  const connecting = new FakeSocket();
-  const closed = new WebSocketTransport("ws://test", () => connecting);
-  const pending = closed.invoke("ping", {});
-  closed.close();
-  await assert.rejects(pending, /closed by client/);
-
-  // A consumer is allowed to ignore readiness without causing an unhandled
-  // rejection when the transport is closed while connecting.
-  const abandoned = new WebSocketTransport("ws://test", () => new FakeSocket());
-  abandoned.close();
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-});
-
-test("WebSocket transport explains how to run where WebSocket is unavailable", () => {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
-  Object.defineProperty(globalThis, "WebSocket", {
-    configurable: true,
-    value: undefined,
-  });
-  try {
-    assert.throws(
-      () => new WebSocketTransport("ws://test"),
-      /provide a WebSocketFactory/,
-    );
-  } finally {
-    if (descriptor) Object.defineProperty(globalThis, "WebSocket", descriptor);
-    else Reflect.deleteProperty(globalThis, "WebSocket");
-  }
 });
 
 test("file ranges handle empty and validated partial reads", async () => {

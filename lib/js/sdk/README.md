@@ -1,7 +1,7 @@
 # `@semantic/sdk`
 
-TypeScript types, builders, code generation, value codecs, and HTTP, WebSocket,
-and file clients for [Semantic](https://github.com/theduke/semantic).
+TypeScript types, builders, code generation, value codecs, and HTTP and file
+clients for [Semantic](https://github.com/theduke/semantic).
 
 The SDK has two layers:
 
@@ -88,8 +88,6 @@ The package targets ES2022 and requires:
 - The Fetch API (`fetch`, `Headers`, `Request`, and `Response`) for HTTP and file
   operations. Node.js 20 provides it globally.
 - `structuredClone` when using builders or package serialization.
-- A global `WebSocket`, or an injected compatible implementation, for WebSocket
-  RPC.
 
 The main `@semantic/sdk` entry point and `@semantic/sdk/generator` contain no
 Node-only imports. Only the `semantic-ts-generate` CLI and the repository's
@@ -100,8 +98,8 @@ origin, CORS, mixed-content, and credential rules still apply.
 
 ## Transports
 
-`SemanticClient` operates on the small `RpcTransport` interface. Use a built-in
-HTTP or WebSocket transport, or provide your own implementation.
+`SemanticClient` operates on the small `RpcTransport` interface. Use the built-in
+HTTP transport, or provide your own implementation.
 
 ### HTTP
 
@@ -133,52 +131,6 @@ await pending.catch(() => undefined);
 
 You can inject a Fetch-compatible function with the `fetch` option, which is useful
 for testing or centrally adding credentials and observability.
-
-### WebSocket
-
-WebSocket RPC keeps one connection open and correlates concurrent responses by
-request ID. `invoke()` waits for the socket to open, so awaiting `ready` is optional
-but useful when connection failure should be detected before other work starts.
-
-```ts
-import { SemanticClient, WebSocketTransport } from "@semantic/sdk";
-
-const transport = new WebSocketTransport("wss://semantic.example/api/v1/rpc");
-await transport.ready;
-
-const client = new SemanticClient(transport);
-const [notes, people] = await Promise.all([
-  client.sql("SELECT * FROM notes"),
-  client.sql("SELECT * FROM people"),
-]);
-
-client.close();
-```
-
-Browsers provide `WebSocket` globally. Runtimes without one must inject a factory:
-
-```ts
-import {
-  WebSocketTransport,
-  type WebSocketFactory,
-  type WebSocketLike,
-} from "@semantic/sdk";
-
-const createSocket: WebSocketFactory = (url) =>
-  new MyWebSocketImplementation(url) as WebSocketLike;
-
-const transport = new WebSocketTransport(
-  "ws://localhost:8888/api/v1/rpc",
-  createSocket,
-);
-```
-
-The injected object must expose `readyState`, `send`, `close`, and
-`addEventListener`. This also lets Node applications configure connection details
-supported by their chosen WebSocket implementation. The SDK does not bundle one.
-
-WebSocket transport does not currently expose per-call cancellation or a built-in
-headers option.
 
 ### Custom transports
 
@@ -765,8 +717,8 @@ try {
 
 - `RpcError` represents a structured error returned by the Semantic command and
   exposes `code` and optional decoded `data`.
-- `TransportError` represents Fetch failures, non-success HTTP statuses, WebSocket
-  failures, and file transfer errors. HTTP status is available when applicable.
+- `TransportError` represents Fetch failures, non-success HTTP statuses, and file
+  transfer errors. HTTP status is available when applicable.
 - `ProtocolError` represents malformed or inconsistent RPC responses.
 - All three extend `SemanticError`, which extends `Error`.
 
@@ -777,7 +729,7 @@ try {
 - Remote batches support create, upsert, and ID-based deletion only.
 - Types and generated command descriptors are compile-time contracts; the SDK does
   not perform runtime schema validation.
-- The SDK is ESM-only and does not bundle a WebSocket implementation for Node.
+- The SDK is ESM-only.
 
 ## Package exports
 
