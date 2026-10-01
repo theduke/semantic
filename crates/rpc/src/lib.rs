@@ -5,6 +5,7 @@ pub mod interface;
 #[cfg(feature = "interface-session")]
 pub mod plugin;
 pub mod registry;
+pub mod stream_command;
 
 #[cfg(feature = "client")]
 pub mod transport;

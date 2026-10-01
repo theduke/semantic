@@ -109,6 +109,8 @@ pub enum CallError<E> {
     UnknownCommand(String),
     InvalidPayload(RpcError),
     InvalidOutput(RpcError),
+    /// The command streams and cannot be called as a unary command.
+    StreamingRequired(String),
     Command(E),
 }
 
@@ -117,6 +119,10 @@ impl<E: Into<RpcError>> From<CallError<E>> for RpcError {
         match err {
             CallError::UnknownCommand(command) => RpcError::unknown_command(command),
             CallError::InvalidPayload(err) | CallError::InvalidOutput(err) => err,
+            CallError::StreamingRequired(command) => RpcError::new(
+                "streaming_required",
+                format!("RPC command '{command}' streams and requires a streaming session"),
+            ),
             CallError::Command(err) => err.into(),
         }
     }

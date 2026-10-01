@@ -54,6 +54,7 @@ pub(crate) fn call_error_response(err: CallError<AppError>) -> Response {
         CallError::UnknownCommand(_) => StatusCode::NOT_FOUND,
         CallError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
         CallError::InvalidOutput(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        CallError::StreamingRequired(_) => StatusCode::BAD_REQUEST,
         CallError::Command(err) => app_error_status(err),
     };
     (status, Json(RpcError::from(err))).into_response()
