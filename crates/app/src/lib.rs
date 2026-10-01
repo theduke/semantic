@@ -1271,32 +1271,32 @@ mod tests {
 
     struct StreamingEcho;
 
-    impl semantic_rpc_core::RpcCommandSpec for StreamingEcho {
-        type Payload = Value;
-        type Output = Value;
+    impl semantic_rpc::stream_command::RpcStreamCommandSpec for StreamingEcho {
+        type Payload = String;
+        type Input = semantic_data::value::StreamOf<String>;
+        type Output = semantic_data::value::StreamOf<String, u64>;
         type Error = AppError;
         const NAME: &'static str = "test.streaming.echo";
-
-        fn definition(&self) -> semantic_rpc_core::CommandDef {
-            use semantic_data::value::{SemanticType, StreamOf};
-
-            semantic_rpc_core::CommandDef::new(
-                Self::NAME,
-                String::semantic_type(),
-                StreamOf::<String, u64>::semantic_type(),
-            )
-            .with_input_stream(StreamOf::<String>::semantic_type())
-        }
     }
 
-    impl semantic_rpc_core::RpcCommand<AppRequestContext> for StreamingEcho {
+    impl semantic_rpc::stream_command::RpcStreamCommand<AppRequestContext> for StreamingEcho {
         fn call<'a>(
             &'a self,
             _ctx: &'a AppRequestContext,
-            payload: Value,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
-        {
-            Box::pin(async move { Ok(payload) })
+            _payload: String,
+            _input: semantic_rpc::stream_command::TypedStream<String>,
+            _cancel: semantic_rpc::interface::CancellationToken,
+        ) -> futures_util::future::BoxFuture<
+            'a,
+            Result<semantic_rpc::stream_command::TypedStream<String, u64>, AppError>,
+        > {
+            Box::pin(async move {
+                Ok(semantic_rpc::stream_command::TypedStream::from_events(
+                    futures_util::stream::iter([Ok(
+                        semantic_rpc::stream_command::TypedEvent::End(0),
+                    )]),
+                ))
+            })
         }
     }
 
@@ -1307,7 +1307,7 @@ mod tests {
             .with_default_scope(DbScopeId::new("default"), default_db)
             .register_builtin_commands()
             .unwrap()
-            .register_command(StreamingEcho)
+            .register_stream_command(StreamingEcho)
             .unwrap()
             .build()
             .unwrap();

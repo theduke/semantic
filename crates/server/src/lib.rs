@@ -165,6 +165,39 @@ mod tests {
         })
     }
 
+    /// Echoes its input stream back, with the same end value.
+    struct StreamEcho;
+
+    impl semantic_rpc::stream_command::RpcStreamCommandSpec for StreamEcho {
+        type Payload = ();
+        type Input = semantic_data::value::StreamOf<String, u64>;
+        type Output = semantic_data::value::StreamOf<String, u64>;
+        type Error = semantic_app::AppError;
+
+        const NAME: &'static str = "test.stream.echo";
+    }
+
+    impl semantic_rpc::stream_command::RpcStreamCommand<semantic_app::AppRequestContext>
+        for StreamEcho
+    {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a semantic_app::AppRequestContext,
+            _payload: (),
+            input: semantic_rpc::stream_command::TypedStream<String, u64>,
+            _cancel: semantic_rpc::interface::CancellationToken,
+        ) -> futures_util::future::BoxFuture<
+            'a,
+            Result<semantic_rpc::stream_command::TypedStream<String, u64>, semantic_app::AppError>,
+        > {
+            Box::pin(async move {
+                Ok(semantic_rpc::stream_command::TypedStream::from_events(
+                    input,
+                ))
+            })
+        }
+    }
+
     fn test_app() -> semantic_app::SemanticApp {
         let default_db = mock_db("default");
         let header_db = mock_db("header");
@@ -178,6 +211,8 @@ mod tests {
             .with_default_scope(DbScopeId::new("default"), default_db)
             .with_default_file_store_uri(DbScopeId::new("default"), blob_uri)
             .register_builtin_commands()
+            .unwrap()
+            .register_stream_command(StreamEcho)
             .unwrap()
             .build()
             .unwrap();
@@ -374,6 +409,27 @@ mod tests {
             post_command(&server, "/api/v1/rpc/semantic.db.query?scope=query", body).await;
         assert_eq!(status, http::StatusCode::OK);
         assert_eq!(select_db_name_from_result(result), "query");
+    }
+
+    #[tokio::test]
+    async fn streaming_commands_require_a_streaming_session() {
+        let server = SemanticServer::new(test_app());
+        let response = post_rpc(
+            &server,
+            "/api/v1/rpc",
+            None,
+            "test.stream.echo",
+            Value::Void,
+        )
+        .await;
+        assert!(matches!(
+            response.result,
+            RpcResult::Err(err) if err.code == "streaming_required"
+        ));
+
+        let (status, result) = post_command(&server, "/api/v1/rpc/test.stream.echo", vec![]).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert!(matches!(result, RpcResult::Err(err) if err.code == "streaming_required"));
     }
 
     #[tokio::test]

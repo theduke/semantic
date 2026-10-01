@@ -13,6 +13,7 @@ use semantic_db_core::{
     TextQueryFormat, TextQueryInput, UpdateResult,
 };
 use semantic_rpc::RpcRegistry;
+use semantic_rpc::stream_command::RpcStreamCommand;
 use semantic_rpc_core::{
     CallError, RpcCommand, RpcCommandSpec, RpcRequest, RpcResponse, RuntimePackage,
 };
@@ -273,6 +274,17 @@ impl SemanticAppBuilder {
         AppRequestContext: Sync,
     {
         self.registry.register(command)?;
+        Ok(self)
+    }
+
+    /// Register a streaming command, served over interface sessions.
+    pub fn register_stream_command<C>(mut self, command: C) -> std::result::Result<Self, AppError>
+    where
+        C: RpcStreamCommand<AppRequestContext>,
+        C::Error: Into<AppError>,
+        AppRequestContext: Sync,
+    {
+        self.registry.register_stream(command)?;
         Ok(self)
     }
 

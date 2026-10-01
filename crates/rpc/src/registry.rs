@@ -1,18 +1,55 @@
 use std::collections::BTreeMap;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use semantic_data::value::Value;
-use semantic_rpc_core::command::{CallError, CommandAdapter, DynCommand, RpcCommand};
-use semantic_rpc_core::error::{RegisterError, RpcError};
+use semantic_rpc_core::command::{CallError, CommandAdapter, CommandDef, DynCommand, RpcCommand};
+use semantic_rpc_core::error::{CommandDefError, RegisterError, RpcError};
 use semantic_rpc_core::protocol::{RpcRequest, RpcResponse};
+
+use crate::stream_command::{DynStreamCommand, RpcStreamCommand, StreamCommandAdapter};
 
 pub struct RpcRegistry<Ctx, E> {
     commands: BTreeMap<String, Box<dyn DynCommand<Ctx, E>>>,
+    /// Streaming handlers; every entry also has a placeholder in `commands`
+    /// so introspection sees it.
+    streams: BTreeMap<String, Box<dyn DynStreamCommand<Ctx, E>>>,
+}
+
+/// Introspection entry of a streaming command, which cannot be called as a
+/// unary command.
+struct StreamingPlaceholder {
+    definition: CommandDef,
+}
+
+impl<Ctx, E> DynCommand<Ctx, E> for StreamingPlaceholder
+where
+    Ctx: Sync,
+    E: Send,
+{
+    fn name(&self) -> &str {
+        &self.definition.name
+    }
+
+    fn definition(&self) -> &CommandDef {
+        &self.definition
+    }
+
+    fn call_value<'a>(
+        &'a self,
+        _ctx: &'a Ctx,
+        _payload: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, CallError<E>>> + Send + 'a>> {
+        Box::pin(async move { Err(CallError::StreamingRequired(self.definition.name.clone())) })
+    }
 }
 
 impl<Ctx, E> RpcRegistry<Ctx, E> {
     pub fn new() -> Self {
         Self {
             commands: BTreeMap::new(),
+            streams: BTreeMap::new(),
         }
     }
 
@@ -40,6 +77,39 @@ impl<Ctx, E> RpcRegistry<Ctx, E> {
         self.commands.insert(name, command);
 
         Ok(())
+    }
+
+    /// Register a streaming command, served over interface sessions.
+    ///
+    /// Its definition must stream in at least one direction. Unary calls to it
+    /// fail with [`CallError::StreamingRequired`].
+    pub fn register_stream<C>(&mut self, command: C) -> Result<(), RegisterError>
+    where
+        C: RpcStreamCommand<Ctx>,
+        C::Error: Into<E>,
+        Ctx: Sync,
+        E: Send + 'static,
+    {
+        let adapter = StreamCommandAdapter::new(command);
+        let definition = DynStreamCommand::<Ctx, E>::definition(&adapter).clone();
+        definition.validate()?;
+        if !definition.is_streaming() {
+            return Err(CommandDefError::NotStreaming(definition.name).into());
+        }
+        let name = definition.name.clone();
+        if self.commands.contains_key(&name) {
+            return Err(RegisterError::DuplicateCommand(name));
+        }
+
+        self.commands
+            .insert(name.clone(), Box::new(StreamingPlaceholder { definition }));
+        self.streams.insert(name, Box::new(adapter));
+        Ok(())
+    }
+
+    /// The streaming handler registered under `command`, if any.
+    pub fn stream(&self, command: &str) -> Option<&dyn DynStreamCommand<Ctx, E>> {
+        self.streams.get(command).map(|command| command.as_ref())
     }
 
     /// Registered commands, ordered by name.
@@ -92,6 +162,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
+    use futures::future::BoxFuture;
     use semantic_data::value::{SemanticType, StreamOf, Value};
 
     use semantic_rpc_core::{
@@ -100,6 +171,8 @@ mod tests {
     };
 
     use super::RpcRegistry;
+    use crate::interface::CancellationToken;
+    use crate::stream_command::{RpcStreamCommand, RpcStreamCommandSpec, Single, TypedStream};
 
     struct EchoCommand;
 
@@ -212,6 +285,141 @@ mod tests {
                 if name == "test.stream_input"
         ));
         assert!(registry.get("test.stream_input").is_none());
+    }
+
+    struct StreamEcho;
+
+    impl RpcStreamCommandSpec for StreamEcho {
+        type Payload = ();
+        type Input = StreamOf<String>;
+        type Output = StreamOf<String>;
+        type Error = RpcError;
+
+        const NAME: &'static str = "test.stream_echo";
+    }
+
+    impl RpcStreamCommand<()> for StreamEcho {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a (),
+            _payload: (),
+            input: TypedStream<String>,
+            _cancel: CancellationToken,
+        ) -> BoxFuture<'a, Result<TypedStream<String>, RpcError>> {
+            Box::pin(async move { Ok(TypedStream::from_events(input)) })
+        }
+    }
+
+    struct UnaryShaped;
+
+    impl RpcStreamCommandSpec for UnaryShaped {
+        type Payload = ();
+        type Input = ();
+        type Output = Single<()>;
+        type Error = RpcError;
+
+        const NAME: &'static str = "test.unary_shaped";
+    }
+
+    impl RpcStreamCommand<()> for UnaryShaped {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a (),
+            _payload: (),
+            _input: (),
+            _cancel: CancellationToken,
+        ) -> BoxFuture<'a, Result<(), RpcError>> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_serves_streaming_commands_separately() {
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+        registry.register_stream(StreamEcho).expect("register");
+
+        let names: Vec<_> = registry.commands().map(|command| command.name()).collect();
+        assert_eq!(names, ["test.stream_echo"]);
+        let definition = registry.get("test.stream_echo").unwrap().definition();
+        assert_eq!(
+            definition.input_stream,
+            Some(StreamOf::<String>::semantic_type())
+        );
+        assert!(registry.stream("test.stream_echo").is_some());
+        assert!(registry.stream("missing").is_none());
+
+        match registry.call(&(), "test.stream_echo", Value::Void).await {
+            Err(CallError::StreamingRequired(name)) => assert_eq!(name, "test.stream_echo"),
+            other => panic!("unexpected result: {other:?}"),
+        }
+        let response = registry
+            .invoke(
+                &(),
+                semantic_rpc_core::RpcRequest {
+                    id: 1,
+                    command: "test.stream_echo".to_string(),
+                    payload: Value::Void,
+                },
+            )
+            .await;
+        match response.result {
+            RpcResult::Err(err) => assert_eq!(err.code, "streaming_required"),
+            RpcResult::Ok(value) => panic!("unexpected ok response: {value:?}"),
+        }
+    }
+
+    #[test]
+    fn registry_rejects_non_streaming_stream_registration() {
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+
+        let result = registry.register_stream(UnaryShaped);
+
+        assert!(matches!(
+            result,
+            Err(RegisterError::InvalidDefinition(CommandDefError::NotStreaming(name)))
+                if name == "test.unary_shaped"
+        ));
+        assert!(registry.get("test.unary_shaped").is_none());
+    }
+
+    #[test]
+    fn registry_rejects_duplicates_across_unary_and_streaming() {
+        struct UnaryEcho;
+        impl RpcCommandSpec for UnaryEcho {
+            type Payload = Value;
+            type Output = Value;
+            type Error = RpcError;
+
+            const NAME: &'static str = "test.stream_echo";
+        }
+        impl RpcCommand<()> for UnaryEcho {
+            fn call<'a>(
+                &'a self,
+                _ctx: &'a (),
+                payload: Value,
+            ) -> Pin<Box<dyn Future<Output = Result<Value, RpcError>> + Send + 'a>> {
+                Box::pin(async move { Ok(payload) })
+            }
+        }
+
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+        registry.register_stream(StreamEcho).expect("register");
+        assert!(matches!(
+            registry.register(UnaryEcho),
+            Err(RegisterError::DuplicateCommand(name)) if name == "test.stream_echo"
+        ));
+        assert!(matches!(
+            registry.register_stream(StreamEcho),
+            Err(RegisterError::DuplicateCommand(_))
+        ));
+
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+        registry.register(UnaryEcho).expect("register");
+        assert!(matches!(
+            registry.register_stream(StreamEcho),
+            Err(RegisterError::DuplicateCommand(name)) if name == "test.stream_echo"
+        ));
+        assert!(registry.stream("test.stream_echo").is_none());
     }
 
     #[tokio::test]

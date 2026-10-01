@@ -82,6 +82,8 @@ pub enum CommandDefError {
     StreamInput(String),
     #[error("RPC command '{0}' input stream must be a stream type")]
     InvalidInputStream(String),
+    #[error("RPC command '{0}' is registered as a streaming command but does not stream")]
+    NotStreaming(String),
 }
 
 #[derive(Debug, thiserror::Error)]
