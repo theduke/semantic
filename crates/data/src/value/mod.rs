@@ -46,6 +46,9 @@ pub mod convert;
 pub use convert::{FromValue, FromValueError, IntoValue, Null, SemanticType};
 pub use semantic_macros::{Class, FromValue, IntoValue, SemanticType};
 
+mod stream_of;
+pub use stream_of::StreamOf;
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
