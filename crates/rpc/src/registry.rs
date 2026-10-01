@@ -68,7 +68,11 @@ impl<Ctx, E> RpcRegistry<Ctx, E> {
         &mut self,
         command: Box<dyn DynCommand<Ctx, E>>,
     ) -> Result<(), RegisterError> {
-        command.definition().validate()?;
+        let definition = command.definition();
+        definition.validate()?;
+        if definition.is_streaming() {
+            return Err(CommandDefError::UnaryStreaming(definition.name.clone()).into());
+        }
         let name = command.name().to_owned();
         if self.commands.contains_key(&name) {
             return Err(RegisterError::DuplicateCommand(name));
@@ -331,6 +335,46 @@ mod tests {
         ) -> BoxFuture<'a, Result<(), RpcError>> {
             Box::pin(async move { Ok(()) })
         }
+    }
+
+    #[test]
+    fn registry_rejects_streaming_definitions_registered_as_unary() {
+        struct StreamingUnary;
+        impl RpcCommandSpec for StreamingUnary {
+            type Payload = Value;
+            type Output = Value;
+            type Error = RpcError;
+
+            const NAME: &'static str = "test.streaming_unary";
+
+            fn definition(&self) -> CommandDef {
+                CommandDef::new(
+                    Self::NAME,
+                    Value::semantic_type(),
+                    StreamOf::<Value>::semantic_type(),
+                )
+            }
+        }
+        impl RpcCommand<()> for StreamingUnary {
+            fn call<'a>(
+                &'a self,
+                _ctx: &'a (),
+                payload: Value,
+            ) -> Pin<Box<dyn Future<Output = Result<Value, RpcError>> + Send + 'a>> {
+                Box::pin(async move { Ok(payload) })
+            }
+        }
+
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+
+        let result = registry.register(StreamingUnary);
+
+        assert!(matches!(
+            result,
+            Err(RegisterError::InvalidDefinition(CommandDefError::UnaryStreaming(name)))
+                if name == "test.streaming_unary"
+        ));
+        assert!(registry.get("test.streaming_unary").is_none());
     }
 
     #[tokio::test]

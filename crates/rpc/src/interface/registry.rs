@@ -394,15 +394,47 @@ mod tests {
         }
     }
 
+    /// Endless producer whose `cancel` token is observed by a detached task.
+    struct CancelAware(Arc<AtomicBool>);
+    impl RpcStreamCommandSpec for CancelAware {
+        type Payload = ();
+        type Input = ();
+        type Output = StreamOf<u32>;
+        type Error = RpcError;
+        const NAME: &'static str = "test.cancel_aware";
+    }
+    impl RpcStreamCommand<()> for CancelAware {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a (),
+            _payload: (),
+            _input: (),
+            cancel: CancellationToken,
+        ) -> BoxFuture<'a, Result<TypedStream<u32>, RpcError>> {
+            let fired = self.0.clone();
+            Box::pin(async move {
+                tokio::spawn(async move {
+                    cancel.cancelled().await;
+                    fired.store(true, Ordering::SeqCst);
+                });
+                Ok(TypedStream::from_events(stream::repeat_with(|| {
+                    Ok(TypedEvent::Item(1))
+                })))
+            })
+        }
+    }
+
     struct Fixture {
         client: crate::interface::session::Session,
         hang_dropped: Arc<AtomicBool>,
         endless_dropped: Arc<AtomicBool>,
+        command_cancelled: Arc<AtomicBool>,
     }
 
     fn fixture() -> Fixture {
         let hang_dropped = Arc::new(AtomicBool::new(false));
         let endless_dropped = Arc::new(AtomicBool::new(false));
+        let command_cancelled = Arc::new(AtomicBool::new(false));
         let mut registry = RpcRegistry::<(), RpcError>::new();
         registry.register(Add).unwrap();
         registry.register(Unit).unwrap();
@@ -414,6 +446,9 @@ mod tests {
         registry
             .register_stream(Endless(endless_dropped.clone()))
             .unwrap();
+        registry
+            .register_stream(CancelAware(command_cancelled.clone()))
+            .unwrap();
         let interface = registry_interface(&registry);
         let descriptor = registry_descriptor(&interface).unwrap();
         let implementation = registry_implementation(Arc::new(registry), Arc::new(()), descriptor);
@@ -424,6 +459,7 @@ mod tests {
             client,
             hang_dropped,
             endless_dropped,
+            command_cancelled,
         }
     }
 
@@ -663,6 +699,22 @@ mod tests {
         assert!(!fixture.endless_dropped.load(Ordering::SeqCst));
         drop(stream);
         wait_for(&fixture.endless_dropped).await;
+    }
+
+    #[tokio::test]
+    async fn dropping_the_output_stream_cancels_the_command() {
+        let fixture = fixture();
+        let InvocationOutput::Stream(mut stream) =
+            invoke(&fixture, "test.cancel_aware", vec![payload(Value::Null)])
+                .await
+                .unwrap()
+        else {
+            panic!("stream")
+        };
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(!fixture.command_cancelled.load(Ordering::SeqCst));
+        drop(stream);
+        wait_for(&fixture.command_cancelled).await;
     }
 
     #[tokio::test]

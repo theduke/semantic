@@ -345,6 +345,7 @@ mod tests {
 
     struct InterfaceFixture {
         client: semantic_rpc::client::RpcClient,
+        url: String,
         task: tokio::task::JoinHandle<()>,
         app: semantic_app::SemanticApp,
     }
@@ -358,11 +359,20 @@ mod tests {
             let task = tokio::spawn(async move {
                 axum::serve(listener, server.router()).await.unwrap();
             });
-            let client = semantic_rpc::transport::http_client::HttpRpcClient::new(format!(
-                "http://{address}/api/v1/rpc{query}"
-            ))
-            .into();
-            Self { client, task, app }
+            let url = format!("http://{address}/api/v1/rpc{query}");
+            let client =
+                semantic_rpc::transport::http_client::HttpRpcClient::new(url.clone()).into();
+            Self {
+                client,
+                url,
+                task,
+                app,
+            }
+        }
+
+        /// Another client of the same server, which opens its own connection.
+        fn another_client(&self) -> semantic_rpc::client::RpcClient {
+            semantic_rpc::transport::http_client::HttpRpcClient::new(self.url.clone()).into()
         }
 
         async fn invoke(
@@ -584,6 +594,45 @@ mod tests {
             matches!(&error, semantic_rpc_core::RpcClientError::Remote(code, _) if code == "unknown_command"),
             "{error:?}"
         );
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
+    async fn interface_connections_have_separate_session_scopes() {
+        use semantic_rpc::interface::{InvocationArgument, InvocationOutput, ValidatedInvocation};
+        let fixture = InterfaceFixture::start(|server| server, "?scope=query").await;
+        let other = fixture.another_client();
+        let call = |client: &semantic_rpc::client::RpcClient, method: &str, value: Value| {
+            let client = client.clone();
+            let call = ValidatedInvocation {
+                export: semantic_rpc::stream_command::COMMAND_EXPORT.into(),
+                method: method.into(),
+                arguments: vec![InvocationArgument::Value(value)],
+            };
+            async move {
+                let InvocationOutput::Values(values) = client.invoke_interface(call).await.unwrap()
+                else {
+                    panic!("expected values");
+                };
+                values
+            }
+        };
+        let scope_of = |values: Vec<Value>| match values.as_slice() {
+            [Value::Object(object)] => object.get("scope_id").cloned(),
+            other => panic!("unexpected output {other:?}"),
+        };
+
+        call(
+            &fixture.client,
+            "semantic.scope.use",
+            Value::String("header".into()),
+        )
+        .await;
+        let first = call(&fixture.client, "semantic.scope.current", Value::Null).await;
+        let second = call(&other, "semantic.scope.current", Value::Null).await;
+        assert_eq!(scope_of(first), Some(Value::String("header".into())));
+        assert_eq!(scope_of(second), Some(Value::String("query".into())));
+        drop(other);
         fixture.stop().await;
     }
 

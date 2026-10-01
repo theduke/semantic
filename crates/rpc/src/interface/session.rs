@@ -3,7 +3,7 @@ use super::*;
 use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use semantic_data::value::serde::typed::TypedValue;
 use semantic_rpc_core::interface_protocol::{
-    InterfaceMessage as Message, SessionId, WireArgument, WireOutput,
+    InterfaceMessage as Message, MAX_WINDOW, SessionId, WireArgument, WireOutput,
 };
 use std::sync::atomic::Ordering;
 use std::{
@@ -14,10 +14,6 @@ use tokio::sync::{mpsc, oneshot};
 
 type Reply = oneshot::Sender<Result<InvocationOutput, InvocationError>>;
 type ItemReply = oneshot::Sender<Result<StreamEvent, InvocationError>>;
-
-/// Upper bound of the credit a consumer keeps granted, which bounds the
-/// events buffered per stream.
-const MAX_WINDOW: u32 = 64;
 
 enum Action {
     Call(ValidatedInvocation, InvocationContext, Reply),
@@ -217,6 +213,18 @@ struct Producer {
     /// Events the consumer allows beyond those already sent.
     credit: u32,
     cancel: CancellationToken,
+    /// Token of the call that returned the stream. It is cancelled together
+    /// with `cancel` so command code that outlives its return stops too.
+    call_cancel: Option<CancellationToken>,
+}
+
+impl Producer {
+    fn cancel(&self) {
+        self.cancel.cancel();
+        if let Some(token) = &self.call_cancel {
+            token.cancel();
+        }
+    }
 }
 
 type Production = BoxFuture<
@@ -254,7 +262,11 @@ impl State {
     fn send(&self, message: Message) -> Result<(), InvocationError> {
         self.outgoing.send(message).map_err(|_| lost())
     }
-    fn producer(&mut self, stream: OwnedValueStream) -> Result<SessionId, InvocationError> {
+    fn producer(
+        &mut self,
+        stream: OwnedValueStream,
+        call_cancel: Option<CancellationToken>,
+    ) -> Result<SessionId, InvocationError> {
         self.next_stream = self
             .next_stream
             .checked_add(1)
@@ -266,6 +278,7 @@ impl State {
                 stream: Some(stream),
                 credit: 0,
                 cancel: CancellationToken::new(),
+                call_cancel,
             },
         );
         Ok(SessionId(self.next_stream))
@@ -294,12 +307,15 @@ impl State {
     fn output(
         &mut self,
         output: Result<InvocationOutput, InvocationError>,
+        call_cancel: Option<CancellationToken>,
     ) -> Result<WireOutput, InvocationError> {
         Ok(match output {
             Ok(InvocationOutput::Values(values)) => {
                 WireOutput::Values(values.into_iter().map(TypedValue).collect())
             }
-            Ok(InvocationOutput::Stream(stream)) => WireOutput::Stream(self.producer(stream)?),
+            Ok(InvocationOutput::Stream(stream)) => {
+                WireOutput::Stream(self.producer(stream, call_cancel)?)
+            }
             Err(error) => WireOutput::Error(error),
         })
     }
@@ -315,6 +331,9 @@ impl State {
         let Some(consumer) = self.consumers.get_mut(&id) else {
             return Ok(());
         };
+        if consumer.terminated {
+            return Err(protocol("data after terminal event"));
+        }
         if sequence != consumer.next_sequence {
             return Err(protocol("out-of-order stream item"));
         }
@@ -388,7 +407,7 @@ async fn run(
                                         origin.forwarded.store(true, Ordering::SeqCst);
                                         state.consumers.remove(&origin.id);
                                         WireArgument::ForwardStream(SessionId(origin.id))
-                                    } else { WireArgument::Stream(state.producer(stream)?) }
+                                    } else { WireArgument::Stream(state.producer(stream, None)?) }
                                 }
                             });
                         }
@@ -421,8 +440,8 @@ async fn run(
                     }
                 }
                 Some((id, output)) = invocations.next(), if !invocations.is_empty() => {
-                    state.call_cancel.remove(&id);
-                    let output = state.output(output)?;
+                    let call_cancel = state.call_cancel.remove(&id);
+                    let output = state.output(output, call_cancel)?;
                     state.send(Message::Return { id: SessionId(id), output })?;
                 }
                 Some((id, stream, event)) = productions.next(), if !productions.is_empty() => {
@@ -487,7 +506,7 @@ async fn run(
                         if id.0 > state.next_stream { return Err(protocol("demand for unissued stream")); }
                         if count == 0 { return Err(protocol("empty stream demand")); }
                         let Some(producer) = state.producers.get_mut(&id.0) else { continue };
-                        producer.credit = producer.credit.checked_add(count).ok_or_else(|| protocol("stream credit overflow"))?;
+                        producer.credit = producer.credit.checked_add(count).filter(|credit| *credit <= MAX_WINDOW).ok_or_else(|| protocol("stream credit exceeds the maximum window"))?;
                         // With a production in flight, credit is picked up when it completes.
                         if let Some(stream) = producer.stream.take() {
                             productions.push(produce(id.0, stream, producer.cancel.clone()));
@@ -498,12 +517,12 @@ async fn run(
                     Message::StreamError { id, sequence, error } => state.item(id.0, sequence.0, Err(error))?,
                     Message::StreamCancel { id } => {
                         if id.0 > state.next_stream { return Err(protocol("cancel for unissued stream")); }
-                        if let Some(producer) = state.producers.remove(&id.0) { producer.cancel.cancel(); }
+                        if let Some(producer) = state.producers.remove(&id.0) { producer.cancel(); }
                     }
                     Message::Shutdown => {
                         peer_stopping = true;
                         for token in state.call_cancel.values() { token.cancel(); }
-                        for producer in state.producers.values() { producer.cancel.cancel(); }
+                        for producer in state.producers.values() { producer.cancel(); }
                         state.producers.clear();
                         for (_, consumer) in std::mem::take(&mut state.consumers) {
                             if let Some(reply) = consumer.waiter { let _ = reply.send(Err(lost())); }
@@ -527,6 +546,9 @@ async fn run(
     }
     for (_, token) in state.call_cancel {
         token.cancel();
+    }
+    for (_, producer) in state.producers {
+        producer.cancel();
     }
     actions.close();
     while actions.try_recv().is_ok() {}
@@ -604,6 +626,7 @@ mod tests {
     use super::testing::{pair, pair_with_traffic};
     use super::*;
     use futures::stream;
+    use semantic_rpc_core::interface_protocol::MAX_WINDOW;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
@@ -1057,5 +1080,142 @@ mod tests {
             StreamEvent::Item(Value::Null)
         );
         closes(&wire.session).await;
+    }
+
+    /// Issues `produce` on a hand-driven server session and returns the stream id.
+    async fn produced_stream(wire: &mut Wire) -> SessionId {
+        wire.incoming
+            .send(Ok(Message::Call {
+                id: SessionId(1),
+                export: "test".into(),
+                method: "produce".into(),
+                arguments: vec![],
+            }))
+            .unwrap();
+        let Some(Message::Return {
+            output: WireOutput::Stream(id),
+            ..
+        }) = wire.outgoing.recv().await
+        else {
+            panic!("expected stream return")
+        };
+        id
+    }
+
+    #[tokio::test]
+    async fn credit_beyond_the_maximum_window_closes_session() {
+        let mut wire = wire(Some(fixture()));
+        let id = produced_stream(&mut wire).await;
+        wire.incoming
+            .send(Ok(Message::StreamDemand {
+                id,
+                count: u32::MAX,
+            }))
+            .unwrap();
+        closes(&wire.session).await;
+
+        let mut wire = self::wire(Some(fixture()));
+        let id = produced_stream(&mut wire).await;
+        wire.incoming
+            .send(Ok(Message::StreamDemand {
+                id,
+                count: MAX_WINDOW + 1,
+            }))
+            .unwrap();
+        closes(&wire.session).await;
+    }
+
+    #[tokio::test]
+    async fn credit_up_to_the_maximum_window_is_accepted() {
+        let mut wire = wire(Some(fixture()));
+        let id = produced_stream(&mut wire).await;
+        wire.incoming
+            .send(Ok(Message::StreamDemand {
+                id,
+                count: MAX_WINDOW,
+            }))
+            .unwrap();
+        for sequence in 1..=3 {
+            let Some(Message::StreamItem { sequence: got, .. }) = wire.outgoing.recv().await else {
+                panic!("expected item")
+            };
+            assert_eq!(got, SessionId(sequence));
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), wire.session.closed())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn events_after_a_terminal_event_close_session() {
+        let mut wire = wire(None);
+        let session = wire.session.clone();
+        let call_task = tokio::spawn(async move {
+            session
+                .invoke(call("produce", vec![]), InvocationContext::default())
+                .await
+        });
+        let Some(Message::Call { id: call_id, .. }) = wire.outgoing.recv().await else {
+            panic!("expected call")
+        };
+        wire.incoming
+            .send(Ok(Message::Return {
+                id: call_id,
+                output: WireOutput::Stream(SessionId(1)),
+            }))
+            .unwrap();
+        let InvocationOutput::Stream(mut stream) = call_task.await.unwrap().unwrap() else {
+            panic!("stream")
+        };
+        let collector = tokio::spawn(async move {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event);
+            }
+            events
+        });
+        let mut sequence = 0;
+        let mut send = |wire: &Wire, id: &SessionId, end: bool| {
+            sequence += 1;
+            let sequence = SessionId(sequence);
+            let id = id.clone();
+            wire.incoming
+                .send(Ok(if end {
+                    Message::StreamEnd {
+                        id,
+                        sequence,
+                        value: None,
+                    }
+                } else {
+                    Message::StreamItem {
+                        id,
+                        sequence,
+                        value: Value::Null,
+                    }
+                }))
+                .unwrap();
+        };
+        // Demands grow 1, 2, 4; the last grant leaves credit after the end.
+        while let Some(Message::StreamDemand { id, count }) = wire.outgoing.recv().await {
+            if count < 3 {
+                for _ in 0..count {
+                    send(&wire, &id, false);
+                }
+            } else {
+                send(&wire, &id, false);
+                send(&wire, &id, true);
+                send(&wire, &id, false);
+                break;
+            }
+        }
+        closes(&wire.session).await;
+        // The violation tears the session down, failing the unfinished stream.
+        let events = collector.await.unwrap();
+        assert_eq!(
+            events.last().unwrap().as_ref().unwrap_err().code,
+            "connection_lost"
+        );
     }
 }

@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const PROFILE: &str = "values-and-top-level-streams-v2";
+/// Upper bound of the credit a stream consumer keeps granted. A producer
+/// treats granting more than this as a protocol violation, which bounds the
+/// events buffered per stream.
+pub const MAX_WINDOW: u32 = 64;
 pub const CODEC: &str = "typed-value-json";
 pub const PLUGIN_SUBPROTOCOL: &str = "semantic.plugin.v1";
 
@@ -91,7 +95,8 @@ pub enum InterfaceMessage {
         id: SessionId,
     },
     /// Grants the producer credit to send `count` more events (items or the
-    /// terminal event). `count` must be positive.
+    /// terminal event). `count` must be positive, and the producer's total
+    /// outstanding credit must not exceed [`MAX_WINDOW`].
     StreamDemand {
         id: SessionId,
         count: u32,
