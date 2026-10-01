@@ -34,6 +34,8 @@ pub struct SemanticApp {
 
 pub struct SemanticAppInner {
     registry: Arc<RpcRegistry<AppRequestContext, AppError>>,
+    /// Descriptor of `registry`, served as the command export.
+    command_descriptor: semantic_rpc_core::interface::ImplementationDescriptor,
     scopes: ScopeManager,
     object_stores: ObjectStoreManager,
     file_service: FileService,
@@ -128,6 +130,16 @@ impl SemanticApp {
         payload: Value,
     ) -> Result<Value, CallError<AppError>> {
         self.inner.registry.call(&ctx, command, payload).await
+    }
+
+    pub(crate) fn registry_arc(&self) -> Arc<RpcRegistry<AppRequestContext, AppError>> {
+        self.inner.registry.clone()
+    }
+
+    pub(crate) fn command_descriptor(
+        &self,
+    ) -> &semantic_rpc_core::interface::ImplementationDescriptor {
+        &self.inner.command_descriptor
     }
 
     /// The registry of all commands exposed by this app.
@@ -390,9 +402,15 @@ impl SemanticAppBuilder {
                 }
             }
         }
+        let command_interface =
+            semantic_rpc::interface::registry::registry_interface(&self.registry);
+        let command_descriptor =
+            semantic_rpc::interface::registry::registry_descriptor(&command_interface)
+                .map_err(crate::plugins::error)?;
         Ok(SemanticApp {
             inner: Arc::new(SemanticAppInner {
                 registry: Arc::new(self.registry),
+                command_descriptor,
                 scopes,
                 object_stores,
                 file_service: FileService::new(self.media_analysis_config),

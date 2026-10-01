@@ -3,24 +3,26 @@
 //! Every registered command becomes one method of the [`COMMAND_EXPORT`]
 //! interface, so unary and streaming commands share one session transport.
 //!
-//! `()` payloads and results have the schema type `Never`, which no value
-//! satisfies; on the wire they are `Null` instead.
+//! The export is deliberately not wrapped in [`ConformingImplementation`]:
+//! the interface is synthesized from command definitions, which may use schema
+//! kinds the validation profile rejects. Payloads and stream items are instead
+//! decoded by the commands' typed `FromValue` implementations, and the
+//! interface only provides the descriptor fingerprint. `()` payloads accept
+//! both `Void` and `Null`.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::future::{Either, select};
 use futures::pin_mut;
 use semantic_data::schema::{
-    AnyType, FunctionParam, FunctionType, InterfaceMethod, InterfaceType, NullType, Type, TypeKind,
+    AnyType, FunctionParam, FunctionType, InterfaceMethod, InterfaceType, Type, TypeKind,
     interface_fingerprint,
 };
-use semantic_data::value::Value;
 use semantic_rpc_core::{CallError, RpcError};
 
 use super::{
-    ConformingImplementation, ImplementationDescriptor, InterfaceImplementation, InterfaceRef,
-    InvocationArgument, InvocationContext, InvocationError, InvocationFuture, InvocationOutput,
-    ValidatedInvocation,
+    ImplementationDescriptor, InterfaceImplementation, InterfaceRef, InvocationArgument,
+    InvocationContext, InvocationError, InvocationFuture, InvocationOutput, ValidatedInvocation,
 };
 use crate::registry::RpcRegistry;
 use crate::stream_command::COMMAND_EXPORT;
@@ -41,7 +43,7 @@ pub fn registry_interface<Ctx, E>(registry: &RpcRegistry<Ctx, E>) -> InterfaceTy
             let definition = command.definition();
             let mut params = vec![FunctionParam {
                 name: Some(PAYLOAD_PARAM.into()),
-                ty: wire_type(&definition.input),
+                ty: definition.input.clone(),
             }];
             if let Some(stream) = &definition.input_stream {
                 params.push(FunctionParam {
@@ -53,7 +55,7 @@ pub fn registry_interface<Ctx, E>(registry: &RpcRegistry<Ctx, E>) -> InterfaceTy
                 name: definition.name.clone(),
                 signature: FunctionType {
                     params,
-                    results: vec![wire_type(&definition.output)],
+                    results: vec![definition.output.clone()],
                     throws: Some(Box::new(Type::new(TypeKind::Any(AnyType)))),
                     async_fn: true,
                 },
@@ -85,29 +87,23 @@ pub fn registry_descriptor(
 
 /// Serve `registry` as the [`COMMAND_EXPORT`] export.
 ///
-/// `interface` and `descriptor` must come from [`registry_interface`] and
-/// [`registry_descriptor`] for the same registry; they are computed once by
-/// the caller because they are identical for every session.
+/// `descriptor` must come from [`registry_descriptor`] for the same registry;
+/// it is computed once by the caller because it is identical for every
+/// session.
 pub fn registry_implementation<Ctx, E>(
     registry: Arc<RpcRegistry<Ctx, E>>,
     context: Arc<Ctx>,
-    interface: InterfaceType,
     descriptor: ImplementationDescriptor,
-) -> Result<Arc<dyn InterfaceImplementation>, InvocationError>
+) -> Arc<dyn InterfaceImplementation>
 where
     Ctx: Send + Sync + 'static,
     E: Into<RpcError> + Send + 'static,
 {
-    let inner = Arc::new(RegistryImplementation {
+    Arc::new(RegistryImplementation {
         registry,
         context,
         descriptors: vec![descriptor],
-    });
-    Ok(Arc::new(ConformingImplementation::new(
-        inner,
-        BTreeMap::from([(COMMAND_EXPORT.to_owned(), interface)]),
-        BTreeMap::new(),
-    )?))
+    })
 }
 
 struct RegistryImplementation<Ctx, E> {
@@ -149,11 +145,15 @@ where
                 return Err(invalid_argument("incorrect argument count"));
             }
 
+            if self.registry.get(&call.method).is_none() {
+                return Err(invocation_error::<E>(CallError::UnknownCommand(
+                    call.method,
+                )));
+            }
             if let Some(command) = self.registry.stream(&call.method) {
                 return command
                     .invoke(&self.context, payload, input, context.cancellation)
                     .await
-                    .map(wire_output)
                     .map_err(invocation_error);
             }
             if input.is_some() {
@@ -164,7 +164,7 @@ where
             pin_mut!(work, cancelled);
             match select(work, cancelled).await {
                 Either::Left((result, _)) => result
-                    .map(|value| InvocationOutput::Values(vec![wire_value(value)]))
+                    .map(|value| InvocationOutput::Values(vec![value]))
                     .map_err(invocation_error),
                 Either::Right(_) => Err(InvocationError::new("cancelled", "call cancelled")),
             }
@@ -172,36 +172,20 @@ where
     }
 }
 
-/// `Never` has no values, so `()` is `Null` on the wire.
-fn wire_type(ty: &Type) -> Type {
-    match ty.kind {
-        TypeKind::Never(_) => Type::new(TypeKind::Null(NullType)),
-        _ => ty.clone(),
-    }
-}
-
-fn wire_value(value: Value) -> Value {
-    match value {
-        Value::Void => Value::Null,
-        value => value,
-    }
-}
-
-fn wire_output(output: InvocationOutput) -> InvocationOutput {
-    match output {
-        InvocationOutput::Values(values) => {
-            InvocationOutput::Values(values.into_iter().map(wire_value).collect())
-        }
-        stream => stream,
-    }
-}
-
 fn invalid_argument(message: &str) -> InvocationError {
     InvocationError::new("invalid_argument", message)
 }
 
+/// Undecodable payloads are `invalid_argument`, unknown commands
+/// `unknown_command`; command errors keep their code and data.
 fn invocation_error<E: Into<RpcError>>(error: CallError<E>) -> InvocationError {
-    let error = RpcError::from(error);
+    let error = match error {
+        CallError::InvalidPayload(mut error) => {
+            error.code = "invalid_argument".into();
+            error
+        }
+        error => RpcError::from(error),
+    };
     InvocationError {
         code: error.code,
         message: error.message,
@@ -217,7 +201,7 @@ mod tests {
 
     use futures::future::BoxFuture;
     use futures::{StreamExt, stream};
-    use semantic_data::value::StreamOf;
+    use semantic_data::value::{StreamOf, Value};
     use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
 
     use super::*;
@@ -432,9 +416,7 @@ mod tests {
             .unwrap();
         let interface = registry_interface(&registry);
         let descriptor = registry_descriptor(&interface).unwrap();
-        let implementation =
-            registry_implementation(Arc::new(registry), Arc::new(()), interface, descriptor)
-                .unwrap();
+        let implementation = registry_implementation(Arc::new(registry), Arc::new(()), descriptor);
         let (client, server) = pair(implementation);
         // The server session lives as long as the client keeps it connected.
         std::mem::forget(server);
@@ -494,8 +476,6 @@ mod tests {
         assert_eq!(sum.params[1].name.as_deref(), Some(INPUT_PARAM));
         let unit = &interface.methods[2].signature;
         assert_eq!(unit.params.len(), 1);
-        assert!(matches!(unit.params[0].ty.kind, TypeKind::Null(_)));
-        assert!(matches!(unit.results[0].kind, TypeKind::Null(_)));
 
         let first = registry_descriptor(&interface).unwrap();
         assert_eq!(first, registry_descriptor(&interface).unwrap());
@@ -516,14 +496,16 @@ mod tests {
         };
         assert_eq!(values, vec![Value::U32(42)]);
 
-        let InvocationOutput::Values(values) =
-            invoke(&fixture, "test.unit", vec![payload(Value::Null)])
-                .await
-                .unwrap()
-        else {
-            panic!("values")
-        };
-        assert_eq!(values, vec![Value::Null]);
+        for unit_payload in [Value::Null, Value::Void] {
+            let InvocationOutput::Values(values) =
+                invoke(&fixture, "test.unit", vec![payload(unit_payload)])
+                    .await
+                    .unwrap()
+            else {
+                panic!("values")
+            };
+            assert_eq!(values, vec![Value::Void]);
+        }
 
         let error = invoke(&fixture, "test.fail", vec![payload(Value::Null)])
             .await
@@ -622,7 +604,7 @@ mod tests {
             .await
             .err()
             .unwrap();
-        assert_eq!(error.code, "invalid_argument");
+        assert_eq!(error.code, "unknown_command");
 
         let error = invoke(
             &fixture,
@@ -638,6 +620,19 @@ mod tests {
             .await
             .err()
             .unwrap();
+        assert_eq!(error.code, "invalid_argument");
+
+        let error = invoke(&fixture, "test.add", vec![]).await.err().unwrap();
+        assert_eq!(error.code, "invalid_argument");
+
+        let error = invoke(
+            &fixture,
+            "test.add",
+            vec![payload(Value::U32(1)), payload(Value::U32(1))],
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(error.code, "invalid_argument");
 
         let mut wrong_export = call("test.add", vec![payload(Value::U32(1))]);

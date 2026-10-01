@@ -1353,6 +1353,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_implementation_serves_builtin_and_streaming_commands() {
+        use semantic_rpc::interface::{
+            InvocationArgument, InvocationContext, InvocationOutput, ValidatedInvocation,
+        };
+
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), default_db)
+            .register_builtin_commands()
+            .unwrap()
+            .register_stream_command(StreamingEcho)
+            .unwrap()
+            .build()
+            .unwrap();
+        let implementation =
+            crate::interface::command_implementation(ctx(&app, Principal::system())).unwrap();
+        let descriptors = implementation.descriptors();
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(
+            descriptors[0].export,
+            semantic_rpc::stream_command::COMMAND_EXPORT
+        );
+        assert_eq!(descriptors[0], *app.command_descriptor());
+
+        let invoke = |method: &str, payload: Value| {
+            implementation.invoke(
+                ValidatedInvocation {
+                    export: semantic_rpc::stream_command::COMMAND_EXPORT.into(),
+                    method: method.into(),
+                    arguments: vec![InvocationArgument::Value(payload)],
+                },
+                InvocationContext::default(),
+            )
+        };
+        let InvocationOutput::Values(values) =
+            invoke("semantic.scope.current", Value::Null).await.unwrap()
+        else {
+            panic!("expected values");
+        };
+        assert!(matches!(values.as_slice(), [Value::Object(_)]));
+        // Streaming commands also need their input stream.
+        let error = invoke("test.streaming.echo", Value::String("x".into()))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "invalid_argument");
+    }
+
+    #[tokio::test]
     async fn command_get_rejects_unknown_command() {
         let app = introspection_app();
         let payload = Value::Object(Object::from_iter([(

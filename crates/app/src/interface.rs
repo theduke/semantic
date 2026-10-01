@@ -42,6 +42,19 @@ pub fn implementation(
     )?))
 }
 
+/// Serve every registered command, unary and streaming, as the
+/// [`semantic_rpc::stream_command::COMMAND_EXPORT`] export.
+pub fn command_implementation(
+    context: AppRequestContext,
+) -> Result<Arc<dyn InterfaceImplementation>, InvocationError> {
+    let app = context.app.clone();
+    Ok(semantic_rpc::interface::registry::registry_implementation(
+        app.registry_arc(),
+        Arc::new(context),
+        app.command_descriptor().clone(),
+    ))
+}
+
 struct ApplicationInterface {
     context: AppRequestContext,
     descriptors: Vec<ImplementationDescriptor>,
