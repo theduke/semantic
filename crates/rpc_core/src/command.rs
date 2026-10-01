@@ -1,26 +1,78 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use semantic_data::schema::Type;
+use semantic_data::schema::{StreamType, Type, TypeKind};
 use semantic_data::value::{FromValue, IntoValue, SemanticType, Value};
 
-use crate::error::RpcError;
+use crate::error::{CommandDefError, RpcError};
 
 /// Typed definition of a command: its name plus payload and output types.
+///
+/// Unary commands have no `input_stream` and a non-stream `output`. Streams
+/// only appear at the top level: as `input_stream` (client to server) and as
+/// a [`TypeKind::Stream`] `output` (server to client).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandDef {
     pub name: String,
+    /// The request payload. Never a stream.
     pub input: Type,
+    /// A [`TypeKind::Stream`] sent by the client after the payload, if any.
+    pub input_stream: Option<Type>,
+    /// The response; a [`TypeKind::Stream`] for server-streaming commands.
     pub output: Type,
 }
 
 impl CommandDef {
+    /// A definition without an input stream.
     pub fn new(name: impl Into<String>, input: Type, output: Type) -> Self {
         Self {
             name: name.into(),
             input,
+            input_stream: None,
             output,
         }
+    }
+
+    /// Declare a client-to-server stream; `stream` must be a stream type.
+    pub fn with_input_stream(mut self, stream: Type) -> Self {
+        self.input_stream = Some(stream);
+        self
+    }
+
+    /// The client-to-server stream, if declared as a stream type.
+    pub fn input_stream_type(&self) -> Option<&StreamType> {
+        self.input_stream.as_ref().and_then(stream_type)
+    }
+
+    /// The server-to-client stream, if the output is a stream type.
+    pub fn output_stream_type(&self) -> Option<&StreamType> {
+        stream_type(&self.output)
+    }
+
+    /// Whether the command streams in either direction.
+    pub fn is_streaming(&self) -> bool {
+        self.input_stream.is_some() || self.output_stream_type().is_some()
+    }
+
+    /// Check the top-level stream placement.
+    ///
+    /// Nested streams and referenced types are checked by the interface
+    /// validation profile, which has the type definitions at hand.
+    pub fn validate(&self) -> Result<(), CommandDefError> {
+        if stream_type(&self.input).is_some() {
+            return Err(CommandDefError::StreamInput(self.name.clone()));
+        }
+        if self.input_stream.is_some() && self.input_stream_type().is_none() {
+            return Err(CommandDefError::InvalidInputStream(self.name.clone()));
+        }
+        Ok(())
+    }
+}
+
+fn stream_type(ty: &Type) -> Option<&StreamType> {
+    match &ty.kind {
+        TypeKind::Stream(stream) => Some(stream),
+        _ => None,
     }
 }
 
@@ -130,5 +182,79 @@ where
                 .map_err(|err| CallError::Command(err.into()))?;
             Ok(output.into_value())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_data::value::StreamOf;
+
+    use super::*;
+
+    struct Unary;
+
+    impl RpcCommandSpec for Unary {
+        type Payload = String;
+        type Output = Vec<u32>;
+        type Error = RpcError;
+
+        const NAME: &'static str = "test.unary";
+    }
+
+    #[test]
+    fn derived_definition_is_unary() {
+        let definition = Unary.definition();
+        assert_eq!(definition.name, "test.unary");
+        assert_eq!(definition.input, String::semantic_type());
+        assert_eq!(definition.input_stream, None);
+        assert_eq!(definition.output, Vec::<u32>::semantic_type());
+        assert!(!definition.is_streaming());
+        assert_eq!(definition.validate(), Ok(()));
+    }
+
+    #[test]
+    fn streaming_definition_exposes_streams() {
+        let definition = CommandDef::new(
+            "test.stream",
+            String::semantic_type(),
+            StreamOf::<u32, bool>::semantic_type(),
+        )
+        .with_input_stream(StreamOf::<String>::semantic_type());
+
+        assert!(definition.is_streaming());
+        assert_eq!(definition.validate(), Ok(()));
+        let input = definition.input_stream_type().unwrap();
+        assert_eq!(*input.element, String::semantic_type());
+        assert_eq!(input.end, None);
+        let output = definition.output_stream_type().unwrap();
+        assert_eq!(*output.element, u32::semantic_type());
+        assert_eq!(output.end, Some(Box::new(bool::semantic_type())));
+    }
+
+    #[test]
+    fn validate_rejects_misplaced_streams() {
+        let stream_input = CommandDef::new(
+            "test.input",
+            StreamOf::<String>::semantic_type(),
+            String::semantic_type(),
+        );
+        assert_eq!(
+            stream_input.validate(),
+            Err(CommandDefError::StreamInput("test.input".into()))
+        );
+
+        let value_input_stream = CommandDef::new(
+            "test.input_stream",
+            String::semantic_type(),
+            String::semantic_type(),
+        )
+        .with_input_stream(String::semantic_type());
+        assert!(value_input_stream.is_streaming());
+        assert_eq!(
+            value_input_stream.validate(),
+            Err(CommandDefError::InvalidInputStream(
+                "test.input_stream".into()
+            ))
+        );
     }
 }

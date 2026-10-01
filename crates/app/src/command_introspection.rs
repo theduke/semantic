@@ -44,6 +44,8 @@ struct ListOutput {
 struct CommandEntry {
     name: String,
     input: Option<String>,
+    /// The client-to-server stream type, for client-streaming commands.
+    input_stream: Option<String>,
     output: Option<String>,
 }
 
@@ -57,6 +59,9 @@ struct GetOutput {
     format: DocumentFormat,
     name: String,
     input: String,
+    /// The client-to-server stream type, for client-streaming commands.
+    input_stream: Option<String>,
+    /// A stream type for server-streaming commands.
     output: String,
 }
 
@@ -83,17 +88,19 @@ impl RpcCommand<AppRequestContext> for List {
                 .commands()
                 .map(|command| {
                     let definition = command.definition();
-                    let (input, output) = if schema {
+                    let (input, input_stream, output) = if schema {
                         (
                             Some(encode_type(&definition.input)?),
+                            encode_input_stream(definition)?,
                             Some(encode_type(&definition.output)?),
                         )
                     } else {
-                        (None, None)
+                        (None, None, None)
                     };
                     Ok(CommandEntry {
                         name: definition.name.clone(),
                         input,
+                        input_stream,
                         output,
                     })
                 })
@@ -131,10 +138,19 @@ impl RpcCommand<AppRequestContext> for Get {
                 format: DocumentFormat::FacetJson,
                 name: definition.name.clone(),
                 input: encode_type(&definition.input)?,
+                input_stream: encode_input_stream(definition)?,
                 output: encode_type(&definition.output)?,
             })
         })
     }
+}
+
+fn encode_input_stream(definition: &CommandDef) -> Result<Option<String>, AppError> {
+    definition
+        .input_stream
+        .as_ref()
+        .map(encode_type)
+        .transpose()
 }
 
 fn encode_type(ty: &Type) -> Result<String, AppError> {

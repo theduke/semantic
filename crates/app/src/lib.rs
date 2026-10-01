@@ -1265,7 +1265,91 @@ mod tests {
             .definition()
             .clone();
         assert_eq!(decode_type(&object, "input"), definition.input);
+        assert_eq!(object.get("input_stream"), None);
         assert_eq!(decode_type(&object, "output"), definition.output);
+    }
+
+    struct StreamingEcho;
+
+    impl semantic_rpc_core::RpcCommandSpec for StreamingEcho {
+        type Payload = Value;
+        type Output = Value;
+        type Error = AppError;
+        const NAME: &'static str = "test.streaming.echo";
+
+        fn definition(&self) -> semantic_rpc_core::CommandDef {
+            use semantic_data::value::{SemanticType, StreamOf};
+
+            semantic_rpc_core::CommandDef::new(
+                Self::NAME,
+                String::semantic_type(),
+                StreamOf::<String, u64>::semantic_type(),
+            )
+            .with_input_stream(StreamOf::<String>::semantic_type())
+        }
+    }
+
+    impl semantic_rpc_core::RpcCommand<AppRequestContext> for StreamingEcho {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a AppRequestContext,
+            payload: Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+        {
+            Box::pin(async move { Ok(payload) })
+        }
+    }
+
+    #[tokio::test]
+    async fn command_introspection_exposes_streams() {
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), default_db)
+            .register_builtin_commands()
+            .unwrap()
+            .register_command(StreamingEcho)
+            .unwrap()
+            .build()
+            .unwrap();
+        let definition = app
+            .registry()
+            .get("test.streaming.echo")
+            .unwrap()
+            .definition()
+            .clone();
+
+        let payload = Value::Object(Object::from_iter([(
+            "name".to_string(),
+            Value::String("test.streaming.echo".to_string()),
+        )]));
+        let object = call_ok_object(&app, "semantic.command.get", payload).await;
+        assert_eq!(
+            Some(decode_type(&object, "input_stream")),
+            definition.input_stream
+        );
+        assert_eq!(decode_type(&object, "output"), definition.output);
+
+        let payload = Value::Object(Object::from_iter([(
+            "schema".to_string(),
+            Value::Bool(true),
+        )]));
+        let object = call_ok_object(&app, "semantic.command.list", payload).await;
+        let Some(Value::List(commands)) = object.get("commands") else {
+            panic!("expected commands list");
+        };
+        for command in commands {
+            let Value::Object(command) = command else {
+                panic!("expected command object");
+            };
+            if command.get("name").and_then(Value::as_str) == Some("test.streaming.echo") {
+                assert_eq!(
+                    Some(decode_type(command, "input_stream")),
+                    definition.input_stream
+                );
+            } else {
+                assert_eq!(command.get("input_stream"), None);
+            }
+        }
     }
 
     #[tokio::test]

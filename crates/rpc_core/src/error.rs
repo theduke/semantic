@@ -71,6 +71,17 @@ impl From<&str> for RpcError {
 pub enum RegisterError {
     #[error("duplicate RPC command '{0}'")]
     DuplicateCommand(String),
+    #[error(transparent)]
+    InvalidDefinition(#[from] CommandDefError),
+}
+
+/// A [`CommandDef`](crate::CommandDef) with misplaced streams.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CommandDefError {
+    #[error("RPC command '{0}' input must not be a stream; declare an input stream instead")]
+    StreamInput(String),
+    #[error("RPC command '{0}' input stream must be a stream type")]
+    InvalidInputStream(String),
 }
 
 #[derive(Debug, thiserror::Error)]

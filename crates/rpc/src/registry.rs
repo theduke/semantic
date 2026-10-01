@@ -25,11 +25,13 @@ impl<Ctx, E> RpcRegistry<Ctx, E> {
         self.register_dyn(Box::new(CommandAdapter::new(command)))
     }
 
-    /// Register an erased handler, rejecting duplicate command names.
+    /// Register an erased handler, rejecting duplicate command names and
+    /// definitions with misplaced streams.
     pub fn register_dyn(
         &mut self,
         command: Box<dyn DynCommand<Ctx, E>>,
     ) -> Result<(), RegisterError> {
+        command.definition().validate()?;
         let name = command.name().to_owned();
         if self.commands.contains_key(&name) {
             return Err(RegisterError::DuplicateCommand(name));
@@ -90,9 +92,12 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use semantic_data::value::Value;
+    use semantic_data::value::{SemanticType, StreamOf, Value};
 
-    use semantic_rpc_core::{CallError, RpcCommand, RpcCommandSpec, RpcError, RpcResult};
+    use semantic_rpc_core::{
+        CallError, CommandDef, CommandDefError, RegisterError, RpcCommand, RpcCommandSpec,
+        RpcError, RpcResult,
+    };
 
     use super::RpcRegistry;
 
@@ -165,6 +170,48 @@ mod tests {
         let names: Vec<_> = registry.commands().map(|command| command.name()).collect();
 
         assert_eq!(names, ["test.echo", "test.fail"]);
+    }
+
+    struct StreamInputCommand;
+
+    impl RpcCommandSpec for StreamInputCommand {
+        type Payload = Value;
+        type Output = Value;
+        type Error = RpcError;
+
+        const NAME: &'static str = "test.stream_input";
+
+        fn definition(&self) -> CommandDef {
+            CommandDef::new(
+                Self::NAME,
+                StreamOf::<Value>::semantic_type(),
+                Value::semantic_type(),
+            )
+        }
+    }
+
+    impl RpcCommand<()> for StreamInputCommand {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a (),
+            payload: Self::Payload,
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send + 'a>> {
+            Box::pin(async move { Ok(payload) })
+        }
+    }
+
+    #[test]
+    fn registry_rejects_misplaced_streams() {
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+
+        let result = registry.register(StreamInputCommand);
+
+        assert!(matches!(
+            result,
+            Err(RegisterError::InvalidDefinition(CommandDefError::StreamInput(name)))
+                if name == "test.stream_input"
+        ));
+        assert!(registry.get("test.stream_input").is_none());
     }
 
     #[tokio::test]
