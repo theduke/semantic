@@ -21,6 +21,9 @@ use semantic_rpc_core::command::RpcCommandSpec;
 use semantic_rpc_core::error::RpcClientError;
 use semantic_rpc_core::protocol::{RpcRequest, RpcResponse, RpcResult};
 
+#[cfg(feature = "client")]
+use crate::stream_command::{COMMAND_EXPORT, InputShape, OutputShape, RpcStreamCommandSpec};
+
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "client")]
@@ -171,6 +174,34 @@ impl RpcClient {
             self.invoke_value(command, payload)
         })
         .await
+    }
+
+    /// Invoke a streaming command through the interface session.
+    ///
+    /// `input` is the live client-to-server stream (or `()` for commands
+    /// without one). Failures reported by the server surface as
+    /// [`RpcClientError::Remote`].
+    pub async fn invoke_stream<C>(
+        &self,
+        payload: C::Payload,
+        input: <C::Input as InputShape>::Live,
+    ) -> std::result::Result<<C::Output as OutputShape>::Live, RpcClientError>
+    where
+        C: RpcStreamCommandSpec,
+    {
+        let mut arguments = vec![crate::interface::InvocationArgument::Value(
+            payload.into_value(),
+        )];
+        arguments.extend(C::Input::into_argument(input));
+        let output = self
+            .invoke_interface(crate::interface::ValidatedInvocation {
+                export: COMMAND_EXPORT.to_owned(),
+                method: C::NAME.to_owned(),
+                arguments,
+            })
+            .await
+            .map_err(|err| RpcClientError::Remote(err.code, err.message))?;
+        C::Output::from_output(output).map_err(|err| RpcClientError::Decode(err.message))
     }
 
     pub async fn upload_file(

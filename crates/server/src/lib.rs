@@ -514,6 +514,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn typed_invoke_stream_covers_each_stream_shape() {
+        use semantic_rpc::stream_command::{TypedEvent, TypedStream};
+        let fixture = InterfaceFixture::start(|server| server, "").await;
+
+        let stream = fixture
+            .client
+            .invoke_stream::<StreamCount>(3, ())
+            .await
+            .unwrap();
+        let events: Vec<_> = stream.collect().await;
+        assert_eq!(
+            events,
+            vec![
+                Ok(TypedEvent::Item(0)),
+                Ok(TypedEvent::Item(1)),
+                Ok(TypedEvent::Item(2)),
+                Ok(TypedEvent::End("done".to_owned())),
+            ]
+        );
+
+        let input = TypedStream::<u32>::from_events(futures_util::stream::iter([
+            Ok(TypedEvent::Item(20)),
+            Ok(TypedEvent::Item(22)),
+            Ok(TypedEvent::End(())),
+        ]));
+        let total = fixture
+            .client
+            .invoke_stream::<StreamSum>((), input)
+            .await
+            .unwrap();
+        assert_eq!(total, 42);
+
+        let input = TypedStream::<String, u64>::from_events(futures_util::stream::iter([
+            Ok(TypedEvent::Item("x".to_owned())),
+            Ok(TypedEvent::End(5)),
+        ]));
+        let echoed = fixture
+            .client
+            .invoke_stream::<StreamEcho>((), input)
+            .await
+            .unwrap();
+        let events: Vec<_> = echoed.collect().await;
+        assert_eq!(
+            events,
+            vec![Ok(TypedEvent::Item("x".to_owned())), Ok(TypedEvent::End(5)),]
+        );
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
+    async fn typed_invoke_stream_reports_remote_errors() {
+        struct Missing;
+        impl semantic_rpc::stream_command::RpcStreamCommandSpec for Missing {
+            type Payload = ();
+            type Input = ();
+            type Output = semantic_data::value::StreamOf<u32>;
+            type Error = semantic_app::AppError;
+
+            const NAME: &'static str = "test.stream.missing";
+        }
+
+        let fixture = InterfaceFixture::start(|server| server, "").await;
+        let error = match fixture.client.invoke_stream::<Missing>((), ()).await {
+            Ok(_) => panic!("unknown command must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, semantic_rpc_core::RpcClientError::Remote(code, _) if code == "unknown_command"),
+            "{error:?}"
+        );
+        fixture.stop().await;
+    }
+
+    #[tokio::test]
     async fn command_export_reports_unknown_commands_and_invalid_payloads() {
         let fixture = InterfaceFixture::start(|server| server, "").await;
         let error = fixture
