@@ -6,11 +6,18 @@ use semantic_rpc_core::interface_protocol::{
     InterfaceMessage as Message, SessionId, WireArgument, WireOutput,
 };
 use std::sync::atomic::Ordering;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 use tokio::sync::{mpsc, oneshot};
 
 type Reply = oneshot::Sender<Result<InvocationOutput, InvocationError>>;
 type ItemReply = oneshot::Sender<Result<StreamEvent, InvocationError>>;
+
+/// Upper bound of the credit a consumer keeps granted, which bounds the
+/// events buffered per stream.
+const MAX_WINDOW: u32 = 64;
 
 enum Action {
     Call(ValidatedInvocation, InvocationContext, Reply),
@@ -153,14 +160,79 @@ impl Drop for RemoteStream {
     }
 }
 
+/// Receiving end of a peer stream.
+///
+/// Credit starts at one event, so an untouched stream never causes a
+/// production, and the window doubles with every grant up to [`MAX_WINDOW`].
 struct Consumer {
-    sequence: u64,
-    ready: Option<ItemReply>,
+    /// Sequence of the next event to arrive; sequences start at 1.
+    next_sequence: u64,
+    buffered: VecDeque<Result<StreamEvent, InvocationError>>,
+    /// Granted but not yet received events.
+    credit: u32,
+    window: u32,
+    waiter: Option<ItemReply>,
+    /// The terminal event has arrived.
+    terminated: bool,
 }
+
+impl Consumer {
+    fn new() -> Self {
+        Self {
+            next_sequence: 1,
+            buffered: VecDeque::new(),
+            credit: 0,
+            window: 1,
+            waiter: None,
+            terminated: false,
+        }
+    }
+
+    /// Whether the stream is untouched beyond what the consumer received, so
+    /// handing it to the peer that produced it loses nothing.
+    fn is_idle(&self) -> bool {
+        self.credit == 0 && self.buffered.is_empty()
+    }
+
+    /// Credit to grant now, topping up to the window once less than half of
+    /// it is left so grants are batched.
+    fn grant(&mut self) -> Option<u32> {
+        let outstanding = self.credit as usize + self.buffered.len();
+        if self.terminated || outstanding >= self.window.div_ceil(2) as usize {
+            return None;
+        }
+        let count = self.window - outstanding as u32;
+        self.credit += count;
+        self.window = (self.window * 2).min(MAX_WINDOW);
+        Some(count)
+    }
+}
+
+/// Sending end of a stream this peer owns.
 struct Producer {
+    /// Sequence of the last event sent.
     sequence: u64,
+    /// `None` while a production is in flight.
     stream: Option<OwnedValueStream>,
+    /// Events the consumer allows beyond those already sent.
+    credit: u32,
     cancel: CancellationToken,
+}
+
+type Production = BoxFuture<
+    'static,
+    (
+        u64,
+        OwnedValueStream,
+        Option<Result<StreamEvent, InvocationError>>,
+    ),
+>;
+
+fn produce(id: u64, mut stream: OwnedValueStream, cancel: CancellationToken) -> Production {
+    Box::pin(async move {
+        let event = tokio::select! { item = stream.next() => item, _ = cancel.cancelled() => None };
+        (id, stream, event)
+    })
 }
 
 struct State {
@@ -192,6 +264,7 @@ impl State {
             Producer {
                 sequence: 0,
                 stream: Some(stream),
+                credit: 0,
                 cancel: CancellationToken::new(),
             },
         );
@@ -202,13 +275,7 @@ impl State {
             return Err(protocol("stream reference was reused or skipped"));
         }
         self.peer_stream = id.0;
-        self.consumers.insert(
-            id.0,
-            Consumer {
-                sequence: 0,
-                ready: None,
-            },
-        );
+        self.consumers.insert(id.0, Consumer::new());
         let origin = StreamOrigin {
             session: self.identity.clone(),
             id: id.0,
@@ -248,16 +315,22 @@ impl State {
         let Some(consumer) = self.consumers.get_mut(&id) else {
             return Ok(());
         };
-        if sequence != consumer.sequence {
+        if sequence != consumer.next_sequence {
             return Err(protocol("out-of-order stream item"));
         }
-        let ready = consumer
-            .ready
-            .take()
-            .ok_or_else(|| protocol("unsolicited stream item"))?;
-        let terminal = !matches!(item, Ok(StreamEvent::Item(_)));
-        let _ = ready.send(item);
-        if terminal {
+        if consumer.credit == 0 {
+            return Err(protocol("unsolicited stream item"));
+        }
+        consumer.credit -= 1;
+        consumer.next_sequence += 1;
+        consumer.terminated = !matches!(item, Ok(StreamEvent::Item(_)));
+        match consumer.waiter.take() {
+            Some(waiter) => {
+                let _ = waiter.send(item);
+            }
+            None => consumer.buffered.push_back(item),
+        }
+        if consumer.terminated && consumer.buffered.is_empty() {
             self.consumers.remove(&id);
         }
         Ok(())
@@ -288,16 +361,7 @@ async fn run(
     let mut invocations: FuturesUnordered<
         BoxFuture<'static, (u64, Result<InvocationOutput, InvocationError>)>,
     > = FuturesUnordered::new();
-    let mut productions: FuturesUnordered<
-        BoxFuture<
-            'static,
-            (
-                u64,
-                OwnedValueStream,
-                Option<Result<StreamEvent, InvocationError>>,
-            ),
-        >,
-    > = FuturesUnordered::new();
+    let mut productions: FuturesUnordered<Production> = FuturesUnordered::new();
     let mut cancellations: FuturesUnordered<BoxFuture<'static, Option<u64>>> =
         FuturesUnordered::new();
     let mut stop = None;
@@ -320,7 +384,7 @@ async fn run(
                             arguments.push(match argument {
                                 InvocationArgument::Value(value) => WireArgument::Value(TypedValue(value)),
                                 InvocationArgument::Stream(stream) => {
-                                    if let Some(origin) = stream.origin.as_ref().filter(|origin| Arc::ptr_eq(&origin.session, &state.identity) && !origin.pending.load(Ordering::SeqCst)) {
+                                    if let Some(origin) = stream.origin.as_ref().filter(|origin| Arc::ptr_eq(&origin.session, &state.identity) && !origin.pending.load(Ordering::SeqCst) && state.consumers.get(&origin.id).is_some_and(Consumer::is_idle)) {
                                         origin.forwarded.store(true, Ordering::SeqCst);
                                         state.consumers.remove(&origin.id);
                                         WireArgument::ForwardStream(SessionId(origin.id))
@@ -336,11 +400,14 @@ async fn run(
                     }
                     Action::Demand(id, ready) => {
                         let Some(consumer) = state.consumers.get_mut(&id) else { let _ = ready.send(Err(lost())); continue };
-                        if consumer.ready.is_some() { return Err(protocol("duplicate outstanding demand")); }
-                        consumer.sequence = consumer.sequence.checked_add(1).ok_or_else(|| protocol("stream sequence exhausted"))?;
-                        let sequence = consumer.sequence;
-                        consumer.ready = Some(ready);
-                        state.send(Message::StreamDemand { id: SessionId(id), sequence: SessionId(sequence) })?;
+                        if consumer.waiter.is_some() { return Err(protocol("duplicate outstanding demand")); }
+                        match consumer.buffered.pop_front() {
+                            Some(event) => { let _ = ready.send(event); }
+                            None => consumer.waiter = Some(ready),
+                        }
+                        let grant = consumer.grant();
+                        if consumer.terminated && consumer.buffered.is_empty() { state.consumers.remove(&id); }
+                        if let Some(count) = grant { state.send(Message::StreamDemand { id: SessionId(id), count })?; }
                     }
                     Action::DropStream(id) => { if state.consumers.remove(&id).is_some() { state.send(Message::StreamCancel { id: SessionId(id) })?; } }
                     Action::Stop(reply) => { stop = Some(reply); state.send(Message::Shutdown)?; }
@@ -360,16 +427,23 @@ async fn run(
                 }
                 Some((id, stream, event)) = productions.next(), if !productions.is_empty() => {
                     let Some(producer) = state.producers.get_mut(&id) else { continue };
+                    producer.sequence += 1;
+                    producer.credit -= 1;
                     let sequence = SessionId(producer.sequence);
                     let event = event.unwrap_or_else(|| Err(protocol("producer omitted terminal event")));
                     let terminal = !matches!(event, Ok(StreamEvent::Item(_)));
-                    producer.stream = Some(stream);
+                    if terminal {
+                        state.producers.remove(&id);
+                    } else if producer.credit > 0 {
+                        productions.push(produce(id, stream, producer.cancel.clone()));
+                    } else {
+                        producer.stream = Some(stream);
+                    }
                     let message = match event {
                         Ok(StreamEvent::Item(value)) => Message::StreamItem { id: SessionId(id), sequence, value },
                         Ok(StreamEvent::End(value)) => Message::StreamEnd { id: SessionId(id), sequence, value },
                         Err(error) => Message::StreamError { id: SessionId(id), sequence, error },
                     };
-                    if terminal { state.producers.remove(&id); }
                     state.send(message)?;
                 }
                 message = incoming.recv() => match message.ok_or_else(lost)?? {
@@ -386,6 +460,7 @@ async fn run(
                             WireArgument::Stream(id) => InvocationArgument::Stream(state.consumer(id)?),
                             WireArgument::ForwardStream(id) => {
                                 let producer = state.producers.remove(&id.0).ok_or_else(|| protocol("forward of unknown or retired stream"))?;
+                                if producer.credit != 0 { return Err(protocol("forward with outstanding credit")); }
                                 InvocationArgument::Stream(producer.stream.ok_or_else(|| protocol("forward during outstanding demand"))?)
                             }
                         }); }
@@ -408,17 +483,15 @@ async fn run(
                         if id.0 > state.peer_call { return Err(protocol("cancel for unissued call")); }
                         if let Some(token) = state.call_cancel.get(&id.0) { token.cancel(); }
                     }
-                    Message::StreamDemand { id, sequence } => {
+                    Message::StreamDemand { id, count } => {
                         if id.0 > state.next_stream { return Err(protocol("demand for unissued stream")); }
+                        if count == 0 { return Err(protocol("empty stream demand")); }
                         let Some(producer) = state.producers.get_mut(&id.0) else { continue };
-                        if producer.sequence.checked_add(1) != Some(sequence.0) { return Err(protocol("invalid demand sequence")); }
-                        let mut stream = producer.stream.take().ok_or_else(|| protocol("demand before prior handoff"))?;
-                        producer.sequence = sequence.0;
-                        let cancel = producer.cancel.clone();
-                        productions.push(Box::pin(async move {
-                            let event = tokio::select! { item = stream.next() => item, _ = cancel.cancelled() => None };
-                            (id.0, stream, event)
-                        }));
+                        producer.credit = producer.credit.checked_add(count).ok_or_else(|| protocol("stream credit overflow"))?;
+                        // With a production in flight, credit is picked up when it completes.
+                        if let Some(stream) = producer.stream.take() {
+                            productions.push(produce(id.0, stream, producer.cancel.clone()));
+                        }
                     }
                     Message::StreamItem { id, sequence, value } => state.item(id.0, sequence.0, Ok(StreamEvent::Item(value)))?,
                     Message::StreamEnd { id, sequence, value } => state.item(id.0, sequence.0, Ok(StreamEvent::End(value)))?,
@@ -433,7 +506,7 @@ async fn run(
                         for producer in state.producers.values() { producer.cancel.cancel(); }
                         state.producers.clear();
                         for (_, consumer) in std::mem::take(&mut state.consumers) {
-                            if let Some(reply) = consumer.ready { let _ = reply.send(Err(lost())); }
+                            if let Some(reply) = consumer.waiter { let _ = reply.send(Err(lost())); }
                         }
                     }
                     Message::ShutdownAck if stop.is_some() => break,
@@ -448,7 +521,7 @@ async fn run(
         let _ = reply.send(Err(error.clone()));
     }
     for (_, consumer) in state.consumers {
-        if let Some(reply) = consumer.ready {
+        if let Some(reply) = consumer.waiter {
             let _ = reply.send(Err(error.clone()));
         }
     }
@@ -469,20 +542,50 @@ async fn run(
 pub(crate) mod testing {
     use super::*;
 
+    /// Control messages seen by the relay between the two sessions.
+    #[derive(Default)]
+    pub(crate) struct Traffic {
+        pub demands: std::sync::atomic::AtomicUsize,
+        pub cancels: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Traffic {
+        fn observe(&self, message: &Message) {
+            let counter = match message {
+                Message::StreamDemand { .. } => &self.demands,
+                Message::StreamCancel { .. } => &self.cancels,
+                _ => return,
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     pub(crate) fn pair(implementation: Arc<dyn InterfaceImplementation>) -> (Session, Session) {
+        let (client, server, _) = pair_with_traffic(implementation);
+        (client, server)
+    }
+
+    pub(crate) fn pair_with_traffic(
+        implementation: Arc<dyn InterfaceImplementation>,
+    ) -> (Session, Session, Arc<Traffic>) {
+        let traffic = Arc::new(Traffic::default());
         let (a_tx, mut a_rx) = mpsc::unbounded_channel();
         let (b_tx, mut b_rx) = mpsc::unbounded_channel();
         let (a_in_tx, a_in) = mpsc::unbounded_channel();
         let (b_in_tx, b_in) = mpsc::unbounded_channel();
+        let observer = traffic.clone();
         tokio::spawn(async move {
             while let Some(message) = a_rx.recv().await {
+                observer.observe(&message);
                 if b_in_tx.send(Ok(message)).is_err() {
                     break;
                 }
             }
         });
+        let observer = traffic.clone();
         tokio::spawn(async move {
             while let Some(message) = b_rx.recv().await {
+                observer.observe(&message);
                 if a_in_tx.send(Ok(message)).is_err() {
                     break;
                 }
@@ -491,19 +594,28 @@ pub(crate) mod testing {
         (
             Session::start(a_in, a_tx, None, vec![]),
             Session::start(b_in, b_tx, Some(implementation), vec![]),
+            traffic,
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::testing::pair;
+    use super::testing::{pair, pair_with_traffic};
     use super::*;
     use futures::stream;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
     struct Fixture {
         polls: Arc<AtomicUsize>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
         transferred: std::sync::Mutex<Option<OwnedValueStream>>,
     }
     impl InterfaceImplementation for Fixture {
@@ -534,6 +646,23 @@ mod tests {
                             .with_metadata("trusted origin".to_owned()),
                         ))
                     }
+                    "many" => {
+                        let polls = self.polls.clone();
+                        let guard = DropFlag(self.dropped.clone());
+                        let mut next = 0;
+                        Ok(InvocationOutput::Stream(OwnedValueStream::new(
+                            stream::poll_fn(move |_| {
+                                let _ = &guard;
+                                polls.fetch_add(1, Ordering::SeqCst);
+                                next += 1;
+                                Poll::Ready(Some(Ok(if next <= 200 {
+                                    StreamEvent::Item(Value::U64(next))
+                                } else {
+                                    StreamEvent::End(None)
+                                })))
+                            }),
+                        )))
+                    }
                     "transfer" => {
                         let InvocationArgument::Stream(input) = call.arguments.remove(0) else {
                             panic!("stream input")
@@ -563,6 +692,7 @@ mod tests {
     fn fixture() -> Arc<Fixture> {
         Arc::new(Fixture {
             polls: Arc::new(AtomicUsize::new(0)),
+            dropped: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transferred: std::sync::Mutex::new(None),
         })
     }
@@ -704,6 +834,36 @@ mod tests {
         forward_recovers_only_host_metadata(true).await;
     }
 
+    #[tokio::test]
+    async fn stream_with_unconsumed_credit_is_reproxied() {
+        let fixture = fixture();
+        let (client, server) = pair(fixture.clone());
+        let mut stream = stream_of(&client, "produce").await;
+        // The second demand grants credit for two events, so one is buffered.
+        for expected in 1..=2 {
+            assert_eq!(
+                stream.next().await.unwrap().unwrap(),
+                StreamEvent::Item(Value::U64(expected))
+            );
+        }
+        client
+            .invoke(
+                call("transfer", vec![InvocationArgument::Stream(stream)]),
+                InvocationContext::default(),
+            )
+            .await
+            .unwrap();
+        let mut input = fixture.transferred.lock().unwrap().take().unwrap();
+        assert!(input.metadata::<String>().is_none());
+        assert_eq!(
+            input.next().await.unwrap().unwrap(),
+            StreamEvent::Item(Value::U64(3))
+        );
+        drop(input);
+        client.shutdown().await.unwrap();
+        drop(server);
+    }
+
     async fn forward_recovers_only_host_metadata(consume_first: bool) {
         let fixture = fixture();
         let (client, server) = pair(fixture.clone());
@@ -748,5 +908,154 @@ mod tests {
         client.shutdown().await.unwrap();
         server.shutdown().await.unwrap();
         drop(server);
+    }
+
+    async fn stream_of(client: &Session, method: &str) -> OwnedValueStream {
+        let InvocationOutput::Stream(stream) = client
+            .invoke(call(method, vec![]), InvocationContext::default())
+            .await
+            .unwrap()
+        else {
+            panic!("stream")
+        };
+        stream
+    }
+
+    #[tokio::test]
+    async fn credit_batches_demand_messages() {
+        let fixture = fixture();
+        let (client, server, traffic) = pair_with_traffic(fixture.clone());
+        let mut stream = stream_of(&client, "many").await;
+        for expected in 1..=200 {
+            assert_eq!(
+                stream.next().await.unwrap().unwrap(),
+                StreamEvent::Item(Value::U64(expected))
+            );
+        }
+        assert_eq!(
+            stream.next().await.unwrap().unwrap(),
+            StreamEvent::End(None)
+        );
+        assert!(stream.next().await.is_none());
+        let demands = traffic.demands.load(Ordering::SeqCst);
+        assert!(demands <= 12, "{demands} demand messages for 200 items");
+        // Credit never lets the producer run more than the window ahead.
+        assert!(fixture.polls.load(Ordering::SeqCst) <= 201 + MAX_WINDOW as usize);
+        drop(server);
+    }
+
+    #[tokio::test]
+    async fn cancel_with_outstanding_credit_drops_the_producer() {
+        let fixture = fixture();
+        let (client, server, traffic) = pair_with_traffic(fixture.clone());
+        let mut stream = stream_of(&client, "many").await;
+        for expected in 1..=3 {
+            assert_eq!(
+                stream.next().await.unwrap().unwrap(),
+                StreamEvent::Item(Value::U64(expected))
+            );
+        }
+        drop(stream);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !fixture.dropped.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("producer was not dropped");
+        assert_eq!(traffic.cancels.load(Ordering::SeqCst), 1);
+        let polls = fixture.polls.load(Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(fixture.polls.load(Ordering::SeqCst), polls);
+        drop(server);
+    }
+
+    /// A session wired to channels the test drives by hand.
+    struct Wire {
+        incoming: mpsc::UnboundedSender<Result<Message, InvocationError>>,
+        outgoing: mpsc::UnboundedReceiver<Message>,
+        session: Session,
+    }
+
+    fn wire(implementation: Option<Arc<dyn InterfaceImplementation>>) -> Wire {
+        let (incoming, incoming_rx) = mpsc::unbounded_channel();
+        let (outgoing_tx, outgoing) = mpsc::unbounded_channel();
+        let session = Session::start(incoming_rx, outgoing_tx, implementation, vec![]);
+        Wire {
+            incoming,
+            outgoing,
+            session,
+        }
+    }
+
+    async fn closes(session: &Session) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), session.closed())
+            .await
+            .expect("session should close");
+    }
+
+    #[tokio::test]
+    async fn zero_credit_demand_closes_session() {
+        let mut wire = wire(Some(fixture()));
+        wire.incoming
+            .send(Ok(Message::Call {
+                id: SessionId(1),
+                export: "test".into(),
+                method: "produce".into(),
+                arguments: vec![],
+            }))
+            .unwrap();
+        let Some(Message::Return {
+            output: WireOutput::Stream(id),
+            ..
+        }) = wire.outgoing.recv().await
+        else {
+            panic!("expected stream return")
+        };
+        wire.incoming
+            .send(Ok(Message::StreamDemand { id, count: 0 }))
+            .unwrap();
+        closes(&wire.session).await;
+    }
+
+    #[tokio::test]
+    async fn items_beyond_credit_close_session() {
+        let mut wire = wire(None);
+        let session = wire.session.clone();
+        let call_task = tokio::spawn(async move {
+            session
+                .invoke(call("produce", vec![]), InvocationContext::default())
+                .await
+        });
+        let Some(Message::Call { id: call_id, .. }) = wire.outgoing.recv().await else {
+            panic!("expected call")
+        };
+        wire.incoming
+            .send(Ok(Message::Return {
+                id: call_id,
+                output: WireOutput::Stream(SessionId(1)),
+            }))
+            .unwrap();
+        let InvocationOutput::Stream(mut stream) = call_task.await.unwrap().unwrap() else {
+            panic!("stream")
+        };
+        let next = tokio::spawn(async move { stream.next().await });
+        let Some(Message::StreamDemand { id, count: 1 }) = wire.outgoing.recv().await else {
+            panic!("expected initial demand of one")
+        };
+        for sequence in [1, 2] {
+            wire.incoming
+                .send(Ok(Message::StreamItem {
+                    id: id.clone(),
+                    sequence: SessionId(sequence),
+                    value: Value::Null,
+                }))
+                .unwrap();
+        }
+        assert_eq!(
+            next.await.unwrap().unwrap().unwrap(),
+            StreamEvent::Item(Value::Null)
+        );
+        closes(&wire.session).await;
     }
 }

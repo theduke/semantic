@@ -3,8 +3,8 @@ use crate::interface::{ImplementationDescriptor, InvocationError};
 use semantic_data::value::{Value, serde::typed::TypedValue};
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
-pub const PROFILE: &str = "values-and-top-level-streams-v1";
+pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROFILE: &str = "values-and-top-level-streams-v2";
 pub const CODEC: &str = "typed-value-json";
 pub const PLUGIN_SUBPROTOCOL: &str = "semantic.plugin.v1";
 
@@ -49,7 +49,7 @@ pub enum WireArgument {
     Value(TypedValue),
     Stream(SessionId),
     /// Transfers a stream originally produced by this same peer, at its current
-    /// position and with no outstanding demand.
+    /// position and with no outstanding or unconsumed credit.
     /// Its runtime metadata is recovered locally, never supplied by the sender.
     ForwardStream(SessionId),
 }
@@ -90,10 +90,13 @@ pub enum InterfaceMessage {
     CancelCall {
         id: SessionId,
     },
+    /// Grants the producer credit to send `count` more events (items or the
+    /// terminal event). `count` must be positive.
     StreamDemand {
         id: SessionId,
-        sequence: SessionId,
+        count: u32,
     },
+    /// `sequence` of a stream's events increases strictly from 1.
     StreamItem {
         id: SessionId,
         sequence: SessionId,
