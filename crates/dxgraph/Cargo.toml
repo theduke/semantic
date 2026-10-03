@@ -14,6 +14,7 @@ version.workspace = true
 [features]
 default = []
 web = ["dep:web-sys"]
+demo = ["dioxus/desktop"]
 
 [dependencies]
 dioxus = { workspace = true }
@@ -27,3 +28,7 @@ web-sys = { version = "0.3.82", optional = true, features = ["Element", "Perform
 
 [dev-dependencies]
 dioxus-ssr = "0.7.9"
+
+[[example]]
+name = "demo"
+required-features = ["demo"]

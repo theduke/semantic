@@ -5,6 +5,16 @@ use super::{
 use crate::{NodeId, Point, Size};
 use dioxus::prelude::*;
 
+fn node_border_box(event: &ResizeEvent) -> Option<Size> {
+    // Native resize events can bubble. A node's size must never replace the
+    // container dimensions used by fit, center, and culling.
+    event.stop_propagation();
+    event.get_border_box_size().ok().map(|size| Size {
+        width: size.width,
+        height: size.height,
+    })
+}
+
 #[derive(Props, Clone, PartialEq)]
 pub(crate) struct NodeViewProps<N: Clone + PartialEq + 'static> {
     pub id: NodeId,
@@ -47,8 +57,42 @@ pub(crate) fn NodeView<N: Clone + PartialEq + 'static>(props: NodeViewProps<N>) 
         class:"dxgraph-node", "data-dxgraph-node":props.id.to_string(), "data-selected":props.selected.to_string(),tabindex:0,role:"button",aria_label:props.label,
         style:format!("transform:translate({}px,{}px);visibility:{}",props.position.x,props.position.y,if props.hidden {"hidden"} else {"visible"}),
         onpointerdown:move |event|{event.stop_propagation();props.on_pointer.call((pointer_id.clone(),event));},
-        onresize:move |event|if let Ok(size)=event.get_border_box_size(){props.on_measure.call((measure_id.clone(),Size{width:size.width,height:size.height}));},
+        onresize:move |event|{if let Some(size)=node_border_box(&event){props.on_measure.call((measure_id.clone(),size));}},
         onkeydown:move |event|match keyboard_action(&event.key().to_string()){Some(KeyboardAction::Activate)=>{event.stop_propagation();event.prevent_default();props.on_activate.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},Some(KeyboardAction::Select)=>{event.stop_propagation();event.prevent_default();props.on_select.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},_=>{}},
         {content}
     }}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dioxus::html::{HasResizeData, ResizeError, geometry::PixelsSize};
+    struct NodeResize;
+    impl HasResizeData for NodeResize {
+        fn get_border_box_size(&self) -> Result<PixelsSize, ResizeError> {
+            Ok(PixelsSize::new(160.0, 64.0))
+        }
+        fn get_content_box_size(&self) -> Result<PixelsSize, ResizeError> {
+            Ok(PixelsSize::new(140.0, 44.0))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    #[test]
+    fn node_resize_measures_border_box_without_reaching_container() {
+        let event = Event::new(std::rc::Rc::new(ResizeData::new(NodeResize)), true);
+        assert!(event.propagates());
+        assert_eq!(
+            node_border_box(&event),
+            Some(Size {
+                width: 160.0,
+                height: 64.0
+            })
+        );
+        assert!(
+            !event.propagates(),
+            "A node resize must not reach the canvas resize handler"
+        );
+    }
 }
