@@ -19,5 +19,7 @@ futures-util = "0.3.31"
 tokio = { workspace = true, features = ["sync", "macros"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-std"] }
 semantic_jobs = { path = "../jobs" }
+semantic_rpc = { path = "../rpc", features = ["plugin-stdio"] }
+serde_json.workspace = true
