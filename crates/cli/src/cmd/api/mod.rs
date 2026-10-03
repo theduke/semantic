@@ -9,6 +9,7 @@ mod package;
 mod plugin;
 mod query;
 mod upload;
+mod vdb;
 
 use clap::Subcommand;
 
@@ -26,6 +27,8 @@ pub enum SubCmd {
     Import(import::Args),
     /// Inspect and configure scope plugins.
     Plugin(plugin::Args),
+    /// List virtual collections and explain virtual database queries.
+    Vdb(vdb::Args),
     /// Inspect, cancel, and clear scope jobs.
     Jobs(jobs::Args),
     /// Execute a query AST, SQL, or PRQL and print the API result as JSON.
@@ -67,6 +70,7 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     match args.command {
         SubCmd::Import(args) => import::run(args).await,
         SubCmd::Plugin(args) => plugin::run(args).await,
+        SubCmd::Vdb(args) => vdb::run(args).await,
         SubCmd::Jobs(args) => jobs::run(args).await,
         SubCmd::Query(args) => query::run(args).await,
         SubCmd::ParseSql(args) => query::parse_sql(args).await,
