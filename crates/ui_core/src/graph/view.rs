@@ -77,16 +77,15 @@ impl GraphLoadContext {
     async fn start(&self, root: String) {
         match load_nodes(&self.source, std::slice::from_ref(&root)).await {
             Ok(nodes) => {
-                let target = EntityTarget::default_collection(root);
                 if let Some(object) = nodes
                     .into_iter()
                     .next()
                     .and_then(|node| node.object().cloned())
                 {
                     let mut explorer = self.explorer;
-                    explorer.write().set_object(&target, object);
+                    explorer.write().set_object(&root, object);
                 }
-                self.expand(node_id(&target)).await;
+                self.expand(node_id(&root)).await;
             }
             Err(error) => {
                 self.toast.show(Toast::error(error));
@@ -201,12 +200,12 @@ fn EntityGraphSession(
             .map(|node| (id, node.data.clone()))
     });
     let load_parent = use_callback(move |id: NodeId| {
-        let Some(target) = explorer.peek().ancestors_request(&id) else {
+        let Some(parent_id) = explorer.peek().ancestors_request(&id) else {
             return;
         };
         let load = load.clone();
         spawn(async move {
-            match load_nodes(&load.source, &[target.id]).await {
+            match load_nodes(&load.source, &[parent_id]).await {
                 Ok(nodes) => {
                     if let Some(data) = nodes.into_iter().next() {
                         explorer.write().apply_ancestor(&id, data);
@@ -471,17 +470,16 @@ mod tests {
     }
     #[test]
     fn hierarchy_anchors_follow_layout_presentation() {
-        let root = EntityTarget::default_collection("root");
-        let child = EntityTarget::default_collection("child");
-        let mut graph =
-            EntityGraphExplorer::new(root.id.clone(), GraphMode::Both, ExplorerLimits::default());
+        let root = "root";
+        let child = "child";
+        let mut graph = EntityGraphExplorer::new(root, GraphMode::Both, ExplorerLimits::default());
         graph.apply_expansion(
-            &node_id(&root),
+            &node_id(root),
             super::super::ExpansionResult {
-                nodes: vec![super::super::entity_data(child.id.clone(), None)],
+                nodes: vec![super::super::entity_data(child, None)],
                 edges: vec![super::super::ExpansionEdge {
-                    source: node_id(&root),
-                    target: node_id(&child),
+                    source: node_id(root),
+                    target: node_id(child),
                     kind: EntityEdgeKind::Parent,
                 }],
             },

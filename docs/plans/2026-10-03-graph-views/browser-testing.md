@@ -1,6 +1,44 @@
 # Graph explorer browser verification
 
-Current review4 verification uses entity IDs throughout the graph route and
+Current review5 verification uses `entity:{id}` graph node IDs. Explorer roots,
+object updates, ancestor requests, and expansion requests now carry entity IDs;
+`EntityTarget` remains in node payloads for navigation and EntityCard rendering.
+The root picker already omitted its redundant collection prop at the review5
+baseline. The remaining `collection: None` in GraphPage belongs to BrowsePage's
+route. See [review5-disposition.md](review5-disposition.md).
+
+A fresh run completed all 39 recorded checks at 1440×1000 and 390×844 with zero
+page or console errors. Desktop relation and mobile graph screenshots were
+visually inspected. Checks cover root search, default entity queries,
+collection-free graph URLs, selection and EntityCard, ancestor loading,
+expansion, entity navigation, focus and root changes, hierarchy/relation modes,
+layouts, drag and wheel gestures, Re-layout and Reset positions, keyboard
+access to loaded entities, and desktop/mobile rendering.
+
+```sh
+nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-review5-20261003-476035 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'
+nix develop -c dx serve --web --package semantic_ui --no-default-features --features web --port 8080 --open false --watch false --hot-reload false
+nix develop -c node docs/plans/2026-10-03-graph-views/browser.cjs
+```
+
+T3 preview metadata was discovered first. Actual status/open calls both reported
+no available automation host, so this run used the retained local Playwright
+script with an owned UI preview, an owned database server, and the fresh isolated
+database above. Both owned processes were stopped after verification.
+
+Current artifacts are under `target/graph-views-browser/review5/`; fixture root:
+`graph-browser-1791064524970-root`. The browser helper `entityNodeId` centralizes
+the new node ID format for selection, position maps, and asynchronous waits.
+The browser response fixture for an unavailable relationship endpoint still
+leaves its real object lookup empty. No native input smoke was repeated because
+native input behavior was unchanged.
+
+The native UI graph route tests (3) and supported wasm UI check passed through
+Nix; `cargo fmt` completed. Core checks are recorded in the review5 disposition.
+
+The review4 observations below retain their original evidence.
+
+Historical review4 verification used entity IDs throughout the graph route and
 loading API. The root picker uses its default `entities` collection, and graph
 URLs contain only root, mode and layout parameters. Legacy `collection` input
 is ignored and disappears when the picker or another graph control navigates.
@@ -20,7 +58,7 @@ The review4 run discovered the T3 preview tools, but status/open reported no
 available automation host. Verification therefore used the retained Playwright
 script, an owned local UI server, and a fresh isolated fixture database.
 
-Current artifacts are under `target/graph-views-browser/review4/`. The script
+The review4 artifacts are under `target/graph-views-browser/review4/`. The script
 uses live typed Label and EntityLabel fixtures for outgoing and incoming
 entities. The database rejects dangling typed references, so the script adds
 one missing-endpoint relationship row to the browser's RPC response. Its
@@ -44,7 +82,7 @@ targets, actual cross-collection collisions, and Reset positions.
 
 Verified on 2026-10-03 with Chromium through Nix, using an isolated server database at `/tmp/semantic-graph-browser-20261003`. Preview status/open both returned `PreviewAutomationNoAvailableHostError`, so the retained Playwright script uses the locally installed Chromium and Playwright module.
 
-Original commands (historical configuration; use the review4 commands above):
+Original commands (historical configuration; use the review5 commands above):
 
 ```sh
 nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-20261003 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'

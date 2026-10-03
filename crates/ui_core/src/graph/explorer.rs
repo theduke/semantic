@@ -71,7 +71,7 @@ impl EntityNodeData {
     }
     pub fn id(&self) -> NodeId {
         match self {
-            Self::Entity { target, .. } => node_id(target),
+            Self::Entity { target, .. } => node_id(&target.id),
             Self::Overflow { parent } => NodeId(format!("overflow:{parent}")),
         }
     }
@@ -103,7 +103,7 @@ pub enum EntityEdgeKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExpansionRequest {
     pub node: NodeId,
-    pub target: String,
+    pub entity_id: String,
     pub mode: GraphMode,
     pub limit: usize,
 }
@@ -119,13 +119,8 @@ pub struct ExpansionResult {
     pub edges: Vec<ExpansionEdge>,
 }
 
-pub fn node_id(target: &EntityTarget) -> NodeId {
-    let collection = target.collection_or_default();
-    NodeId(format!(
-        "entity:{}:{collection}{}",
-        collection.len(),
-        target.id
-    ))
+pub fn node_id(entity_id: &str) -> NodeId {
+    NodeId(format!("entity:{entity_id}"))
 }
 
 fn entity_edge_id(kind: &EntityEdgeKind, source: &NodeId, target: &NodeId) -> EdgeId {
@@ -151,7 +146,7 @@ pub struct EntityGraphExplorer {
     model: GraphModel<EntityNodeData, EntityEdgeData>,
     mode: GraphMode,
     limits: ExplorerLimits,
-    root: EntityTarget,
+    root: String,
     // Expansion provenance, separate from semantic edge direction, drives collapse.
     expansion_nodes: BTreeMap<NodeId, BTreeSet<NodeId>>,
     expansion_edges: BTreeMap<NodeId, BTreeSet<EdgeId>>,
@@ -159,7 +154,7 @@ pub struct EntityGraphExplorer {
 
 impl EntityGraphExplorer {
     pub fn new(root: impl Into<String>, mode: GraphMode, limits: ExplorerLimits) -> Self {
-        let root = EntityTarget::default_collection(root);
+        let root = root.into();
         let mut this = Self {
             model: GraphModel::default(),
             mode,
@@ -169,13 +164,13 @@ impl EntityGraphExplorer {
             expansion_edges: BTreeMap::new(),
         };
         this.model
-            .upsert_node(make_node(entity_data(root.id, None), None));
+            .upsert_node(make_node(entity_data(root, None), None));
         this
     }
     pub fn model(&self) -> &GraphModel<EntityNodeData, EntityEdgeData> {
         &self.model
     }
-    pub fn root(&self) -> &EntityTarget {
+    pub fn root(&self) -> &str {
         &self.root
     }
     pub fn mode(&self) -> GraphMode {
@@ -195,8 +190,8 @@ impl EntityGraphExplorer {
     pub fn is_loading(&self, id: &NodeId) -> bool {
         self.model.node(id).is_some_and(|node| node.data.loading())
     }
-    pub fn set_object(&mut self, target: &EntityTarget, object: Object) {
-        if let Some(data) = self.model.node_data_mut(&node_id(target))
+    pub fn set_object(&mut self, entity_id: &str, object: Object) {
+        if let Some(data) = self.model.node_data_mut(&node_id(entity_id))
             && let EntityNodeData::Entity {
                 object: current, ..
             } = data
@@ -214,7 +209,7 @@ impl EntityGraphExplorer {
         let node = self.model.node(id)?;
         let request = ExpansionRequest {
             node: id.clone(),
-            target: node.data.target()?.id.clone(),
+            entity_id: node.data.target()?.id.clone(),
             mode: self.mode,
             limit: self.limits.fan_out.saturating_add(1),
         };
@@ -386,24 +381,23 @@ impl EntityGraphExplorer {
         }
     }
     /// Parent references identify entities in the default collection.
-    pub fn ancestors_request(&self, id: &NodeId) -> Option<EntityTarget> {
+    pub fn ancestors_request(&self, id: &NodeId) -> Option<String> {
         let node = self.model.node(id)?;
         let parent = node.data.object()?.get(ATTR_PARENT)?.as_str()?;
-        let target = EntityTarget::default_collection(parent);
-        (self.model.node(&node_id(&target)).is_none()).then_some(target)
+        (self.model.node(&node_id(parent)).is_none()).then(|| parent.to_owned())
     }
     pub fn apply_ancestor(&mut self, child: &NodeId, data: EntityNodeData) {
         if self.model.nodes().count() >= self.limits.max_nodes {
             return;
         }
         let parent = data.id();
-        let Some(child_target) = self
+        if self
             .model
             .node(child)
-            .and_then(|node| node.data.target().cloned())
-        else {
+            .is_none_or(|node| !matches!(node.data, EntityNodeData::Entity { .. }))
+        {
             return;
-        };
+        }
         if let Some(existing) = self.model.node_data_mut(&parent) {
             if data.object().is_some() {
                 let state = (existing.loading(), existing.expanded());
@@ -426,7 +420,7 @@ impl EntityGraphExplorer {
         let _ = self.model.insert_edge(GraphEdge {
             id: edge_id,
             source: parent,
-            target: node_id(&child_target),
+            target: child.clone(),
             label: None,
             data: EntityEdgeData {
                 kind: EntityEdgeKind::Parent,
@@ -463,11 +457,8 @@ pub(super) fn stable_color(id: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn target(id: &str) -> EntityTarget {
-        EntityTarget::default_collection(id)
-    }
     fn id(name: &str) -> NodeId {
-        node_id(&target(name))
+        node_id(name)
     }
     fn fixture(nodes: &[&str], source: &str) -> ExpansionResult {
         ExpansionResult {
@@ -485,6 +476,38 @@ mod tests {
                 .collect(),
         }
     }
+
+    #[test]
+    fn entity_identity_preserves_punctuation_and_navigation_ids() {
+        let entity_ids = [
+            "a/b:c?d#e%f",
+            "a:b/c?d#e%f",
+            "entity:a/b:c?d#e%f",
+            "overflow:entity:root",
+            "class:root",
+            "a\"b\\c ü",
+        ];
+        let mut graph =
+            EntityGraphExplorer::new(entity_ids[0], GraphMode::Both, ExplorerLimits::default());
+        assert_eq!(graph.root(), entity_ids[0]);
+        let request = graph.begin_expand(&id(entity_ids[0])).unwrap();
+        assert_eq!(request.entity_id, entity_ids[0]);
+        assert_eq!(request.node, NodeId(format!("entity:{}", entity_ids[0])));
+        graph.apply_expansion(&request.node, fixture(&entity_ids, entity_ids[0]));
+        assert_eq!(graph.model().nodes().count(), entity_ids.len());
+        for entity_id in entity_ids {
+            let node = graph.model().node(&id(entity_id)).unwrap();
+            assert_eq!(node.id, NodeId(format!("entity:{entity_id}")));
+            assert_eq!(
+                node.data.target(),
+                Some(&EntityTarget::default_collection(entity_id))
+            );
+        }
+        graph.collapse(&request.node);
+        assert_eq!(graph.model().nodes().count(), 1);
+        assert!(graph.model().node(&request.node).is_some());
+    }
+
     #[test]
     fn seed_expand_deduplicate() {
         let mut graph =
@@ -495,7 +518,7 @@ mod tests {
         graph.apply_expansion(&id("root"), fixture(&["a", "b", "a"], "root"));
         assert_eq!(graph.model.nodes().count(), 3);
         assert_eq!(graph.model.edges().count(), 2);
-        graph.set_object(&target("root"), Object::new());
+        graph.set_object("root", Object::new());
     }
     #[test]
     fn fanout_and_global_caps_include_overflow() {
@@ -539,10 +562,10 @@ mod tests {
             EntityGraphExplorer::new("root", GraphMode::Both, ExplorerLimits::default());
         let mut root = Object::new();
         root.insert(ATTR_PARENT, Value::String("parent".into()));
-        graph.set_object(&target("root"), root);
+        graph.set_object("root", root);
         let parent = graph.ancestors_request(&id("root")).unwrap();
-        assert_eq!(parent, target("parent"));
-        graph.apply_ancestor(&id("root"), entity_data(parent.id, None));
+        assert_eq!(parent, "parent");
+        graph.apply_ancestor(&id("root"), entity_data(parent, None));
         assert_eq!(
             graph.model.node(&id("root")).unwrap().layout_parent,
             Some(id("parent"))
@@ -556,6 +579,21 @@ mod tests {
                 .object()
                 .is_none()
         );
+        assert!(graph.ancestors_request(&id("root")).is_none());
+        graph.set_object("parent", Object::new());
+        assert!(
+            graph
+                .model
+                .node(&id("parent"))
+                .unwrap()
+                .data
+                .object()
+                .is_some()
+        );
+        assert_eq!(graph.model.edges().count(), 1);
+        graph.collapse(&id("root"));
+        assert!(graph.model.node(&id("parent")).is_none());
+        assert_eq!(graph.ancestors_request(&id("root")), Some("parent".into()));
     }
 
     #[test]
@@ -580,10 +618,6 @@ mod tests {
         let real = entity_data(overflow.id().0, None);
         assert_ne!(overflow.id(), real.id());
         assert!(overflow.target().is_none());
-        assert_ne!(
-            node_id(&EntityTarget::new(Some("a/b".into()), "c")),
-            node_id(&EntityTarget::new(Some("a".into()), "b/c"))
-        );
     }
 
     #[test]

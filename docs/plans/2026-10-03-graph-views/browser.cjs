@@ -4,7 +4,7 @@
 const { chromium } = require('../../../crates/dxeditor/web/node_modules/playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const out = require('node:path').resolve(__dirname, '../../../target/graph-views-browser/review4');
+const out = require('node:path').resolve(__dirname, '../../../target/graph-views-browser/review5');
 fs.mkdirSync(out, { recursive: true });
 const str = string => ({ string });
 const obj = object => ({ object });
@@ -28,7 +28,8 @@ async function insert(id, title, parent) {
 async function relation(id, source, target) {
   await rpc('semantic.db.insert', { id: str(id), object: obj({ id: str(id), type: str('semantic:base:entity_label'), 'semantic:relation:relation': str('semantic:base:entity_label'), 'semantic:relation:from': str(source), 'semantic:relation:to': str(target), 'semantic:base:entity_label:collection': str('entities') }) });
 }
-function node(page, id) { return page.locator(`[data-dxgraph-node="entity:8:entities${id}"]`); }
+function entityNodeId(id) { return `entity:${id}`; }
+function node(page, id) { return page.locator(`[data-dxgraph-node="${entityNodeId(id)}"]`); }
 async function world(page) { return page.locator('.dxgraph-world').getAttribute('style'); }
 async function assertNoOverlap(page) {
   const boxes = await page.locator('[data-dxgraph-node]').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).visibility !== 'hidden').map(node => { const r = node.getBoundingClientRect(); return { id: node.dataset.dxgraphNode, x: r.x, y: r.y, width: r.width, height: r.height }; }));
@@ -151,11 +152,11 @@ async function drag(page, from, delta) {
     await drag(page, { x: rootBox.x + 45, y: rootBox.y + 25 }, { x: 70, y: 35 });
     assert.notEqual(await node(page, root).getAttribute('style'), rootStyle);
     assert.notDeepEqual(await page.locator('.dxgraph-edge > path:first-child').evaluateAll(paths => paths.map(path => path.getAttribute('d'))), paths); result.checks.nodeDragUpdatesEdges = true; console.log('Passed node drag and edge updates');
-    const draggedTransform = (await positions())[`entity:8:entities${root}`];
+    const draggedTransform = (await positions())[entityNodeId(root)];
     await page.getByRole('button', {name:'Re-layout',exact:true}).click(); await page.waitForTimeout(100);
-    assert.equal((await positions())[`entity:8:entities${root}`], draggedTransform, 'Re-layout should retain canvas drag positions');
+    assert.equal((await positions())[entityNodeId(root)], draggedTransform, 'Re-layout should retain canvas drag positions');
     await page.getByRole('button', {name:'Reset positions',exact:true}).click();
-    await page.waitForFunction(({id,transform})=>document.querySelector(`[data-dxgraph-node="${id}"]`)?.style.transform===transform, {id:`entity:8:entities${root}`,transform:lodPositions[`entity:8:entities${root}`]});
+    await page.waitForFunction(({id,transform})=>document.querySelector(`[data-dxgraph-node="${id}"]`)?.style.transform===transform, {id:entityNodeId(root),transform:lodPositions[entityNodeId(root)]});
     const resetPositions = await positions();
     await page.getByRole('button', {name:'Re-layout',exact:true}).click(); await page.waitForTimeout(100);
     assert.deepEqual(await positions(), resetPositions, 'Reset positions did not restore automatic layout');
@@ -178,7 +179,7 @@ async function drag(page, from, delta) {
     const treePosition = await node(page, children[0]).getAttribute('style');
     await page.locator('.dx-select-trigger').click(); await page.getByRole('option', { name: 'Radial', exact: true }).click(); await page.waitForURL(/layout=radial/);
     assertEntityOnlyUrl(); result.checks.layoutUrlEntityOnly = true;
-    await page.waitForFunction(({ id, style }) => document.querySelector(`[data-dxgraph-node=\"${id}\"]`)?.getAttribute('style') !== style, { id: `entity:8:entities${children[0]}`, style: treePosition });
+    await page.waitForFunction(({ id, style }) => document.querySelector(`[data-dxgraph-node=\"${id}\"]`)?.getAttribute('style') !== style, { id: entityNodeId(children[0]), style: treePosition });
     await page.keyboard.press('Escape'); await page.getByRole('button', { name: 'Fit', exact: true }).click(); await page.waitForTimeout(100);
     result.checks.radialLayout = true; await page.screenshot({ path: `${out}/radial.png`, fullPage: true });
     await page.getByRole('button', { name: 'Relations', exact: true }).click(); await page.waitForURL(/mode=relations/); await node(page, label).waitFor(); await node(page, children[0]).waitFor(); await node(page, missing).waitFor();

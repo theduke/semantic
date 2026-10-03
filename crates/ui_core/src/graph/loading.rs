@@ -3,7 +3,7 @@ use super::{
     EntityEdgeKind, EntityNodeData, ExpansionEdge, ExpansionRequest, ExpansionResult, GraphMode,
     GraphSource, entity_data, node_id,
 };
-use crate::{EntityTarget, UiCatalog};
+use crate::UiCatalog;
 use semantic_data::{
     attr::ATTR_PARENT,
     schema::{RelationMode, RelationType},
@@ -40,24 +40,23 @@ pub async fn load_expansion(
     let mut result = ExpansionResult::default();
     if request.mode != GraphMode::Relations {
         let objects = source
-            .children(std::slice::from_ref(&request.target), request.limit)
+            .children(std::slice::from_ref(&request.entity_id), request.limit)
             .await?;
         for object in objects {
             let Some(id) = object.get("id").and_then(Value::as_str) else {
                 continue;
             };
-            let target = EntityTarget::default_collection(id);
             result.edges.push(ExpansionEdge {
                 source: request.node.clone(),
-                target: node_id(&target),
+                target: node_id(id),
                 kind: EntityEdgeKind::Parent,
             });
-            result.nodes.push(entity_data(target.id, Some(object)));
+            result.nodes.push(entity_data(id.to_owned(), Some(object)));
         }
     }
     if request.mode != GraphMode::Hierarchy {
         let rows = source
-            .relation_edges(std::slice::from_ref(&request.target), request.limit)
+            .relation_edges(std::slice::from_ref(&request.entity_id), request.limit)
             .await?;
         let mut ids = BTreeSet::new();
         for row in rows {
@@ -70,9 +69,9 @@ pub async fn load_expansion(
             if request.mode == GraphMode::Both && relation.is_some_and(embedded_parent) {
                 continue;
             }
-            let source = EntityTarget::default_collection(&row.source);
-            let target = EntityTarget::default_collection(&row.target);
-            if node_id(&source) != request.node && node_id(&target) != request.node {
+            let source_id = node_id(&row.source);
+            let target_id = node_id(&row.target);
+            if source_id != request.node && target_id != request.node {
                 continue;
             }
             let label = relation
@@ -87,8 +86,8 @@ pub async fn load_expansion(
             ids.insert(row.source);
             ids.insert(row.target);
             result.edges.push(ExpansionEdge {
-                source: node_id(&source),
-                target: node_id(&target),
+                source: source_id,
+                target: target_id,
                 kind: EntityEdgeKind::Relation {
                     relation_id: row.relation,
                     label,
@@ -105,6 +104,7 @@ pub async fn load_expansion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EntityTarget;
     use crate::graph::{EntityGraphExplorer, ExplorerLimits, RelationEdgeRow};
     use futures::future::LocalBoxFuture;
     use semantic_data::value::Object;
@@ -223,8 +223,8 @@ mod tests {
             GraphMode::Relations,
             ExplorerLimits::default(),
         );
-        let request = graph.begin_expand(&node_id(&root)).unwrap();
-        let source = MockGraphSource {
+        let request = graph.begin_expand(&node_id(&root.id)).unwrap();
+        let mut source = MockGraphSource {
             objects: [&root, &outgoing, &incoming]
                 .into_iter()
                 .map(object)
@@ -255,27 +255,42 @@ mod tests {
         graph.apply_expansion(&request.node, result);
         assert_eq!(graph.model().edges().count(), 3);
         for target in [&outgoing, &incoming] {
-            let node = graph.model().node(&node_id(target)).unwrap();
+            let node = graph.model().node(&node_id(&target.id)).unwrap();
             assert_eq!(node.data.target(), Some(target));
             assert!(node.data.object().is_some());
-            assert!(graph.begin_expand(&node_id(target)).is_some());
+            assert!(graph.begin_expand(&node_id(&target.id)).is_some());
         }
-        let unresolved = graph.model().node(&node_id(&missing)).unwrap();
+        let unresolved = graph.model().node(&node_id(&missing.id)).unwrap();
         assert_eq!(unresolved.data.target(), Some(&missing));
         assert!(unresolved.data.object().is_none());
-        let mut resolved = Object::new();
-        resolved.insert("id", Value::String(missing.id.clone()));
-        graph.set_object(&missing, resolved);
+        let unresolved_id = unresolved.id.clone();
+        let unresolved_parent = unresolved.layout_parent.clone();
+        let edges = graph.model().edges().cloned().collect::<Vec<_>>();
+        let missing_request = graph.begin_expand(&unresolved_id).unwrap();
+        assert_eq!(missing_request.entity_id, missing.id);
+        let (resolved_id, resolved) = object(&missing);
+        source.objects.insert(resolved_id, resolved);
+        let loaded = load_nodes(&source, std::slice::from_ref(&missing.id))
+            .await
+            .unwrap();
+        assert_eq!(loaded[0].id(), unresolved_id);
+        graph.set_object(&missing.id, loaded[0].object().unwrap().clone());
         assert!(
             graph
                 .model()
-                .node(&node_id(&missing))
+                .node(&node_id(&missing.id))
                 .unwrap()
                 .data
                 .object()
                 .is_some()
         );
-        assert_eq!(graph.model().edges().count(), 3);
+        let resolved = graph.model().node(&unresolved_id).unwrap();
+        assert_eq!(resolved.id, unresolved_id);
+        assert_eq!(resolved.layout_parent, unresolved_parent);
+        assert_eq!(resolved.data.target(), Some(&missing));
+        assert!(resolved.data.loading());
+        assert_eq!(graph.model().nodes().count(), 4);
+        assert_eq!(graph.model().edges().cloned().collect::<Vec<_>>(), edges);
         assert!(graph.is_expanded(&request.node));
     }
 
@@ -288,7 +303,7 @@ mod tests {
             GraphMode::Hierarchy,
             ExplorerLimits::default(),
         );
-        let request = graph.begin_expand(&node_id(&root)).unwrap();
+        let request = graph.begin_expand(&node_id(&root.id)).unwrap();
         let source = MockGraphSource {
             children: vec![object(&child).1],
             ..Default::default()
@@ -301,8 +316,8 @@ mod tests {
             &[(vec!["root".into()], request.limit)]
         );
         assert_eq!(result.nodes[0].target(), Some(&child));
-        assert_eq!(result.edges[0].source, node_id(&root));
-        assert_eq!(result.edges[0].target, node_id(&child));
+        assert_eq!(result.edges[0].source, node_id(&root.id));
+        assert_eq!(result.edges[0].target, node_id(&child.id));
         assert!(source.fetched.borrow().is_empty());
     }
 
