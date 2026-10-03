@@ -40,7 +40,7 @@ Update this list as tasks land (one commit per task, see §7).
 - [x] T4.1: `LocalSource`, `FederatedScopeDb`, routing
 - [x] T4.2: `semantic.vdb.list` / `semantic.vdb.explain` commands
 - [x] T4.3: app integration test suite and differential oracle
-- [ ] T5.1: bind joins: parameterized negotiation and synthetic indexes
+- [x] T5.1: bind joins: parameterized negotiation and synthetic indexes
 - [ ] T5.2: batched index nested loop (**gated: user review first**)
 - [x] T6.1: example JSON-directory VDB plugin
 - [x] T6.2: CLI rendering, UI surfacing
@@ -92,9 +92,10 @@ cases. All 20 passed parser/canonicalization preflight and the ordinary stored-d
 smoke test; the two added cases await virtual coverage in the broad workspace
 gate (80 comparisons). Fresh Nix workspace checks and formatting passed.
 
-The user reviewed and approved the [T5.2 batching design](batched-join-design.md)
-before implementation. T5.1/T5.2 implementation and the broad workspace test gate
-remain pending.
+T5.1 passed all 454 core tests, including nine bind-join regressions, plus the
+workspace check and formatting. The user reviewed and approved the
+[T5.2 batching design](batched-join-design.md) before implementation. T5.2
+implementation and the broad workspace test gate remain pending.
 
 ## 1. Decisions
 
