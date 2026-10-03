@@ -12,6 +12,7 @@ use crate::{
     PhysicalPlan, PhysicalSource,
 };
 
+pub(crate) const BIND_JOIN_BATCH_SIZE: usize = 64;
 pub(crate) const KEYS_PARAMETER: &str = "__keys";
 pub(crate) const BIND_JOIN_THRESHOLD: u64 = 10_000;
 
@@ -149,6 +150,64 @@ pub(crate) fn apply(plan: &mut PhysicalPlan, fragments: &BTreeMap<LeafKey, LeafF
     });
 }
 
+/// A separate negotiation/token lets a source decline bulk lookup while
+/// retaining its accepted singleton lookup. The contract uses list membership
+/// in both cases; only the concrete scan bindings differ in cardinality.
+pub(crate) async fn negotiate_batches(
+    fragments: &mut BTreeMap<LeafKey, LeafFragment>,
+    sources: &FederationSources,
+) -> Result<(), super::FederatedError> {
+    use super::pushdown::{BatchFragment, combine_filters};
+    use semantic_data::vdb::{FilterSupport, ScanPlan};
+    let negotiations = fragments
+        .values_mut()
+        .filter(|fragment| fragment.bind_field.is_some())
+        .map(|fragment| async move {
+            let request = fragment.request.clone();
+            let ScanPlan::Accepted { plan } = fragment
+                .source
+                .negotiate(&fragment.collection, &request)
+                .await?
+            else {
+                return Ok::<_, super::FederatedError>(());
+            };
+            plan.validate(&request).map_err(|error| {
+                crate::DbError::InvalidQuery(format!(
+                    "{}: protocol violation: {}",
+                    fragment.collection, error.message
+                ))
+            })?;
+            if sources.virtual_sources[&fragment.collection].schema_revision != plan.schema_revision
+            {
+                return Err(super::FederatedError::SchemaChanged {
+                    collection: fragment.collection.clone(),
+                });
+            }
+            if plan.filters.last() != Some(&FilterSupport::Exact) {
+                return Ok(());
+            }
+            let residual = combine_filters(
+                request
+                    .filters
+                    .iter()
+                    .cloned()
+                    .zip(&plan.filters)
+                    .filter_map(|(filter, support)| {
+                        (*support != FilterSupport::Exact).then(|| Expr::from(filter))
+                    })
+                    .chain(fragment.host_residual.clone()),
+            );
+            fragment.batch = Some(BatchFragment {
+                request,
+                plan,
+                residual,
+            });
+            Ok(())
+        });
+    futures::future::try_join_all(negotiations).await?;
+    Ok(())
+}
+
 #[cfg(all(test, feature = "sql"))]
 mod tests {
     use super::super::test_support::{MemorySource, NegotiationMode, accepted};
@@ -165,6 +224,11 @@ mod tests {
     struct BoundSource {
         reject_plain: bool,
         reject_bound: bool,
+        batch_accept: bool,
+        batch_support: FilterSupport,
+        batch_base_support: FilterSupport,
+        batch_revision: String,
+        batch_malformed: bool,
         estimate: Option<u64>,
         key_support: FilterSupport,
         base_support: FilterSupport,
@@ -177,8 +241,19 @@ mod tests {
     #[async_trait]
     impl QuerySource for BoundSource {
         async fn negotiate(&self, _: &str, request: &ScanRequest) -> Result<ScanPlan, DbError> {
-            self.requests.lock().unwrap().push(request.clone());
             let bound = request.parameters == [KEYS_PARAMETER];
+            let mut requests = self.requests.lock().unwrap();
+            let batch = bound
+                && requests
+                    .last()
+                    .is_some_and(|request| request.parameters == [KEYS_PARAMETER]);
+            requests.push(request.clone());
+            drop(requests);
+            if batch && !self.batch_accept {
+                return Ok(ScanPlan::Rejected {
+                    reason: "batch unavailable".into(),
+                });
+            }
             if bound && self.reject_bound {
                 return Ok(ScanPlan::Rejected {
                     reason: "dynamic lookup unavailable".into(),
@@ -191,12 +266,26 @@ mod tests {
             }
             let mut plan = accepted(request);
             plan.estimated_rows = self.estimate;
-            plan.filters.fill(self.base_support);
+            plan.filters.fill(if batch {
+                self.batch_base_support
+            } else {
+                self.base_support
+            });
             if bound {
-                *plan.filters.last_mut().unwrap() = self.key_support;
-                plan.schema_revision = self.bound_revision.clone();
-                plan.token = Some(Value::String("bound-token".into()));
-                if self.malformed {
+                *plan.filters.last_mut().unwrap() = if batch {
+                    self.batch_support
+                } else {
+                    self.key_support
+                };
+                plan.schema_revision = if batch {
+                    self.batch_revision.clone()
+                } else {
+                    self.bound_revision.clone()
+                };
+                plan.token = Some(Value::String(
+                    if batch { "batch-token" } else { "bound-token" }.into(),
+                ));
+                if self.malformed || (batch && self.batch_malformed) {
                     plan.filters.clear();
                 }
             }
@@ -251,13 +340,20 @@ mod tests {
         configure: impl FnOnce(&mut BoundSource),
         virtual_outer: bool,
     ) -> (FederatedEngine, Arc<BoundSource>) {
-        let (local, mut sources) = super::super::planner::tests::setup();
         let outer = vec![
             Object::from_iter([("id".into(), Value::String("a".into()))]),
             Object::from_iter([("id".into(), Value::String("a".into()))]),
             Object::from_iter([("id".into(), Value::String("b".into()))]),
             Object::from_iter([("id".into(), Value::Null)]),
         ];
+        setup_outer(configure, virtual_outer, outer)
+    }
+    fn setup_outer(
+        configure: impl FnOnce(&mut BoundSource),
+        virtual_outer: bool,
+        outer: Vec<Object>,
+    ) -> (FederatedEngine, Arc<BoundSource>) {
+        let (local, mut sources) = super::super::planner::tests::setup();
         sources.local = Arc::new(MemorySource {
             rows: BTreeMap::from([("local".into(), outer.clone())]),
             mode: NegotiationMode::Exact,
@@ -266,6 +362,11 @@ mod tests {
         let mut source = BoundSource {
             reject_plain: true,
             reject_bound: false,
+            batch_accept: false,
+            batch_support: FilterSupport::Exact,
+            batch_base_support: FilterSupport::Exact,
+            batch_revision: "1".into(),
+            batch_malformed: false,
             estimate: None,
             key_support: FilterSupport::Exact,
             base_support: FilterSupport::Exact,
@@ -540,5 +641,137 @@ mod tests {
             &bound
         ));
         assert!(super::super::composite::bind_residual(&predicate, &BTreeMap::new()).is_err());
+    }
+    fn batch_outer() -> Vec<Object> {
+        (0..130)
+            .map(|i| {
+                Object::from_iter([(
+                    "id".into(),
+                    match i % 3 {
+                        0 => Value::String("a".into()),
+                        1 => Value::String("b".into()),
+                        _ => Value::Null,
+                    },
+                )])
+            })
+            .collect()
+    }
+    #[test]
+    fn batches_use_own_token_list_bindings_residual_and_explain_size() {
+        use semantic_data::value::IntoValue;
+        let (engine, source) = setup_outer(
+            |source| {
+                source.batch_accept = true;
+                source.batch_base_support = FilterSupport::Inexact;
+            },
+            false,
+            batch_outer(),
+        );
+        let query = format!("{JOIN} WHERE r.title = 'Alpha'");
+        let explanation = run(engine.explain(sql(&query), &BTreeMap::new())).unwrap();
+        assert_eq!(
+            explanation
+                .leaves
+                .iter()
+                .find(|leaf| leaf.collection == "fx")
+                .unwrap()
+                .batch_size,
+            Some(64)
+        );
+        assert!(
+            explanation
+                .leaves
+                .iter()
+                .filter(|leaf| leaf.collection != "fx")
+                .all(|leaf| leaf.batch_size.is_none())
+        );
+        let Value::Object(wire) = explanation.into_value() else {
+            panic!("explain object");
+        };
+        let Some(Value::List(leaves)) = wire.get("leaves") else {
+            panic!("explain leaves");
+        };
+        assert!(leaves.iter().any(|leaf| matches!(leaf, Value::Object(leaf) if leaf.get("batch_size") == Some(&Value::U64(64)))));
+        assert!(source.scans.lock().unwrap().is_empty());
+        assert_eq!(
+            run(engine.select(sql(&query), &BTreeMap::new()))
+                .unwrap()
+                .len(),
+            44
+        );
+        let scans = source.scans.lock().unwrap();
+        assert_eq!(scans.len(), 3);
+        for (index, scan) in scans.iter().enumerate() {
+            assert_eq!(scan.plan.token, Some(Value::String("batch-token".into())));
+            assert_eq!(scan.request.limit, None);
+            assert_eq!(scan.request.offset, 0);
+            assert!(
+                matches!(scan.bindings.get(KEYS_PARAMETER), Some(Value::List(keys)) if keys.len() == if index == 2 { 1 } else { 2 } && !keys.contains(&Value::Null))
+            );
+            assert_eq!(scan.plan.filters.last(), Some(&FilterSupport::Exact));
+        }
+    }
+    #[test]
+    fn rejected_or_nonexact_batch_keeps_valid_singleton_lookup() {
+        for support in [
+            None,
+            Some(FilterSupport::Inexact),
+            Some(FilterSupport::Unsupported),
+        ] {
+            let (engine, source) = setup_outer(
+                |source| {
+                    source.batch_accept = support.is_some();
+                    source.batch_support = support.unwrap_or(FilterSupport::Exact);
+                },
+                false,
+                batch_outer(),
+            );
+            let explanation = run(engine.explain(sql(JOIN), &BTreeMap::new())).unwrap();
+            assert!(
+                explanation
+                    .leaves
+                    .iter()
+                    .all(|leaf| leaf.batch_size.is_none())
+            );
+            assert_eq!(
+                run(engine.select(sql(JOIN), &BTreeMap::new()))
+                    .unwrap()
+                    .len(),
+                131
+            );
+            let scans = source.scans.lock().unwrap();
+            assert_eq!(scans.len(), 2);
+            assert!(
+                scans
+                    .iter()
+                    .all(|scan| scan.plan.token == Some(Value::String("bound-token".into())))
+            );
+        }
+    }
+    #[test]
+    fn malformed_or_changed_batch_is_fatal_after_valid_singleton() {
+        let (engine, _) = setup(
+            |source| {
+                source.batch_accept = true;
+                source.batch_revision = "2".into();
+            },
+            false,
+        );
+        assert!(
+            matches!(run(engine.select(sql(JOIN), &BTreeMap::new())), Err(super::super::FederatedError::SchemaChanged { collection }) if collection == "fx")
+        );
+        let (engine, _) = setup(
+            |source| {
+                source.batch_accept = true;
+                source.batch_malformed = true;
+            },
+            false,
+        );
+        assert!(
+            run(engine.select(sql(JOIN), &BTreeMap::new()))
+                .unwrap_err()
+                .to_string()
+                .contains("protocol violation")
+        );
     }
 }

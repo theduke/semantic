@@ -68,20 +68,26 @@ impl FederatedEngine {
         let leaves = prepared
             .fragments
             .into_iter()
-            .map(|(key, fragment)| LeafExplain {
-                collection: fragment.collection,
-                source_tag: key.backend_tag,
-                filters: fragment
-                    .request
-                    .filters
-                    .into_iter()
-                    .zip(fragment.plan.filters)
-                    .collect(),
-                ordered_prefix: fragment.plan.ordered_prefix,
-                limit_applied: fragment.plan.limit_applied,
-                offset_applied: fragment.plan.offset_applied,
-                estimated_rows: fragment.plan.estimated_rows,
-                residual: fragment.residual.map(Into::into),
+            .map(|(key, fragment)| {
+                let batch_size = fragment
+                    .batch
+                    .as_ref()
+                    .map(|_| super::bind::BIND_JOIN_BATCH_SIZE as u64);
+                let (request, plan, residual) = match fragment.batch {
+                    Some(batch) => (batch.request, batch.plan, batch.residual),
+                    None => (fragment.request, fragment.plan, fragment.residual),
+                };
+                LeafExplain {
+                    collection: fragment.collection,
+                    source_tag: key.backend_tag,
+                    filters: request.filters.into_iter().zip(plan.filters).collect(),
+                    ordered_prefix: plan.ordered_prefix,
+                    limit_applied: plan.limit_applied,
+                    offset_applied: plan.offset_applied,
+                    estimated_rows: plan.estimated_rows,
+                    residual: residual.map(Into::into),
+                    batch_size,
+                }
             })
             .collect();
         Ok(FederatedExplain {
@@ -130,7 +136,7 @@ impl FederatedEngine {
             &QueryContext::new(overlay.clone()),
         );
         let candidates = super::bind::candidates(&baseline, &self.sources, &overlay)?;
-        let fragments = negotiate_leaves_with_bind(
+        let mut fragments = negotiate_leaves_with_bind(
             &mut planned,
             &order,
             limit,
@@ -139,6 +145,7 @@ impl FederatedEngine {
             &candidates,
         )
         .await?;
+        super::bind::negotiate_batches(&mut fragments, &self.sources).await?;
         // Metadata only for the selected exact lookup, after ordinary index
         // removal. Core lowering stays index-free and is rewritten below.
         let mut lookup_overlay = (*overlay).clone();

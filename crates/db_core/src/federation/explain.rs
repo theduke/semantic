@@ -22,6 +22,8 @@ pub struct LeafExplain {
     /// The source's estimate, rather than a fabricated host cost estimate.
     pub estimated_rows: Option<u64>,
     pub residual: Option<Expr>,
+    /// Selected outer-row batch size; absent for ordinary/singleton scans.
+    pub batch_size: Option<u64>,
 }
 
 #[derive(facet::Facet, SemanticType, IntoValue)]
@@ -40,6 +42,7 @@ struct LeafValue {
     offset_applied: bool,
     estimated_rows: Option<u64>,
     residual: Option<Expr>,
+    batch_size: Option<u64>,
 }
 
 impl From<LeafExplain> for LeafValue {
@@ -60,6 +63,7 @@ impl From<LeafExplain> for LeafValue {
             offset_applied: leaf.offset_applied,
             estimated_rows: leaf.estimated_rows,
             residual: leaf.residual,
+            batch_size: leaf.batch_size,
         }
     }
 }

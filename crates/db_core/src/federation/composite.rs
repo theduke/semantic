@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 
 use futures::{StreamExt, stream};
 use semantic_data::value::Value;
@@ -20,7 +21,7 @@ impl CompositeDataSource {
         &self,
         source: SourceRef,
         predicate: Option<&Expr>,
-        lookup: Option<(FieldRef, Vec<Value>)>,
+        lookup: Option<(FieldRef, Vec<Value>, bool)>,
     ) -> SendableRecordBatchStream {
         let Some(fragment) = self.fragments.get(&LeafKey::from(&source)) else {
             return error_stream(format!("federation: no fragment for source {source:?}"));
@@ -28,15 +29,23 @@ impl CompositeDataSource {
         if let Some(predicate) = predicate {
             debug_assert_eq!(fragment.pushed_predicate.as_ref(), Some(predicate));
         }
+        let batch_lookup = lookup.as_ref().is_some_and(|(_, _, batch)| *batch);
+        let (request, plan, residual) = if batch_lookup {
+            let Some(batch) = &fragment.batch else {
+                return error_stream("federation: no negotiated bulk lookup".into());
+            };
+            (&batch.request, &batch.plan, &batch.residual)
+        } else {
+            (&fragment.request, &fragment.plan, &fragment.residual)
+        };
         let bindings = match (&fragment.bind_field, lookup) {
-            (Some(expected), Some((field, values))) if expected == &field => {
+            (Some(expected), Some((field, values, _))) if expected == &field => {
                 BTreeMap::from([(super::bind::KEYS_PARAMETER.into(), Value::List(values))])
             }
             (None, None) => BTreeMap::new(),
             _ => return error_stream("federation: scan does not match negotiated lookup".into()),
         };
-        let residual = match fragment
-            .residual
+        let residual = match residual
             .as_ref()
             .map(|predicate| bind_residual(predicate, &bindings))
             .transpose()
@@ -49,8 +58,8 @@ impl CompositeDataSource {
             .clone()
             .scan(SourceScan {
                 collection: fragment.collection.clone(),
-                request: fragment.request.clone(),
-                plan: fragment.plan.clone(),
+                request: request.clone(),
+                plan: plan.clone(),
                 bindings,
             })
             .map(move |batch| {
@@ -111,7 +120,7 @@ impl AsyncPhysicalDataSource for CompositeDataSource {
         field: FieldRef,
         value: Value,
     ) -> SendableRecordBatchStream {
-        self.read(source, None, Some((field, vec![value])))
+        self.read(source, None, Some((field, vec![value], false)))
     }
     fn index_lookup_filtered_stream(
         &self,
@@ -123,7 +132,26 @@ impl AsyncPhysicalDataSource for CompositeDataSource {
         self.read(
             source,
             residual_predicate.as_ref(),
-            Some((field, vec![value])),
+            Some((field, vec![value], false)),
+        )
+    }
+    fn index_lookup_batch_size(&self, source: &SourceRef) -> Option<NonZeroUsize> {
+        self.fragments
+            .get(&LeafKey::from(source))
+            .filter(|fragment| fragment.batch.is_some())
+            .and_then(|_| NonZeroUsize::new(super::bind::BIND_JOIN_BATCH_SIZE))
+    }
+    fn index_lookup_batch_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        values: Vec<Value>,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        self.read(
+            source,
+            residual_predicate.as_ref(),
+            Some((field, values, true)),
         )
     }
     fn index_range_stream(&self, _: PhysicalIndexScan) -> SendableRecordBatchStream {

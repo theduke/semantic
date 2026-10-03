@@ -20,6 +20,15 @@ pub(crate) struct LeafFragment {
     pub pushed_predicate: Option<Expr>,
     pub sole_input: bool,
     pub bind_field: Option<FieldRef>,
+    pub host_residual: Option<Expr>,
+    pub batch: Option<BatchFragment>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BatchFragment {
+    pub request: ScanRequest,
+    pub plan: AcceptedScan,
+    pub residual: Option<Expr>,
 }
 
 pub(crate) fn combine_filters(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
@@ -259,7 +268,7 @@ pub(crate) async fn negotiate_leaves_with_bind(
                     .filter_map(|(filter, support)| {
                         (*support != FilterSupport::Exact).then(|| Expr::from(filter))
                     })
-                    .chain(host_only),
+                    .chain(host_only.clone()),
             );
             let fragment = LeafFragment {
                 collection: collection.clone(),
@@ -270,6 +279,8 @@ pub(crate) async fn negotiate_leaves_with_bind(
                 pushed_predicate: leaf.pushed_predicate,
                 sole_input: leaf.sole_input,
                 bind_field,
+                host_residual: combine_filters(host_only),
+                batch: None,
             };
             Ok::<_, FederatedError>((leaf.key, fragment))
         }
