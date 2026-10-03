@@ -9319,6 +9319,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic_vdb"
+version = "0.0.1"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "futures-util",
+ "semantic_data",
+ "semantic_db_core",
+ "semantic_plugin",
+ "semantic_rpc",
+ "semantic_rpc_core",
+ "tokio",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
