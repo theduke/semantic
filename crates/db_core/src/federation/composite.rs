@@ -16,14 +16,34 @@ pub(crate) struct CompositeDataSource {
 }
 
 impl CompositeDataSource {
-    fn read(&self, source: SourceRef, predicate: Option<&Expr>) -> SendableRecordBatchStream {
+    fn read(
+        &self,
+        source: SourceRef,
+        predicate: Option<&Expr>,
+        lookup: Option<(FieldRef, Vec<Value>)>,
+    ) -> SendableRecordBatchStream {
         let Some(fragment) = self.fragments.get(&LeafKey::from(&source)) else {
             return error_stream(format!("federation: no fragment for source {source:?}"));
         };
         if let Some(predicate) = predicate {
             debug_assert_eq!(fragment.pushed_predicate.as_ref(), Some(predicate));
         }
-        let residual = fragment.residual.clone();
+        let bindings = match (&fragment.bind_field, lookup) {
+            (Some(expected), Some((field, values))) if expected == &field => {
+                BTreeMap::from([(super::bind::KEYS_PARAMETER.into(), Value::List(values))])
+            }
+            (None, None) => BTreeMap::new(),
+            _ => return error_stream("federation: scan does not match negotiated lookup".into()),
+        };
+        let residual = match fragment
+            .residual
+            .as_ref()
+            .map(|predicate| bind_residual(predicate, &bindings))
+            .transpose()
+        {
+            Ok(residual) => residual,
+            Err(error) => return error_stream(error.to_string()),
+        };
         fragment
             .source
             .clone()
@@ -31,7 +51,7 @@ impl CompositeDataSource {
                 collection: fragment.collection.clone(),
                 request: fragment.request.clone(),
                 plan: fragment.plan.clone(),
-                bindings: BTreeMap::new(),
+                bindings,
             })
             .map(move |batch| {
                 batch.map(|mut rows| {
@@ -45,6 +65,27 @@ impl CompositeDataSource {
     }
 }
 
+pub(super) fn bind_residual(
+    predicate: &Expr,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<Expr, CoreError> {
+    let mut predicate: semantic_data::query::Expr = predicate.clone().into();
+    predicate.visit_mut(&mut |expr| {
+        if let semantic_data::query::Expr::Operand(semantic_data::query::Operand::Parameter(name)) =
+            expr
+        {
+            let value = bindings.get(name).ok_or_else(|| {
+                CoreError::new(format!("federation: missing residual parameter '{name}'"))
+            })?;
+            *expr = semantic_data::query::Expr::Operand(semantic_data::query::Operand::Literal(
+                value.clone(),
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(predicate.into())
+}
+
 fn error_stream(message: String) -> SendableRecordBatchStream {
     stream::once(async move { Err(CoreError::new(message)) }).boxed()
 }
@@ -55,50 +96,35 @@ fn unsupported_index() -> SendableRecordBatchStream {
 
 impl AsyncPhysicalDataSource for CompositeDataSource {
     fn scan_stream(&self, source: SourceRef) -> SendableRecordBatchStream {
-        self.read(source, None)
+        self.read(source, None, None)
     }
     fn scan_filtered_stream(
         &self,
         source: SourceRef,
         predicate: Expr,
     ) -> SendableRecordBatchStream {
-        self.read(source, Some(&predicate))
+        self.read(source, Some(&predicate), None)
     }
     fn index_lookup_stream(
         &self,
-        _: SourceRef,
-        _: FieldRef,
-        _: Value,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
     ) -> SendableRecordBatchStream {
-        unsupported_index()
+        self.read(source, None, Some((field, vec![value])))
     }
     fn index_lookup_filtered_stream(
         &self,
-        _: SourceRef,
-        _: FieldRef,
-        _: Value,
-        _: Option<Expr>,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+        residual_predicate: Option<Expr>,
     ) -> SendableRecordBatchStream {
-        unsupported_index()
-    }
-    fn index_lookup_limited_stream(
-        &self,
-        _: SourceRef,
-        _: FieldRef,
-        _: Value,
-        _: Option<Expr>,
-        _: Option<usize>,
-    ) -> SendableRecordBatchStream {
-        unsupported_index()
-    }
-    fn index_lookup_many_stream(
-        &self,
-        _: SourceRef,
-        _: FieldRef,
-        _: Vec<Value>,
-        _: Option<Expr>,
-    ) -> SendableRecordBatchStream {
-        unsupported_index()
+        self.read(
+            source,
+            residual_predicate.as_ref(),
+            Some((field, vec![value])),
+        )
     }
     fn index_range_stream(&self, _: PhysicalIndexScan) -> SendableRecordBatchStream {
         unsupported_index()

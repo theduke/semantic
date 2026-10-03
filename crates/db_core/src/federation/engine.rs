@@ -6,7 +6,7 @@ use semantic_data::value::{Object, Value};
 
 use super::composite::CompositeDataSource;
 use super::planner::{LeafKey, overlay_catalog, plan_select};
-use super::pushdown::{LeafFragment, apply_offset_rewrites, negotiate_leaves};
+use super::pushdown::{LeafFragment, apply_offset_rewrites, negotiate_leaves_with_bind};
 use super::{FederatedError, FederatedExplain, FederationSources, LeafExplain};
 use crate::catalog::Catalog;
 use crate::{DbError, ExecutionOptions, Expr, LogicalPlan, Optimizer, PhysicalPlan, QueryContext};
@@ -124,16 +124,51 @@ impl FederatedEngine {
         let limit = offset.and_then(|_| query.limit.as_ref().and_then(literal_limit));
         let offset = offset.unwrap_or(0);
         let mut planned = plan_select(query, overlay.clone(), &self.sources, &self.local_catalog)?;
-        let fragments =
-            negotiate_leaves(&mut planned, &order, limit, offset, &self.sources).await?;
+        let baseline = Optimizer::core().lower_to_physical(
+            &planned.logical,
+            None,
+            &QueryContext::new(overlay.clone()),
+        );
+        let candidates = super::bind::candidates(&baseline, &self.sources, &overlay)?;
+        let fragments = negotiate_leaves_with_bind(
+            &mut planned,
+            &order,
+            limit,
+            offset,
+            &self.sources,
+            &candidates,
+        )
+        .await?;
+        // Metadata only for the selected exact lookup, after ordinary index
+        // removal. Core lowering stays index-free and is rewritten below.
+        let mut lookup_overlay = (*overlay).clone();
+        for (key, fragment) in &fragments {
+            if fragment.bind_field.is_some() {
+                let candidate = &candidates[key];
+                let collection = lookup_overlay
+                    .collection_by_name(&key.source_name)
+                    .unwrap()
+                    .lid;
+                lookup_overlay
+                    .upsert_index(
+                        format!("__vdb_bind_{}_{}", key.source_name, candidate.index_field),
+                        collection,
+                        &candidate.index_field,
+                        false,
+                    )
+                    .map_err(|error| DbError::InvalidQuery(error.to_string()))?;
+            }
+        }
+        let lookup_overlay = Arc::new(lookup_overlay);
         let logical = apply_offset_rewrites(planned.logical, &fragments);
-        let physical = Optimizer::core().lower_to_physical(
+        let mut physical = Optimizer::core().lower_to_physical(
             &logical,
             None,
             &QueryContext::new(overlay.clone()),
         );
+        super::bind::apply(&mut physical, &fragments);
         Ok(PreparedExecution {
-            overlay,
+            overlay: lookup_overlay,
             logical,
             physical,
             fragments,

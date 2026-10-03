@@ -5,9 +5,10 @@ use semantic_data::query::BinaryOp;
 use semantic_data::value::PathSegment;
 use semantic_data::vdb::{AcceptedScan, FilterSupport, ScanPlan, ScanRequest};
 
+use super::bind::{BIND_JOIN_THRESHOLD, BindCandidate, KEYS_PARAMETER};
 use super::planner::{LeafKey, PlannedSelect, collect_leaves};
 use super::{FederatedError, FederationSources, QuerySource};
-use crate::{DbError, Expr, LogicalPlan, OrderBy};
+use crate::{DbError, Expr, FieldRef, LogicalPlan, Operand, OrderBy};
 
 #[derive(Clone)]
 pub(crate) struct LeafFragment {
@@ -18,6 +19,7 @@ pub(crate) struct LeafFragment {
     pub residual: Option<Expr>,
     pub pushed_predicate: Option<Expr>,
     pub sole_input: bool,
+    pub bind_field: Option<FieldRef>,
 }
 
 pub(crate) fn combine_filters(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
@@ -72,12 +74,32 @@ fn has_host_filter(plan: &LogicalPlan) -> bool {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn negotiate_leaves(
     planned: &mut PlannedSelect,
     query_order: &[OrderBy],
     limit: Option<u64>,
     offset: u64,
     sources: &FederationSources,
+) -> Result<BTreeMap<LeafKey, LeafFragment>, FederatedError> {
+    negotiate_leaves_with_bind(
+        planned,
+        query_order,
+        limit,
+        offset,
+        sources,
+        &BTreeMap::new(),
+    )
+    .await
+}
+
+pub(crate) async fn negotiate_leaves_with_bind(
+    planned: &mut PlannedSelect,
+    query_order: &[OrderBy],
+    limit: Option<u64>,
+    offset: u64,
+    sources: &FederationSources,
+    candidates: &BTreeMap<LeafKey, BindCandidate>,
 ) -> Result<BTreeMap<LeafKey, LeafFragment>, FederatedError> {
     let leaves = collect_leaves(&planned.logical);
     let bindings = leaves
@@ -155,29 +177,87 @@ pub(crate) async fn negotiate_leaves(
             let virtual_source = sources.virtual_sources.get(collection);
             let source = virtual_source
                 .map_or_else(|| sources.local.clone(), |source| source.source.clone());
-            let plan = match source.negotiate(collection, &request).await? {
-                ScanPlan::Accepted { plan } => plan,
-                ScanPlan::Rejected { reason } => {
-                    return Err(DbError::InvalidQuery(format!("{collection}: {reason}")).into());
-                }
-            };
-            plan.validate(&request).map_err(|error| {
-                DbError::InvalidQuery(format!(
-                    "{collection}: protocol violation: {}",
-                    error.message
-                ))
-            })?;
-            if virtual_source.is_some_and(|source| source.schema_revision != plan.schema_revision) {
-                return Err(FederatedError::SchemaChanged {
-                    collection: collection.clone(),
-                });
+            let validate =
+                |plan: &AcceptedScan, request: &ScanRequest| -> Result<(), FederatedError> {
+                    plan.validate(request).map_err(|error| {
+                        DbError::InvalidQuery(format!(
+                            "{collection}: protocol violation: {}",
+                            error.message
+                        ))
+                    })?;
+                    if virtual_source
+                        .is_some_and(|source| source.schema_revision != plan.schema_revision)
+                    {
+                        return Err(FederatedError::SchemaChanged {
+                            collection: collection.clone(),
+                        });
+                    }
+                    Ok(())
+                };
+            let plain = source.negotiate(collection, &request).await?;
+            if let ScanPlan::Accepted { plan } = &plain {
+                validate(plan, &request)?;
             }
+            let candidate = candidates.get(&leaf.key);
+            let bound = if let Some(candidate) = candidate {
+                let mut bound_request = request.clone();
+                bound_request.filters.push(
+                    Expr::Binary {
+                        op: BinaryOp::In,
+                        left: Box::new(candidate.key.clone()),
+                        right: Box::new(Expr::Operand(Operand::Parameter(KEYS_PARAMETER.into()))),
+                    }
+                    .into(),
+                );
+                bound_request.parameters = vec![KEYS_PARAMETER.into()];
+                bound_request.order_by.clear();
+                bound_request.limit = None;
+                bound_request.offset = 0;
+                let bound_plan = source.negotiate(collection, &bound_request).await?;
+                Some((bound_request, bound_plan))
+            } else {
+                None
+            };
+            // Rejections are negotiation outcomes. Only fail after trying the
+            // exact parameterized alternative; transport/protocol errors remain fatal.
+            if let Some((request, ScanPlan::Accepted { plan })) = &bound {
+                validate(plan, request)?;
+            }
+            let prefer_bind = match &plain {
+                ScanPlan::Rejected { .. } => true,
+                ScanPlan::Accepted { plan } => plan
+                    .estimated_rows
+                    .is_some_and(|rows| rows > BIND_JOIN_THRESHOLD),
+            };
+            let exact_bound = bound.as_ref().is_some_and(|(_, plan)| {
+                matches!(plan,
+                ScanPlan::Accepted { plan } if plan.filters.last() == Some(&FilterSupport::Exact))
+            });
+            let (request, plan, bind_field) = if prefer_bind && exact_bound {
+                let (request, ScanPlan::Accepted { plan }) = bound.unwrap() else {
+                    unreachable!()
+                };
+                (request, plan, Some(candidate.unwrap().field.clone()))
+            } else {
+                let plan = match plain {
+                    ScanPlan::Accepted { plan } => plan,
+                    ScanPlan::Rejected { reason } => {
+                        return Err(DbError::InvalidQuery(format!(
+                            "{collection}: {reason}; exact bound key lookup unavailable"
+                        ))
+                        .into());
+                    }
+                };
+                (request, plan, None)
+            };
             let residual = combine_filters(
-                filters
-                    .into_iter()
+                request
+                    .filters
+                    .iter()
+                    .cloned()
                     .zip(&plan.filters)
                     .filter_map(|(filter, support)| {
-                        (*support != FilterSupport::Exact).then_some(filter)
+                        (*support != FilterSupport::Exact).then(|| Expr::from(filter))
                     })
                     .chain(host_only),
             );
@@ -189,8 +269,9 @@ pub(crate) async fn negotiate_leaves(
                 residual,
                 pushed_predicate: leaf.pushed_predicate,
                 sole_input: leaf.sole_input,
+                bind_field,
             };
-            Ok((leaf.key, fragment))
+            Ok::<_, FederatedError>((leaf.key, fragment))
         }
     });
     let mut fragments = BTreeMap::new();
