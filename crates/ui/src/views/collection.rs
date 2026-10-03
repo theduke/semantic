@@ -50,9 +50,7 @@ pub fn CollectionPage(collection: String) -> Element {
     let scope_id = use_active_scope_id();
     let catalog_signal = use_ui_catalog_context().catalog_signal();
     let collections = crate::virtual_collections::use_collection_names();
-    let read_only = crate::virtual_collections::use_virtual_collections()
-        .iter()
-        .any(|entry| entry.name == collection);
+    let read_only = crate::virtual_collections::use_collection_read_only(&collection);
 
     // Route currently owns only collection identity. These view preferences stay
     // local until Collection gains query parameters without changing Route shape.

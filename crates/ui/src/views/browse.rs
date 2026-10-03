@@ -68,9 +68,7 @@ pub fn BrowsePage(
     let page = clamp_page(page.unwrap_or(0));
     let page_size = clamp_page_size(page_size.unwrap_or(DEFAULT_PAGE_SIZE));
     let custom_sql = sql.is_some();
-    let read_only = crate::virtual_collections::use_virtual_collections()
-        .iter()
-        .any(|entry| entry.name == collection_name);
+    let read_only = crate::virtual_collections::use_collection_read_only(&collection_name);
     let decoded_filters = filters.as_deref().map(decode_structured_query).transpose();
     let route_filter_error = decoded_filters.as_ref().err().cloned();
     let applied_filters = decoded_filters

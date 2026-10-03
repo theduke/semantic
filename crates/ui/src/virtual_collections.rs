@@ -3,7 +3,7 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use semantic_data::{Object, Value, value::FromValue, vdb::DatabaseSchema};
 use semantic_ui_core::{
-    UiCatalogContext,
+    UiCatalog, UiCatalogContext,
     components::{InlineNotice, NoticeVariant},
     use_active_scope_id, use_rpc_client, use_ui_catalog_context,
 };
@@ -24,10 +24,49 @@ struct SourceKey {
 }
 
 #[derive(Clone, Copy)]
-struct VirtualCollectionsContext(Resource<(SourceKey, Result<Vec<VirtualCollection>, String>)>);
+struct VirtualCollectionsContext {
+    resource: Resource<(SourceKey, Result<Vec<VirtualCollection>, String>)>,
+    original_catalog: Signal<Option<UiCatalog>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollectionIdentity {
+    Local,
+    Virtual,
+    Pending,
+    Unknown,
+}
+
+fn collection_identity(
+    original: Option<&UiCatalog>,
+    list: Option<&Result<Vec<VirtualCollection>, String>>,
+    name: &str,
+) -> CollectionIdentity {
+    if original.is_some_and(|catalog| catalog.collection_by_name(name).is_some()) {
+        return CollectionIdentity::Local;
+    }
+    match list {
+        Some(Ok(entries)) if entries.iter().any(|entry| entry.name == name) => {
+            CollectionIdentity::Virtual
+        }
+        None => CollectionIdentity::Pending,
+        _ => CollectionIdentity::Unknown,
+    }
+}
+
+pub(crate) fn use_collection_read_only(name: &str) -> bool {
+    let context = use_context::<VirtualCollectionsContext>();
+    let list = use_virtual_collection_state();
+    collection_identity(
+        context.original_catalog.read().as_ref(),
+        list.as_ref(),
+        name,
+    ) != CollectionIdentity::Local
+}
 
 #[component]
 pub(crate) fn VirtualCollectionsProvider(children: Element) -> Element {
+    let original_catalog = use_ui_catalog_context().catalog_signal();
     let source = SourceKey {
         client: use_rpc_client(),
         scope_id: use_active_scope_id(),
@@ -36,7 +75,10 @@ pub(crate) fn VirtualCollectionsProvider(children: Element) -> Element {
         let result = load_virtual_collections(source.client.clone(), source.scope_id.clone()).await;
         (source, result)
     }));
-    use_context_provider(|| VirtualCollectionsContext(resource));
+    use_context_provider(|| VirtualCollectionsContext {
+        resource,
+        original_catalog,
+    });
     children
 }
 
@@ -47,12 +89,15 @@ pub(crate) fn use_virtual_collections() -> Vec<VirtualCollection> {
 }
 
 pub(crate) fn use_virtual_collection_reload() -> Callback<()> {
-    let VirtualCollectionsContext(mut resource) = use_context();
+    let VirtualCollectionsContext { mut resource, .. } = use_context();
     use_callback(move |_| resource.restart())
 }
 
 fn use_virtual_collection_state() -> Option<Result<Vec<VirtualCollection>, String>> {
-    let VirtualCollectionsContext(resource) = use_context();
+    let VirtualCollectionsContext {
+        resource,
+        original_catalog,
+    } = use_context();
     let source = SourceKey {
         client: use_rpc_client(),
         scope_id: use_active_scope_id(),
@@ -61,7 +106,19 @@ fn use_virtual_collection_state() -> Option<Result<Vec<VirtualCollection>, Strin
         .read()
         .as_ref()
         .filter(|(loaded, _)| loaded == &source)
-        .map(|(_, result)| result.clone())
+        .map(|(_, result)| {
+            result.clone().map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|entry| {
+                        original_catalog
+                            .read()
+                            .as_ref()
+                            .is_none_or(|local| local.collection_by_name(&entry.name).is_none())
+                    })
+                    .collect()
+            })
+        })
 }
 
 pub(crate) fn use_collection_names() -> Rc<[String]> {
@@ -146,6 +203,14 @@ pub(crate) fn VirtualEntityCatalog(collection: Option<String>, children: Element
     };
     let parent = use_ui_catalog_context().catalog_signal();
     let list = use_virtual_collection_state();
+    let original = use_context::<VirtualCollectionsContext>().original_catalog;
+    let identity = collection_identity(
+        original.read().as_ref(),
+        list.as_ref(),
+        collection
+            .as_deref()
+            .unwrap_or(semantic_data::builtin::DEFAULT_COLLECTION),
+    );
     let entries = list
         .as_ref()
         .and_then(|result| result.as_ref().ok())
@@ -188,17 +253,13 @@ pub(crate) fn VirtualEntityCatalog(collection: Option<String>, children: Element
         .as_ref()
         .filter(|(loaded, _)| loaded == &key)
         .map(|(_, result)| result.clone());
-    let is_local = collection.as_ref().is_none_or(|name| {
-        local
-            .as_ref()
-            .is_some_and(|catalog| catalog.collection_by_name(name).is_some())
-    });
     let combined = match (&local, result) {
-        (Some(local), _) if is_local => Ok(Some(local.clone())),
+        (Some(local), _) if identity == CollectionIdentity::Local => Ok(Some(local.clone())),
+        _ if identity == CollectionIdentity::Pending => Ok(None),
         (Some(local), Some(Ok(Some(schema)))) => local
             .with_virtual_schema(collection.as_deref().unwrap_or_default(), &schema)
             .map(Some),
-        (Some(local), Some(Ok(None))) => Ok(Some(local.clone())),
+        (_, Some(Ok(None))) => Err("Unknown collection".into()),
         (_, Some(Err(error))) => Err(error),
         _ => match &list {
             Some(Err(error)) => Err(error.clone()),
@@ -267,17 +328,25 @@ mod tests {
         client: Client,
         scope: Rc<Cell<Option<Signal<Option<String>>>>>,
         names: Rc<RefCell<Vec<String>>>,
+        original: UiCatalog,
+        read_only: Rc<Cell<(bool, bool)>>,
     }
     fn app(props: Props) -> Element {
+        let catalog = use_signal(|| Some(props.original));
+        use_context_provider(|| UiCatalogContext::new(catalog));
         let scope = use_signal(|| Some("first".into()));
         use_context_provider(|| UiScopeContext::new(scope));
         use_hook(|| props.scope.set(Some(scope)));
         let rpc = use_hook(|| RpcClient::new(props.client));
         provide_rpc_client(rpc);
-        rsx! { VirtualCollectionsProvider { Probe { names: props.names } } }
+        rsx! { VirtualCollectionsProvider { Probe { names: props.names, read_only: props.read_only } } }
     }
     #[component]
-    fn Probe(names: Rc<RefCell<Vec<String>>>) -> Element {
+    fn Probe(names: Rc<RefCell<Vec<String>>>, read_only: Rc<Cell<(bool, bool)>>) -> Element {
+        read_only.set((
+            use_collection_read_only("fx"),
+            use_collection_read_only("remote"),
+        ));
         *names.borrow_mut() = use_virtual_collections()
             .into_iter()
             .map(|entry| entry.name)
@@ -309,6 +378,10 @@ mod tests {
                 client: client.clone(),
                 scope: scope.clone(),
                 names: names.clone(),
+                original: UiCatalog::from_snapshot(
+                    semantic_db_core::catalog::Catalog::new().to_storage_snapshot(),
+                ),
+                read_only: Rc::new(Cell::new((true, true))),
             },
         );
         dom.rebuild_to_vec();
@@ -331,5 +404,90 @@ mod tests {
         second.response.send(listing("second.fx")).unwrap();
         flush(&mut dom);
         assert_eq!(&*names.borrow(), &["second.fx"]);
+    }
+
+    #[test]
+    fn original_local_collection_wins_conflicts_and_pending_identity_is_read_only() {
+        use semantic_db_core::catalog::{Catalog, CollectionKind, IntegrityMode};
+        let mut local = Catalog::new();
+        local
+            .upsert_collection("fx", CollectionKind::Polymorphic, IntegrityMode::Permissive)
+            .unwrap();
+        let original = UiCatalog::from_snapshot(local.to_storage_snapshot());
+        let unavailable = |name: &str| VirtualCollection {
+            name: name.into(),
+            generation: 1,
+            available: false,
+            reason: Some("unavailable".into()),
+            revision: None,
+        };
+        let list = Ok(vec![unavailable("fx"), unavailable("remote")]);
+        assert_eq!(
+            collection_identity(Some(&original), Some(&list), "fx"),
+            CollectionIdentity::Local
+        );
+        assert_eq!(
+            collection_identity(Some(&original), None, "fx"),
+            CollectionIdentity::Local
+        );
+        assert_eq!(
+            collection_identity(Some(&original), Some(&list), "remote"),
+            CollectionIdentity::Virtual
+        );
+        assert_eq!(
+            collection_identity(Some(&original), None, "remote"),
+            CollectionIdentity::Pending
+        );
+        // The rendering overlay has a virtual shell; it must never replace the
+        // original catalog used by identity and mutation-control checks.
+        let overlay = original
+            .with_virtual_schema("remote", &DatabaseSchema::default())
+            .unwrap();
+        assert!(overlay.collection_by_name("remote").is_some());
+        assert_eq!(
+            collection_identity(Some(&original), Some(&list), "remote"),
+            CollectionIdentity::Virtual
+        );
+    }
+
+    #[test]
+    fn local_conflict_keeps_controls_and_navigation_while_pending_remote_is_read_only() {
+        use semantic_db_core::catalog::{Catalog, CollectionKind, IntegrityMode};
+        let mut local = Catalog::new();
+        local
+            .upsert_collection("fx", CollectionKind::Polymorphic, IntegrityMode::Permissive)
+            .unwrap();
+        let client = Client::default();
+        let names = Rc::new(RefCell::new(Vec::new()));
+        let read_only = Rc::new(Cell::new((true, false)));
+        let mut dom = VirtualDom::new_with_props(
+            app,
+            Props {
+                client: client.clone(),
+                scope: Rc::new(Cell::new(None)),
+                names: names.clone(),
+                original: UiCatalog::from_snapshot(local.to_storage_snapshot()),
+                read_only: read_only.clone(),
+            },
+        );
+        dom.rebuild_to_vec();
+        flush(&mut dom);
+        assert_eq!(read_only.get(), (false, true));
+        let request = client.0.lock().unwrap().remove(0);
+        let unavailable = |name: &str| {
+            Value::Object(Object::from_iter([
+                ("name".into(), Value::String(name.into())),
+                ("generation".into(), Value::U64(1)),
+                ("available".into(), Value::Bool(false)),
+                ("reason".into(), Value::String("unavailable".into())),
+            ]))
+        };
+        request
+            .response
+            .send(Value::List(vec![unavailable("fx"), unavailable("remote")]))
+            .unwrap();
+        flush(&mut dom);
+        assert_eq!(&*names.borrow(), &["remote"]);
+        assert_eq!(read_only.get(), (false, true));
     }
 }

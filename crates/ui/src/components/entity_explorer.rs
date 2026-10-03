@@ -74,9 +74,7 @@ pub fn DataToolbar(
     let collection_in_catalog = collections.iter().any(|candidate| candidate == &collection);
     let virtual_collections = crate::virtual_collections::use_virtual_collections();
     let reload_virtual = crate::virtual_collections::use_virtual_collection_reload();
-    let read_only = virtual_collections
-        .iter()
-        .any(|entry| entry.name == collection);
+    let read_only = crate::virtual_collections::use_collection_read_only(&collection);
 
     rsx! {
         div { class: "semantic-data-toolbar", role: "toolbar", aria_label: toolbar_label,
@@ -98,7 +96,7 @@ pub fn DataToolbar(
                 }
             }
 
-            if read_only {
+            if read_only && virtual_collections.iter().any(|entry| entry.name == collection) {
                 span { class: "semantic-catalog__badge", "Virtual · read-only" }
                 button {
                     class: "semantic-button-link semantic-button-link--secondary",
@@ -235,9 +233,11 @@ fn EntityResultsBody(
     density: ResultDensity,
     #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
 ) -> Element {
-    let read_only = crate::virtual_collections::use_virtual_collections()
-        .iter()
-        .any(|entry| collection.as_deref() == Some(entry.name.as_str()));
+    let read_only = crate::virtual_collections::use_collection_read_only(
+        collection
+            .as_deref()
+            .unwrap_or(semantic_data::builtin::DEFAULT_COLLECTION),
+    );
     let grid_columns = grid_columns.clamp(1, 3);
     let density_class = density.class();
 
