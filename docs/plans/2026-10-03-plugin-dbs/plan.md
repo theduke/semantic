@@ -25,8 +25,8 @@ How to read this document:
 
 Update this list as tasks land (one commit per task, see §7).
 
-- [ ] S1 S2 S3: spikes (notes only)
-- [ ] T1.1: `semantic.vdb` package and DTOs (`crates/data`)
+- [x] S1 S2 S3: spikes (notes only)
+- [x] T1.1: `semantic.vdb` package and DTOs (`crates/data`)
 - [ ] T1.2: register the package in the app
 - [ ] T2.1: federation module split, `QuerySource` trait, referenced collections
 - [ ] T2.2: overlay catalog and planning
@@ -333,7 +333,9 @@ and functions.
    `ddl::apply_ddl_batch` (§4.5; the result is cached per revision, so this is
    a merge of already validated definitions), and add the VDB as
    `CollectionKind::Polymorphic`, `IntegrityMode::Permissive`. Apply the S2
-   decision so lowering never produces index access paths.
+   decision so lowering never produces index access paths: after applying all
+   schema DDL and adding collections, remove every overlay index using
+   `Catalog::delete_index` (collection creation always adds builtin indexes).
 3. Canonicalize with `canonicalize_select_query` against the overlay.
 4. `Optimizer::core().optimize_query_with_source(..)`. Tag every `Source` leaf
    with `backend_tag` = `"local"` or the VDB name (adapt `resolve_logical_sources`).
@@ -344,7 +346,11 @@ and functions.
 For each `Source` leaf (key: `LeafKey { backend_tag, source_name, binding }`):
 
 1. `filters = conjuncts(pushed_predicate)`, rewritten to entity-relative paths
-   (strip the leaf's binding alias, S1 confirms the shape). Conjuncts that
+   (strip the leaf's binding alias, S1 confirms the shape). Re-canonicalize
+   against the leaf's own overlay collection: whole-query canonicalization
+   preserves join-binding paths and pushdown may leave plain attribute names.
+   Use the qualified entity-relative expressions for negotiation and residuals.
+   Conjuncts that
    still reference another binding are not offered. They stay residual
    (normally the optimizer already keeps them above the leaf).
 2. Order/limit candidates are offered only if the leaf is the **sole input** of
