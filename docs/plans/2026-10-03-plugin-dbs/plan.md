@@ -27,13 +27,13 @@ Update this list as tasks land (one commit per task, see §7).
 
 - [x] S1 S2 S3: spikes (notes only)
 - [x] T1.1: `semantic.vdb` package and DTOs (`crates/data`)
-- [ ] T1.2: register the package in the app
-- [ ] T2.1: federation module split, `QuerySource` trait, referenced collections
+- [x] T1.2: register the package in the app
+- [x] T2.1: federation module split, `QuerySource` trait, referenced collections
 - [ ] T2.2: overlay catalog and planning
 - [ ] T2.3: pushdown pass and negotiation
 - [ ] T2.4: composite data source, execution, explain
 - [ ] T2.5: port the legacy `FederatedBackend` onto the engine
-- [ ] T3.1: `semantic_vdb` crate, plugin-author trait, plugin adapter
+- [x] T3.1: `semantic_vdb` crate, plugin-author trait, plugin adapter
 - [ ] T3.2: `PluginSource` (binding → `QuerySource`)
 - [ ] T3.3: `ScopeVdbs` (naming, conflicts, runtime schema cache)
 - [ ] T3.4: fixture VDB plugin for tests
@@ -929,10 +929,13 @@ Steps:
      - `Err(reason)` → `Unavailable { reason }`; name clash with a local
        collection → `Unavailable("conflicts with local collection")`;
      - drop cache entries of generations no longer present.
-   - `pub fn invalidate(&self, name: &str, seen_revision: &str)`: called by
-     the app on `FederatedError::SchemaChanged`. It drops the entry if its
-     cached revision differs from `seen_revision`, so the next `snapshot`
-     re-describes. Several concurrent invalidations cause one refresh.
+   - `pub fn invalidate(&self, name: &str, observed_revision: &str)`: called by
+     the app on `FederatedError::SchemaChanged`. The app passes the **old**
+     descriptor revision from the failed query's `VdbSet` snapshot. Drop only
+     an initialized entry whose cached revision still equals that observed
+     revision. Preserve newer and initializing entries, so stale failures
+     cannot evict a refresh. The next `snapshot` re-describes; concurrent
+     invalidations share one refresh. No new revision is required in errors.
    - The cache key also has to invalidate when the **local** catalog changes
      (rule 3 conflicts and reused definitions depend on it): store the local
      catalog `version` (`SharedCatalog` snapshots carry one; otherwise
@@ -1008,7 +1011,8 @@ Steps:
    unchanged. `catalog()` returns the inner catalog.
 4. Federated read execution: `FederatedEngine::new(inner.catalog(), FederationSources { local: Arc::new(LocalSource{..}), virtual_sources: vdb_set.sources })`.
    On `FederatedError::SchemaChanged { collection }`: call
-   `ScopeVdbs::invalidate`, take a fresh snapshot, and retry the query
+   `ScopeVdbs::invalidate` with the old descriptor revision observed in the
+   failed query's `VdbSet`, take a fresh snapshot, and retry the query
    **once**. A second `SchemaChanged` → `DbError::InvalidQuery("schema_changed: <vdb>")`.
    Map `FederatedError::Db(e)` → `e`.
    Only `Query::Select` is federated. Writes to a VDB get the read-only error.
