@@ -65,12 +65,12 @@ context labels, relayout, and serialization.
 
 ## Follow-up work and deliberate limits
 
-1. Extend the relationship index/API to retain endpoint collections, then replace
-   ambiguous endpoints with safe schema-aware targets. V1 avoids guessing.
-2. Define collection-aware parent refs or an explicit cross-collection hierarchy
-   query strategy. V1 hierarchy traversal can omit cross-collection parents and
-   children; it does not scan every collection.
-3. Fix canonical aliases in the generic autocomplete query for all consumers,
+Review3 owner clarification supersedes review1 M4/M5/M13 and their collection
+follow-ups: relation and hierarchy endpoints are entities in `DEFAULT_COLLECTION`.
+Missing objects retain their stable entity identity; no collection probe,
+ambiguity placeholder, or collection-aware hierarchy change is required.
+
+1. Fix canonical aliases in the generic autocomplete query for all consumers,
    preserving caller constraints and shared eligibility/filter behavior. After
    that repair, remove `search_fields` and the canonical-filter override added
    for the graph picker. This review does not change generic autocomplete policy.

@@ -4,7 +4,7 @@
 const { chromium } = require('../../../crates/dxeditor/web/node_modules/playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const out = require('node:path').resolve(__dirname, '../../../target/graph-views-browser');
+const out = require('node:path').resolve(__dirname, '../../../target/graph-views-browser/review3');
 fs.mkdirSync(out, { recursive: true });
 const str = string => ({ string });
 const obj = object => ({ object });
@@ -27,9 +27,6 @@ async function insert(id, title, parent) {
 }
 async function relation(id, source, target) {
   await rpc('semantic.db.insert', { id: str(id), object: obj({ id: str(id), type: str('semantic:base:entity_label'), 'semantic:relation:relation': str('semantic:base:entity_label'), 'semantic:relation:from': str(source), 'semantic:relation:to': str(target), 'semantic:base:entity_label:collection': str('entities') }) });
-}
-function ambiguous(page, id) {
-  return page.locator(`[data-dxgraph-node="ambiguous:${id.length}:${id}:[]"]`);
 }
 function node(page, id) { return page.locator(`[data-dxgraph-node="entity:8:entities${id}"]`); }
 async function world(page) { return page.locator('.dxgraph-world').getAttribute('style'); }
@@ -55,12 +52,31 @@ async function drag(page, from, delta) {
   }
   const label = `${prefix}-relation-target`; await insert(label, 'Related label');
   await relation(`${prefix}-rel-out`, root, label); await relation(`${prefix}-rel-in`, children[0], root);
-  const fixture = { root, ancestor, children, leaves, label, url: `http://localhost:8080/graph?root=${root}` };
+  const missing = `${prefix}-missing`;
+  // Missing rows are injected below: typed database references reject dangling inserts.
+  const fixture = { root, ancestor, children, leaves, label, missing, url: `http://localhost:8080/graph?root=${root}` };
   fs.writeFileSync(`${out}/fixture.json`, JSON.stringify(fixture, null, 2));
   console.log('Fixture ready', fixture.url);
   const browser = await chromium.launch({ headless: true, executablePath: '/etc/profiles/per-user/theduke/bin/chromium', args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(60000);
+  let missingRowsInjected = 0;
+  await page.route('**/api/v1/rpc', async route => {
+    const request = route.request().postDataJSON();
+    const payload = decode(request.payload);
+    if (request.command !== 'semantic.db.query'
+        || !JSON.stringify(payload.query).includes('__semantic.relationship_edges')
+        || !payload.params?.ids?.includes(root)) {
+      return route.continue();
+    }
+    const response = await route.fetch();
+    const body = await response.json();
+    const rows = body.result?.ok?.object?.rows?.list;
+    assert(Array.isArray(rows), JSON.stringify(body));
+    rows.push(obj({relation: str('semantic:base:entity_label'), source: str(root), target: str(missing)}));
+    missingRowsInjected++;
+    await route.fulfill({response, json: body});
+  });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const result = { fixture, checks: {}, errors };
@@ -107,6 +123,11 @@ async function drag(page, from, delta) {
     assert(Math.abs((local.x-newView.x)/newView.zoom-anchoredWorld.x)<1,'shifted wheel x anchor');
     assert(Math.abs((local.y-newView.y)/newView.zoom-anchoredWorld.y)<1,'shifted wheel y anchor');
     result.checks.shiftedContainerWheelAnchor = true;
+    const burstZoom = (await viewportState()).zoom;
+    for (let step = 0; step < 8; step++) await page.mouse.wheel(0, 20);
+    await page.waitForTimeout(100);
+    assert((await viewportState()).zoom < burstZoom, 'wheel burst lost zoom updates');
+    result.checks.wheelBurst = true;
     await page.locator('.semantic-graph-page').evaluate(element=>{element.style.marginTop='';});
     await page.getByRole('button',{name:'Fit',exact:true}).click(); await page.waitForTimeout(100);
     let before = await world(page); await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2); await page.mouse.wheel(0, 120);
@@ -119,8 +140,25 @@ async function drag(page, from, delta) {
     await drag(page, { x: rootBox.x + 45, y: rootBox.y + 25 }, { x: 70, y: 35 });
     assert.notEqual(await node(page, root).getAttribute('style'), rootStyle);
     assert.notDeepEqual(await page.locator('.dxgraph-edge > path:first-child').evaluateAll(paths => paths.map(path => path.getAttribute('d'))), paths); result.checks.nodeDragUpdatesEdges = true; console.log('Passed node drag and edge updates');
+    const draggedTransform = (await positions())[`entity:8:entities${root}`];
+    await page.getByRole('button', {name:'Re-layout',exact:true}).click(); await page.waitForTimeout(100);
+    assert.equal((await positions())[`entity:8:entities${root}`], draggedTransform, 'Re-layout should retain canvas drag positions');
+    await page.getByRole('button', {name:'Reset positions',exact:true}).click();
+    await page.waitForFunction(({id,transform})=>document.querySelector(`[data-dxgraph-node="${id}"]`)?.style.transform===transform, {id:`entity:8:entities${root}`,transform:lodPositions[`entity:8:entities${root}`]});
+    const resetPositions = await positions();
+    await page.getByRole('button', {name:'Re-layout',exact:true}).click(); await page.waitForTimeout(100);
+    assert.deepEqual(await positions(), resetPositions, 'Reset positions did not restore automatic layout');
+    result.checks.resetPositionsClearsCanvasDragPositions = true;
+    await page.getByRole('button', {name:'Fit',exact:true}).click();
     await node(page, root).locator('strong').click(); await page.getByRole('complementary', { name: 'Selected entity' }).waitFor();
     assert(await page.locator('.semantic-graph-detail .semantic-entity-card').count()); result.checks.entityCard = true; console.log('Passed EntityCard panel');
+    const panelBox = await page.getByRole('complementary', {name:'Selected entity'}).boundingBox();
+    const protectedView = await world(page);
+    await page.mouse.move(panelBox.x + 40, panelBox.y + 50); await page.mouse.wheel(0, 120); await page.waitForTimeout(100);
+    assert.equal(await world(page), protectedView, 'detail panel wheel changed graph viewport');
+    await drag(page, {x:panelBox.x + 40,y:panelBox.y + 50}, {x:20,y:15});
+    assert.equal(await world(page), protectedView, 'detail panel drag changed graph viewport');
+    result.checks.detailPanelStopsGraphGestures = true;
     await page.getByRole('button', { name: 'Load parent', exact: true }).click(); await node(page, ancestor).waitFor(); result.checks.loadParent = true;
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     await node(page, children[0]).getByRole('button', { name: 'Expand node' }).click(); await node(page, leaves[0]).waitFor(); result.checks.expansion = true; console.log('Passed expansion');
@@ -131,7 +169,10 @@ async function drag(page, from, delta) {
     await page.waitForFunction(({ id, style }) => document.querySelector(`[data-dxgraph-node=\"${id}\"]`)?.getAttribute('style') !== style, { id: `entity:8:entities${children[0]}`, style: treePosition });
     await page.keyboard.press('Escape'); await page.getByRole('button', { name: 'Fit', exact: true }).click(); await page.waitForTimeout(100);
     result.checks.radialLayout = true; await page.screenshot({ path: `${out}/radial.png`, fullPage: true });
-    await page.getByRole('button', { name: 'Relations', exact: true }).click(); await page.waitForURL(/mode=relations/); await ambiguous(page, label).waitFor();
+    await page.getByRole('button', { name: 'Relations', exact: true }).click(); await page.waitForURL(/mode=relations/); await node(page, label).waitFor(); await node(page, children[0]).waitFor(); await node(page, missing).waitFor();
+    assert.equal(await node(page, missing).locator('[data-entity-kind="unresolved"]').count(), 1);
+    assert.equal(await node(page, children[0]).locator('[data-entity-kind="entity"]').count(), 1);
+    result.checks.defaultEntityIncomingAndMissing = true;
     console.log('Relation viewport', await viewportState());
     assert(await page.locator('.dxgraph-edge-label').count()); result.checks.relations = true;
     await page.waitForFunction(() => document.querySelector('.dx-select-trigger')?.textContent.includes('Force')); result.checks.modeLayoutControlSync = true;
@@ -140,15 +181,30 @@ async function drag(page, from, delta) {
     const summary = page.locator('.semantic-graph-list summary'); await summary.focus(); await page.keyboard.press('Enter');
     const list = page.getByRole('list', { name: 'Loaded graph entities' }); await list.waitFor({ state: 'visible' });
     assert(await list.getByRole('link', { name: 'Open entity' }).count() >= 2); result.checks.keyboardListFallback = true;
+    const outgoingRow = list.getByRole('listitem').filter({hasText:'Related label'});
+    await outgoingRow.getByRole('button', {name:'Related label',exact:true}).click();
+    const outgoingPanel = page.getByRole('complementary', {name:'Selected entity'});
+    assert(await outgoingPanel.locator('.semantic-entity-card').count());
+    await outgoingPanel.getByRole('button', {name:'Expand',exact:true}).click();
+    await outgoingPanel.getByRole('button', {name:'Collapse',exact:true}).waitFor();
+    result.checks.outgoingTargetHasObjectAndExpands = true;
+    await outgoingPanel.getByRole('button', {name:'Open',exact:true}).click();
+    await page.waitForURL(url=>url.pathname!=='/graph'); result.checks.outgoingTargetOpens = true;
+    await page.goto(`${fixture.url}&mode=relations`); await node(page,label).waitFor();
+    await page.locator('.semantic-graph-list summary').click();
+    await page.getByRole('list', {name:'Loaded graph entities'}).getByRole('listitem').filter({hasText:'Related label'}).getByRole('button', {name:'Related label',exact:true}).click();
+    await page.getByRole('button', {name:'Focus here',exact:true}).click(); await page.waitForURL(new RegExp(`root=${label}`));
+    await node(page,label).waitFor(); result.checks.outgoingTargetFocuses = true;
+    await page.goto(`${fixture.url}&mode=relations`); await node(page,label).waitFor();
+    await page.locator('.semantic-graph-list summary').click();
     await summary.click(); await node(page, root).locator('strong').click();
     await page.getByRole('button', { name: 'Focus here', exact: true }).click();
     await node(page, root).waitFor({ state: 'visible' }); result.checks.focusHere = true;
-    await ambiguous(page, label).click();
+    await node(page, missing).click();
     const unresolvedPanel = page.getByRole('complementary', { name: 'Selected entity' });
-    await unresolvedPanel.getByText('The relationship index does not identify a unique collection for this entity.').waitFor();
-    assert.equal(await unresolvedPanel.getByRole('button', {name:'Focus here',exact:true}).count(),0);
-    assert.equal(await unresolvedPanel.getByRole('button', {name:'Open',exact:true}).count(),0);
-    result.checks.unknownCollectionCannotNavigate = true;
+    await unresolvedPanel.getByText(`Entity unavailable: ${missing}`).waitFor();
+    assert.equal(await unresolvedPanel.locator('.semantic-entity-card').count(), 0);
+    result.checks.missingEntityHasStableIdentity = true;
     await page.getByRole('button', {name:'Close',exact:true}).click();
     await node(page, children[0]).click(); await page.getByRole('button', { name: 'Focus here', exact: true }).click();
     await page.waitForURL(new RegExp(`root=${children[0]}`)); await node(page, children[0]).waitFor({ state: 'visible' });
@@ -168,6 +224,8 @@ async function drag(page, from, delta) {
     await page.keyboard.press('Escape'); await page.waitForTimeout(100);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false); result.checks.mobileGraph = true;
     await page.screenshot({path:`${out}/mobile-graph.png`,fullPage:true});
+    assert(missingRowsInjected > 0, "missing endpoint response fixture was not exercised");
+    result.checks.missingRowsInjected = missingRowsInjected;
     assert.deepEqual(errors, []);
     console.log(JSON.stringify(result.checks));
   } finally {

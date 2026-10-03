@@ -1,14 +1,43 @@
 # Graph explorer browser verification
 
+Current review3 verification uses the default `entities` endpoint contract and
+canvas-owned transient drag positions. See
+[review3-disposition.md](review3-disposition.md) for the complete disposition.
+The fresh run completed all 33 recorded checks at 1440×1000 and 390×844 with
+zero page or console errors. Desktop relation and mobile graph screenshots
+were visually inspected.
+
+```sh
+nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-review3-20261003 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'
+nix develop -c dx serve --web --package semantic_ui --no-default-features --features web --port 8080 --open false --watch false --hot-reload false
+nix develop -c node docs/plans/2026-10-03-graph-views/browser.cjs
+```
+
+Current artifacts are under `target/graph-views-browser/review3/`. The script
+uses live typed Label and EntityLabel fixtures for outgoing and incoming
+entities. The database rejects dangling typed references, so the script adds
+one missing-endpoint relationship row to the browser's RPC response. Its
+batched `entities` object lookup remains a real query returning no object.
+This covers the unresolved UI shape without weakening database integrity or
+creating another collection. It also verifies drag/edge updates, Re-layout
+retention, one-call Reset positions, root/mode/layout lifecycle, shifted wheel
+anchors, controls, loaded-list keyboard access, and desktop/mobile rendering.
+
+The observations below are historical and retain their original evidence.
+
 These are historical observations from the original implementation, before
 `review1.md` fixes. The scripts are one-off verification artifacts with local
 ports and fixture assumptions. See [review-disposition.md](review-disposition.md)
 for the review fixes and their new verification results. Timing observations
 below were not remeasured as part of the review fixes.
 
+Historical review 2 behavior and verification are recorded in
+[review2-disposition.md](review2-disposition.md), including resolved outgoing
+targets, actual cross-collection collisions, and Reset positions.
+
 Verified on 2026-10-03 with Chromium through Nix, using an isolated server database at `/tmp/semantic-graph-browser-20261003`. Preview status/open both returned `PreviewAutomationNoAvailableHostError`, so the retained Playwright script uses the locally installed Chromium and Playwright module.
 
-Run the server and web app in separate terminals, then execute the script:
+Original commands (historical configuration; use the review3 commands above):
 
 ```sh
 nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-20261003 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'

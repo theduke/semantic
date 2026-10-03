@@ -1,5 +1,5 @@
 // One-off verification artifact: hard-coded inspector ports and fixture assumptions.
-// Test-only WebKitGTK inspector + real X11 input. No application JS is injected.
+// Test-only WebKitGTK inspector + real X11 input; the DOM shift is scoped to this test.
 // INSPECTOR_PORT=9224 DISPLAY=:93 nix develop -c node docs/plans/2026-10-03-graph-views/desktop.mjs
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -48,7 +48,7 @@ async function wait(expression, predicate, description) {
     do { const value = await evaluate(expression); if (predicate(value)) return value; await sleep(5); } while (performance.now() < deadline);
     throw new Error(`Timed out waiting for ${description}`);
 }
-const output = resolve('target/graph-views-desktop'); mkdirSync(output, { recursive: true });
+const output = resolve(process.env.OUTPUT_DIR || 'target/graph-views-desktop'); mkdirSync(output, { recursive: true });
 const pid = process.env.DESKTOP_PID || execFileSync('pgrep', ['-x', port === '9224' ? 'demo' : 'semantic_ui'], { encoding: 'utf8' }).trim().split('\n')[0];
 const windows = execFileSync('xdotool', ['search', '--onlyvisible', '--pid', pid], { encoding: 'utf8' }).trim().split('\n');
 const windowId = windows.map(id=>{const bounds=execFileSync('xdotool',['getwindowgeometry','--shell',id],{encoding:'utf8'});return {id,area:Number(bounds.match(/WIDTH=(\d+)/)[1])*Number(bounds.match(/HEIGHT=(\d+)/)[1])};}).sort((a,b)=>b.area-a.area)[0].id;
@@ -59,6 +59,7 @@ const point = (x, y) => [Math.round(geometry.x + x * geometry.dpr), Math.round(g
 const move = (x, y) => input('mousemove', ...point(x, y));
 const click = (x, y) => { move(x, y); input('click', 1); };
 const transformExpr = 'document.querySelector(".dxgraph-world")?.style.transform';
+const parseTransform = text => { const match = text.match(/translate\(([-.0-9]+)px,\s*([-.0-9]+)px\) scale\(([-.0-9]+)\)/); return match.slice(1).map(Number); };
 if (semantic && !(await evaluate(rootQuery))) {
     const graphLink = await evaluate(`[...document.querySelectorAll('a')].find(e=>e.getAttribute('href')==='/graph?' && e.getBoundingClientRect().width>0)?.getBoundingClientRect().toJSON()`);
     if (graphLink) click(graphLink.x + graphLink.width/2, graphLink.y + graphLink.height/2);
@@ -100,10 +101,20 @@ const panSamples = await timedMoves(focused.canvas.x + focused.canvas.width * 0.
 const panAfter = await evaluate(snapshotExpr); assert.notEqual(panAfter.transform, focused.transform);
 screenshot(`${prefix}-panned.png`);
 let beforeWheel = await evaluate(transformExpr);
-move(focused.canvas.x + focused.canvas.width * 0.7, focused.canvas.y + focused.canvas.height * 0.5); input('click', 4);
+// Test-only DOM shift: no resize or graph pointerdown precedes this first zoom.
+await evaluate('document.querySelector(".dxgraph").style.marginLeft="80px"');
+const shifted = await evaluate('document.querySelector(".dxgraph").getBoundingClientRect().toJSON()');
+const anchor = { x: shifted.width * 0.7, y: shifted.height * 0.5 };
+const [oldX, oldY, oldZoom] = parseTransform(beforeWheel);
+const anchoredWorld = { x: (anchor.x-oldX)/oldZoom, y: (anchor.y-oldY)/oldZoom };
+move(shifted.x + anchor.x, shifted.y + anchor.y); input('click', 4);
 await wait(transformExpr, value => value !== beforeWheel, 'wheel zoom');
 const wheelAfter = await evaluate(transformExpr);
 assert.notEqual(wheelAfter, beforeWheel);
+const [newX, newY, newZoom] = parseTransform(wheelAfter);
+assert(Math.abs((anchor.x-newX)/newZoom-anchoredWorld.x)<2, 'native shifted wheel x anchor');
+assert(Math.abs((anchor.y-newY)/newZoom-anchoredWorld.y)<2, 'native shifted wheel y anchor');
+await evaluate('document.querySelector(".dxgraph").style.marginLeft="0px"');
 const root = await evaluate(`${rootQuery}.getBoundingClientRect().toJSON()`);
 const nodeExpr = `${rootQuery}?.style.transform`;
 const edgeBefore = await evaluate('document.querySelector(".dxgraph-edge path")?.getAttribute("d")');
@@ -111,9 +122,30 @@ const dragSamples = await timedMoves(root.x + root.width / 2, root.y + root.heig
 const edgeAfter = await evaluate('document.querySelector(".dxgraph-edge path")?.getAttribute("d")');
 assert.notEqual(edgeAfter, edgeBefore, 'node drag did not update its incident edge');
 screenshot(`${prefix}-dragged.png`);
+// One X11 command queues wheel, press and pan without an inspector/render wait.
+// Pure queue tests cover the delayed-reply window deterministically; this checks native wiring.
+const queuedBefore = parseTransform(await evaluate(transformExpr));
+const queuedCanvas = await evaluate('document.querySelector(".dxgraph").getBoundingClientRect().toJSON()');
+const queuedClient = point(queuedCanvas.x + queuedCanvas.width * 0.05, queuedCanvas.y + queuedCanvas.height * 0.80);
+const queuedLocal = {
+    x: (queuedClient[0] - geometry.x) / geometry.dpr - queuedCanvas.x,
+    y: (queuedClient[1] - geometry.y - geometry.outerHeight + geometry.innerHeight * geometry.dpr) / geometry.dpr - queuedCanvas.y,
+};
+const queuedZoom = queuedBefore[2] * newZoom / oldZoom;
+const queuedExpected = [
+    queuedLocal.x - (queuedLocal.x - queuedBefore[0]) * queuedZoom / queuedBefore[2] + 60 / geometry.dpr,
+    queuedLocal.y - (queuedLocal.y - queuedBefore[1]) * queuedZoom / queuedBefore[2] + 20 / geometry.dpr,
+    queuedZoom,
+];
+input('mousemove', ...queuedClient, 'mousedown', 4, 'mouseup', 4, 'mousedown', 1,
+    'mousemove', queuedClient[0] + 60, queuedClient[1] + 20, 'mouseup', 1);
+const queuedAfter = parseTransform(await wait(transformExpr, value => {
+    const actual = parseTransform(value);
+    return Math.abs(actual[0] - queuedExpected[0]) < 2 && Math.abs(actual[1] - queuedExpected[1]) < 2
+        && Math.abs(actual[2] - queuedExpected[2]) < 0.001;
+}, 'queued wheel followed by pan retaining zoom'));
 // Exercise input throughput without waiting for each render before sending the next event.
 const baseBurst = await evaluate(transformExpr);
-const parseTransform = text => { const match = text.match(/translate\(([-.0-9]+)px,\s*([-.0-9]+)px\) scale\(([-.0-9]+)\)/); return match.slice(1).map(Number); };
 const [baseX, baseY] = parseTransform(baseBurst);
 const bx = focused.canvas.x + focused.canvas.width * 0.05, by = focused.canvas.y + focused.canvas.height * 0.15;
 move(bx, by); input('mousedown', 1); await sleep(120);
@@ -136,6 +168,6 @@ if (semantic) {
     screenshot('semantic-graph-selected.png');
 }
 const summary = samples => { const sorted = [...samples].sort((a,b)=>a-b); return { samples: samples.length, median_ms: sorted[Math.floor(sorted.length/2)], p95_ms: sorted[Math.min(sorted.length-1,Math.ceil(sorted.length*0.95)-1)], max_ms: sorted.at(-1), raw_ms: samples }; };
-const result = { card, initial, focused, panAfter, wheelAfter, edgeChanged: edgeAfter !== edgeBefore, burst, pan: summary(panSamples), drag: summary(dragSamples), method: 'Real xdotool pointer input to observed WebKitGTK DOM update, including subprocess startup and inspector polling; this is an upper bound on Rust/IPC handling, not pure IPC timing.' };
+const result = { recorded_at: new Date().toISOString(), profile: process.env.BUILD_PROFILE || 'debug', setup: { display: process.env.DISPLAY, inspector_port: port, pid, windowId, geometry }, shiftedOriginWheelAnchor: true, queuedWheelPan: { before: queuedBefore, expected: queuedExpected, after: queuedAfter }, card, initial, focused, panAfter, wheelAfter, edgeChanged: edgeAfter !== edgeBefore, burst, pan: summary(panSamples), drag: summary(dragSamples), method: 'Real xdotool pointer input to observed WebKitGTK DOM update, including subprocess startup and inspector polling; this is an upper bound on Rust/IPC handling, not pure IPC timing.' };
 writeFileSync(resolve(output, semantic ? 'semantic-results.json' : 'results.json'), JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2)); ws.close();

@@ -4,7 +4,118 @@ These are historical observations from the original implementation, before
 `review1.md` fixes. The scripts are one-off verification artifacts with local
 ports and fixture assumptions. See [review-disposition.md](review-disposition.md)
 for the review fixes and their new verification results. Timing observations
-below were not remeasured as part of the review fixes.
+below were not remeasured as part of the review 1 fixes. Review 2 measurements
+are recorded separately below.
+
+## Review 3 queue simplification
+
+Remeasured on 2026-10-03 against the latest debug native 300-node demo,
+using the same 1440×1000 Xvfb display and Dioxus/WebKitGTK setup. The first
+wheel after an 80-pixel origin shift retained its cursor anchor. One X11
+command sent wheel, press, move and release without a render wait; the pan
+retained the wheel's zoom (1.199614 → 1.439074). Node drag, incident-edge
+updates, culling and the final displacement of a 30-event 60 Hz pan passed.
+
+| Native scenario | Pan median / p95 | Drag median / p95 | 30-event burst | Last input → DOM |
+| --- | --- | --- | --- | --- |
+| Review 3 300-node debug demo | 30.3 / 31.1 ms | 32.0 / 33.3 ms | 545.2 ms | 46.3 ms |
+
+Each latency distribution contains 20 real X11 moves. These observations
+include xdotool startup and inspector polling; they do not isolate Rust/IPC
+latency or establish a performance improvement. The rapid wheel/pan test
+checks native wiring; pure regressions deterministically cover a delayed
+bounds reply and a wheel arriving during mount's request.
+
+This supersedes the review 2 move-coalescing policy described below.
+Native pending input preserves every pointer sample and transition in FIFO
+order. Only adjacent compatible wheel samples merge. Queued wheels gate
+following presses, so pan snapshots the zoomed viewport. A pending input
+queue and one in-flight flag determine gating; there are no pointer anchors,
+excursion heuristics or duplicated gate flags. Ordinary pan/drag input uses
+cached bounds outside this short gated window. Background-click release and
+pinch start still wait for fresh bounds. A wheel arriving during mount's
+query waits for the next request. Query failure clears queued input and
+cancels captured gestures. A stalled query may accumulate queued moves;
+the queue deliberately preserves their ordering and drag thresholds.
+
+The refresh loop now lives in `OriginRefresh`, beside `OriginCache`; the
+component wires callbacks. The dead container scroll handler is removed.
+Web ancestor scrolling still uses the window capture listener.
+`controller.reset_positions()` alone releases transient canvas drag
+positions. Explicit externally configured model pins remain caller-owned
+and fixed across reset and re-layout.
+
+Validation passed 70 unit tests and 3 SSR tests, the supported web Wasm
+check, and native demo example check/build, all through the Nix devshell.
+Regressions cover FIFO pointer samples including a drag that returns to
+its press position, delayed mount-query input, wheel/press/pan zoom retention,
+failure clearing, background release before node selection, wheel reversals
+at zoom limits, and preservation of explicit model pins through reset/re-layout.
+
+Raw samples, process/window/DPR metadata, logs and screenshots are in
+`target/graph-views-desktop/review3/`. The inspector is loopback-only and
+the script remains test tooling. Launch the commands below with
+`OUTPUT_DIR=target/graph-views-desktop/review3` for the current script.
+
+## Review 2 input measurements
+
+Remeasured on 2026-10-03 using the debug `dxgraph` 300-node demo, native
+Dioxus desktop 0.7.9 / WebKitGTK, Rust 1.96.0, and an Xvfb display at
+1440×1000. The measured canvas was 1228.8×838.1 CSS pixels, with DPR
+1.041667. At 1× zoom the native DOM contained 5 nodes, 12 edge groups, and
+no hidden measurement wrappers. Pan, wheel zoom, node drag, incident-edge
+updates, the first wheel zoom after an 80-pixel container-origin shift, and
+the final displacement of a 30-event 60 Hz pan burst passed.
+
+| Native scenario | Pan median / p95 | Drag median / p95 | 30-event burst | Last input → DOM |
+| --- | --- | --- | --- | --- |
+| Review 2 300-node debug demo | 31.0 / 43.6 ms | 30.9 / 32.1 ms | 528.5 ms | 29.5 ms |
+
+Both latency distributions contain 20 real X11 moves. These are upper-bound
+end-to-end observations including xdotool startup and inspector polling;
+the measurements do not isolate Rust/IPC time or prove a latency reduction
+against the historical runs. The 60 Hz burst sends input without waiting
+for each render and confirms the final state, rather than every presented
+frame. Pure regression tests additionally cover input-origin policy,
+one active refresh task, pending wheel responses, clamp-aware wheel
+coalescing and reversals, pointer termination order, retained drag excursions,
+background release followed by node selection, and gated pinch samples.
+
+Pan, drag, and their releases dispatch synchronously using cached bounds.
+Mount, pointerdown, resize, canvas scroll, and origin-dependent inputs request
+a refresh, with one request in flight and at least 16 ms between requests.
+Web captures ancestor scrolls and reads bounds synchronously before the
+first origin-dependent event in a refresh interval. Native wheel zoom,
+background-click coordinates, and pinch start wait for fresh asynchronous
+bounds. A wheel arriving during mount's query waits for the next fresh batch.
+Gated pointer transitions retain FIFO order; pending moves retain at most
+three samples per pointer in each contiguous move segment, including the
+drag excursion and final position.
+Compatible wheel samples combine without losing a reversal at a zoom limit.
+The first pinch batch uses one refreshed origin for its queued moves and
+releases. Native ancestor scrolling is picked up by the next pointerdown or
+origin-dependent input.
+
+A stalled native query can accumulate discrete transitions; the queue does
+not discard them to enforce a fixed cap. Bounds-query failures clear the
+queue and cancel gated gestures, releasing their captures. Dioxus owns the
+refresh task's component lifetime, so unmounting cancels pending work.
+
+Durable raw samples, process/window/DPR metadata, logs and screenshots are in
+`target/graph-views-desktop/review2/`. The inspector remains loopback-only
+test tooling. Commands used for the new measurement:
+
+```sh
+nix develop --command cargo build --quiet --message-format=short -p dxgraph --example demo --features demo
+nix develop --command nix shell nixpkgs#xorg-server --command Xvfb :93 -screen 0 1440x1000x24 -nolisten tcp
+nix develop --command env DISPLAY=:93 WEBKIT_INSPECTOR_HTTP_SERVER=127.0.0.1:9224 target/debug/examples/demo
+nix develop --command nix shell nixpkgs#imagemagick --command env DISPLAY=:93 INSPECTOR_PORT=9224 OUTPUT_DIR=target/graph-views-desktop/review2 BUILD_PROFILE=debug node docs/plans/2026-10-03-graph-views/desktop.mjs
+```
+
+Review 2 validation passed 68 unit tests and 3 SSR tests, the supported web
+Wasm check, and the native demo example check. The Semantic native timings
+below remain historical; this remeasurement exercised the shared input path
+in the standalone demo.
 
 Verified on 2026-10-03 with native Dioxus desktop/WebKitGTK, an Xvfb display at 1440×1000, and the existing isolated RPC server on port 8888. No user database was opened. The desktop bundle was built with global assets; running the bare Cargo binary alone does not bundle those assets.
 
