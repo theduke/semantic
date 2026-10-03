@@ -41,7 +41,7 @@ Update this list as tasks land (one commit per task, see §7).
 - [x] T4.2: `semantic.vdb.list` / `semantic.vdb.explain` commands
 - [x] T4.3: app integration test suite and differential oracle
 - [x] T5.1: bind joins: parameterized negotiation and synthetic indexes
-- [ ] T5.2: batched index nested loop (**gated: user review first**)
+- [x] T5.2: batched index nested loop (user reviewed and approved)
 - [x] T6.1: example JSON-directory VDB plugin
 - [x] T6.2: CLI rendering, UI surfacing
 - [x] T6.3: documentation
@@ -65,7 +65,7 @@ T2.5 changed only the legacy backend (297 added/deleted lines), preserving
 its 14 existing tests and adding two regressions; all 16 passed. T4.1 passed
 three focused forwarding, local-routing and readonly-dispatch tests. T6.3
 documentation samples compiled and ran. The CLI part of T6.2 passed two Clap
-tests and actual help invocations. Its UI part passed 119 UI tests, 105 UI-core
+tests and actual help invocations. Its UI part passed 121 UI tests, 105 UI-core
 unit tests and 22 UI-core integration tests. T4.2 passed its actual app command
 test, covering list, schema, explain, local conflicts and runtime-only schema.
 All these tasks passed Nix workspace checks and formatting. Native and stdio
@@ -88,14 +88,50 @@ ordinary embedded planner has an existing RHS join-alias pushdown limitation;
 the differential query uses the same qualified attribute id on both sides, and
 the plain virtual alias has a direct expected-result assertion in every mode.
 The corpus now contains 20 queries, including the required LIKE and BETWEEN
-cases. All 20 passed parser/canonicalization preflight and the ordinary stored-db
-smoke test; the two added cases await virtual coverage in the broad workspace
-gate (80 comparisons). Fresh Nix workspace checks and formatting passed.
+cases. All 20 passed parser/canonicalization preflight, the ordinary stored-db
+smoke test and all four virtual modes in the final workspace gate (80 comparisons).
+The final combined application test passed in 669.73 seconds, also proving the
+native SDK selected-bind join uses an exact `IN :__keys` request, explains a
+batch size of 64, performs one actual scan, and returns four expected pairs.
+Fresh Nix workspace checks and formatting passed.
 
 T5.1 passed all 454 core tests, including nine bind-join regressions, plus the
 workspace check and formatting. The user reviewed and approved the
-[T5.2 batching design](batched-join-design.md) before implementation. T5.2
-implementation and the broad workspace test gate remain pending.
+[T5.2 batching design](batched-join-design.md) before implementation. Its task
+passed a fresh workspace check and formatting, all 468 release core tests, and
+the indexed-plan regression in `semantic_db_bench`. The bounded before/after
+embedded join benchmark detected no material regression; it was a short run
+under concurrent workload and is not proof of unchanged performance. The final
+broad workspace gate passed all 470 core tests with workspace features enabled
+and the native SDK selected-batch regression.
+
+Validation limits: the CLI checkpoint used the actual stdio provider and a local
+server; UI verification covered crate checks and the tests above, without an
+interactive browser smoke test. The final instruction audit confirmed
+historical migrations were unchanged and no convenience `Result` aliases were
+introduced. The first broad gate exposed five scope regressions:
+the wrapper required SQL parsing and structured jobs storage from text-only
+backends even when no VDB was possible. Generic routing introspection and a
+native-registration/activation-schema guard restore exact backend delegation;
+all five original scope tests and four focused wrapper tests now pass.
+
+The final full-workspace `--no-fail-fast` run completed with 1,574 passing,
+nine failing and eight ignored tests. All application, VDB, core, UI and SDK
+targets passed, including 78 app unit tests, 121 UI tests, 105 UI-core tests and
+30 SDK tests. The failures were isolated to test fixtures: one legacy package
+snapshot failure reproduced unchanged at pre-plan commit `47169a97`, and eight
+server tests whose mock package allowlist omitted the current query and VDB
+default packages. Query registration precedes VDB registration; the original
+assertion did not report the rejected package name. The
+legacy fixture now reconstructs classes from retained historical migrations
+and expects the complete forward-migration tail; the server mock accepts the
+exact query and VDB packages. These are test-only corrections; historical
+definitions and production schema behavior remain unchanged. The original full-workspace
+command returned failure, and its expensive application suites were not repeated
+for these fixture-only corrections. The complete corrected base
+`package_registration` suite passed all four tests, and the complete corrected
+server library suite passed all 27 tests. The final workspace check and
+formatting passed after these corrections.
 
 ## 1. Decisions
 
@@ -1193,10 +1229,10 @@ Steps:
 1. For each VDB leaf on the inner side of an equi-join, negotiate a second
    request: the leaf's conjuncts plus `key IN :__keys` (`Operand::Parameter`),
    with `parameters = ["__keys"]`.
-2. If that conjunct is `Exact`, add a synthetic equality index on `key` for
-   that collection in the overlay. This is the one place where the overlay
-   deliberately exposes an index; adjust the S2 mechanism to allow it. The
-   core lowering then picks `IndexNestedLoop`.
+2. If that conjunct is `Exact` and the planner choice below selects a bind
+   join, add synthetic equality-index metadata on the canonical `key` after
+   ordinary overlay index removal. Rewrite the eligible federation physical
+   join to `IndexNestedLoop`; keep the core optimizer unchanged.
 3. Implement `CompositeDataSource::index_lookup_stream` /
    `index_lookup_filtered_stream` for those leaves: `scan` with
    `bindings = { "__keys": [value] }`.
@@ -1211,11 +1247,19 @@ Commit: `Support bind joins against virtual databases`.
 ### T5.2: batched index nested loop (gated)
 
 **Before starting, present the design to the user.** It touches the core
-executor. Goal: collect up to N outer keys and issue one lookup with
-`__keys = [k1..kN]` instead of N calls. This is an additive
-`AsyncPhysicalDataSource::index_lookup_batch_stream` with a default impl that
-loops `index_lookup_stream`, and the executor's index-nested-loop uses it.
-The existing embedded behaviour must be unchanged (verify with `db_bench`).
+executor. Goal: collect up to N outer rows and issue one lookup with
+`__keys = [k1..kN]` for their distinct keys. Add
+`AsyncPhysicalDataSource::index_lookup_batch_stream` with a default that delegates
+to the existing `index_lookup_many_stream`, preserving specialized embedded
+bulk lookups.
+An additive `index_lookup_batch_size` hook defaults to `None`; only eligible
+inner equality joins with an accepted exact virtual batch candidate opt in to
+groups of 64 outer rows. Negotiate that candidate separately, preserve its own
+token and residual support, and expose the selected `batch_size` in explain.
+Deduplicate non-null keys within each group, retain duplicate outer matches and
+output order, stop after errors, and cancel active scans when the stream drops.
+The existing embedded and outer-join behaviour must be unchanged (verify with
+`db_bench`). See the [approved design](batched-join-design.md).
 
 ---
 

@@ -172,6 +172,23 @@ eligible single-input query paths; joins and aggregates keep those operations
 on the host. A source that rejects an unbounded scan can reject a joined query;
 do not assume the host always supplies an id filter.
 
+For an inner equality join, the host can offer a canonical `key IN :__keys`
+filter with `parameters = ["__keys"]`. Its scan bindings contain a list of
+concrete, distinct, non-null keys. `Exact` membership means returning every
+matching entity for every supplied key; interpret the list as membership,
+including lists with multiple keys. An opaque accepted-plan token must be echoed
+from that negotiation's plan into its scans.
+
+The host selects a bind lookup when the ordinary scan is rejected or estimates
+more than 10,000 rows. It can negotiate a separate accepted plan for groups of
+64 outer rows; rejection or non-exact membership retains singleton lookups,
+while malformed plans and revision changes still fail. Batch requests retain
+the same membership shape, and each accepted plan keeps its own token. Eligible
+leaves report `batch_size = 64` in explain; ordinary and singleton leaves leave
+that field absent or null. Embedded and outer joins retain their existing bulk
+lookup path. A group can have large inner fanout; the bound applies to outer
+rows and their keys, not total query memory.
+
 ## Minimal Rust plugin
 
 This plugin emits one untyped entity and uses default negotiation, which marks
