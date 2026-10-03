@@ -350,6 +350,32 @@ fn profile(
             }
             Ok(false)
         }
+        TypeKind::Variant(variant) => {
+            let internal = match &variant.tag {
+                VariantTag::ExternallyTagged => None,
+                VariantTag::InternallyTagged { field } => Some(field),
+                _ => return Err(incompatible("unsupported interface variant tagging")),
+            };
+            let mut names = BTreeSet::new();
+            for case in &variant.variants {
+                if !names.insert(&case.name) || case.discriminant.is_some() {
+                    return Err(incompatible("unsupported interface variant discriminant"));
+                }
+                if let Some(field) = internal {
+                    match &case.payload {
+                        VariantPayload::Unit => {}
+                        VariantPayload::Record(record) if !record.fields.contains_key(field) => {}
+                        _ => {
+                            return Err(incompatible(
+                                "internal variant requires a record or unit payload without the tag field",
+                            ));
+                        }
+                    }
+                }
+                child(&variant_payload_type(&case.payload))?;
+            }
+            Ok(false)
+        }
         TypeKind::Union(union) => {
             for ty in &union.variants {
                 child(ty)?;
@@ -423,6 +449,68 @@ fn profile(
         _ => Err(incompatible(
             "unsupported nested stream, handle, callable, or non-value interface type",
         )),
+    }
+}
+
+fn variant_payload_type(payload: &VariantPayload) -> Type {
+    Type::new(match payload {
+        VariantPayload::Unit => TypeKind::Null(NullType {}),
+        VariantPayload::Newtype(ty) => return (**ty).clone(),
+        VariantPayload::Record(record) => TypeKind::Record(record.clone()),
+        VariantPayload::Tuple(items) => TypeKind::Tuple(TupleType {
+            items: items.clone(),
+            rest: None,
+        }),
+    })
+}
+
+fn variant_matches(
+    value: &Value,
+    variant: &VariantType,
+    definitions: &BTreeMap<String, TypeDef>,
+    code: &str,
+) -> bool {
+    match (&variant.tag, value) {
+        (VariantTag::ExternallyTagged, Value::String(name)) => variant
+            .variants
+            .iter()
+            .any(|case| case.name == *name && matches!(case.payload, VariantPayload::Unit)),
+        (VariantTag::ExternallyTagged, Value::Object(object)) if object.len() == 1 => {
+            let (name, payload) = object.iter().next().expect("single variant field");
+            variant.variants.iter().any(|case| {
+                case.name == *name
+                    && !matches!(case.payload, VariantPayload::Unit)
+                    && validate(
+                        payload,
+                        &variant_payload_type(&case.payload),
+                        definitions,
+                        code,
+                    )
+                    .is_ok()
+            })
+        }
+        (VariantTag::InternallyTagged { field }, Value::Object(object)) => {
+            let Some(Value::String(name)) = object.get(field) else {
+                return false;
+            };
+            let Some(case) = variant.variants.iter().find(|case| case.name == *name) else {
+                return false;
+            };
+            let mut payload = object.clone();
+            payload.remove(field);
+            match &case.payload {
+                VariantPayload::Unit => payload.is_empty(),
+                VariantPayload::Record(_) => validate(
+                    &Value::Object(payload),
+                    &variant_payload_type(&case.payload),
+                    definitions,
+                    code,
+                )
+                .is_ok(),
+                _ => false,
+            }
+        }
+        _ => false,
     }
 }
 
@@ -524,6 +612,7 @@ fn validate(
             .variants
             .iter()
             .all(|ty| validate(value, ty, definitions, code).is_ok()),
+        (TypeKind::Variant(variant), value) => variant_matches(value, variant, definitions, code),
         (TypeKind::Enum(enumeration), Value::String(name))
             if enumeration.repr == EnumRepr::String =>
         {
@@ -676,6 +765,338 @@ fn constraint_matches(value: &Value, constraint: &Constraint) -> bool {
 mod tests {
     use super::*;
     use futures::{executor::block_on, stream};
+    use semantic_data::value::{FromValue, IntoValue, SemanticType};
+
+    fn variant_type(tag: VariantTag, cases: Vec<(&str, VariantPayload)>) -> Type {
+        Type::new(TypeKind::Variant(VariantType {
+            tag,
+            variants: cases
+                .into_iter()
+                .map(|(name, payload)| VariantCase {
+                    name: name.into(),
+                    payload,
+                    discriminant: None,
+                    meta: Meta::default(),
+                })
+                .collect(),
+        }))
+    }
+
+    fn object(fields: Vec<(&str, Value)>) -> Value {
+        Value::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn tagged_variants_validate_tags_and_payloads_strictly() {
+        let summary = semantic_data::vdb::ScanSummary::semantic_type();
+        let TypeKind::Record(record) = summary.kind else {
+            panic!("record")
+        };
+        let external = variant_type(
+            VariantTag::ExternallyTagged,
+            vec![
+                ("unit", VariantPayload::Unit),
+                (
+                    "scalar",
+                    VariantPayload::Newtype(Box::new(Type::new_bool())),
+                ),
+                ("record", VariantPayload::Record(record.clone())),
+                ("tuple", VariantPayload::Tuple(vec![Type::new_bool()])),
+            ],
+        );
+        for value in [
+            Value::String("unit".into()),
+            object(vec![("scalar", Value::Bool(true))]),
+            object(vec![("record", object(vec![("rows", Value::U64(1))]))]),
+            object(vec![("tuple", Value::List(vec![Value::Bool(true)]))]),
+        ] {
+            validate_configuration(&value, &external, &BTreeMap::new()).unwrap();
+        }
+        for value in [
+            Value::Null,
+            Value::String("unknown".into()),
+            Value::String("scalar".into()),
+            object(vec![]),
+            object(vec![("unknown", Value::Null)]),
+            object(vec![("unit", Value::Null)]),
+            object(vec![("scalar", Value::Null)]),
+            object(vec![("record", object(vec![]))]),
+            object(vec![("record", object(vec![("rows", Value::Bool(true))]))]),
+            object(vec![(
+                "tuple",
+                Value::List(vec![Value::Bool(true), Value::Bool(false)]),
+            )]),
+            object(vec![("scalar", Value::Bool(true)), ("other", Value::Null)]),
+        ] {
+            assert_eq!(
+                validate_configuration(&value, &external, &BTreeMap::new())
+                    .unwrap_err()
+                    .code,
+                "invalid_configuration"
+            );
+        }
+        let internal = variant_type(
+            VariantTag::InternallyTagged {
+                field: "status".into(),
+            },
+            vec![
+                ("unit", VariantPayload::Unit),
+                ("record", VariantPayload::Record(record)),
+            ],
+        );
+        for value in [
+            object(vec![("status", Value::String("unit".into()))]),
+            object(vec![
+                ("status", Value::String("record".into())),
+                ("rows", Value::U64(1)),
+            ]),
+        ] {
+            validate_configuration(&value, &internal, &BTreeMap::new()).unwrap();
+        }
+        for value in [
+            Value::String("unit".into()),
+            object(vec![]),
+            object(vec![("status", Value::Bool(true))]),
+            object(vec![("status", Value::String("unknown".into()))]),
+            object(vec![("status", Value::String("record".into()))]),
+            object(vec![
+                ("status", Value::String("record".into())),
+                ("rows", Value::Bool(true)),
+            ]),
+            object(vec![
+                ("status", Value::String("unit".into())),
+                ("rows", Value::U64(1)),
+            ]),
+        ] {
+            assert_eq!(
+                validate_configuration(&value, &internal, &BTreeMap::new())
+                    .unwrap_err()
+                    .code,
+                "invalid_configuration"
+            );
+        }
+    }
+
+    #[test]
+    fn variants_preserve_forbidden_nested_types_and_unsupported_tags() {
+        for nested in [
+            TypeKind::Stream(StreamType {
+                element: Box::new(Type::new_bool()),
+                end: None,
+            }),
+            TypeKind::Handle(HandleType {
+                interface: TypeRef::new("test"),
+                mode: HandleMode::Own,
+            }),
+            TypeKind::Function(FunctionType {
+                params: vec![],
+                results: vec![],
+                throws: None,
+                async_fn: false,
+            }),
+        ] {
+            let ty = variant_type(
+                VariantTag::ExternallyTagged,
+                vec![("bad", VariantPayload::Newtype(Box::new(Type::new(nested))))],
+            );
+            assert_eq!(
+                profile(&ty, true, &BTreeMap::new(), &mut BTreeSet::new())
+                    .unwrap_err()
+                    .code,
+                "interface_incompatible"
+            );
+        }
+        for tag in [
+            VariantTag::Untagged,
+            VariantTag::AdjacentlyTagged {
+                tag_field: "tag".into(),
+                data_field: "data".into(),
+            },
+        ] {
+            let ty = variant_type(tag, vec![("unit", VariantPayload::Unit)]);
+            assert!(profile(&ty, true, &BTreeMap::new(), &mut BTreeSet::new()).is_err());
+        }
+        let scalar_internal = variant_type(
+            VariantTag::InternallyTagged {
+                field: "tag".into(),
+            },
+            vec![("bad", VariantPayload::Newtype(Box::new(Type::new_bool())))],
+        );
+        assert!(
+            profile(
+                &scalar_internal,
+                true,
+                &BTreeMap::new(),
+                &mut BTreeSet::new()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn actual_vdb_interface_activates_and_validates_recursive_dtos() {
+        use semantic_data::{
+            query::{BinaryOp, Expr, Operand},
+            vdb::*,
+        };
+        struct Vdb {
+            descriptors: Vec<ImplementationDescriptor>,
+        }
+        impl InterfaceImplementation for Vdb {
+            fn descriptors(&self) -> &[ImplementationDescriptor] {
+                &self.descriptors
+            }
+            fn invoke<'a>(
+                &'a self,
+                call: ValidatedInvocation,
+                _: InvocationContext,
+            ) -> InvocationFuture<'a> {
+                Box::pin(async move {
+                    match call.method.as_str() {
+                        "describe" => Ok(InvocationOutput::Values(vec![
+                            DatabaseDescriptor {
+                                title: "Test".into(),
+                                description: None,
+                                schema_revision: "1".into(),
+                                allow_untyped: true,
+                                schema: DatabaseSchema {
+                                    attributes: vec![AttributeType {
+                                        id: "test:flag".into(),
+                                        name: "Flag".into(),
+                                        ty: Type::new_bool(),
+                                        constraints: vec![],
+                                        meta: Meta::default(),
+                                    }],
+                                    ..Default::default()
+                                },
+                            }
+                            .into_value(),
+                        ])),
+                        "negotiate" => {
+                            let InvocationArgument::Value(request) =
+                                call.arguments.into_iter().next().unwrap()
+                            else {
+                                panic!("request")
+                            };
+                            let request = ScanRequest::from_value(request).unwrap();
+                            Ok(InvocationOutput::Values(vec![
+                                ScanPlan::Accepted {
+                                    plan: AcceptedScan {
+                                        filters: vec![
+                                            FilterSupport::Unsupported;
+                                            request.filters.len()
+                                        ],
+                                        ordered_prefix: 0,
+                                        limit_applied: false,
+                                        offset_applied: false,
+                                        estimated_rows: None,
+                                        token: None,
+                                        schema_revision: "1".into(),
+                                    },
+                                }
+                                .into_value(),
+                            ]))
+                        }
+                        "scan" => Ok(InvocationOutput::Stream(OwnedValueStream::new(
+                            stream::iter([
+                                Ok(StreamEvent::Item(object(vec![(
+                                    "id",
+                                    Value::String("one".into()),
+                                )]))),
+                                Ok(StreamEvent::End(Some(ScanSummary { rows: 1 }.into_value()))),
+                            ]),
+                        ))),
+                        _ => panic!("method"),
+                    }
+                })
+            }
+        }
+        let declarations = package().root.interfaces;
+        let declaration = declarations[INTERFACE_NAME].clone();
+        let definitions = semantic_data::query::semantic::definitions();
+        let fingerprint = interface_fingerprint(&declaration, &definitions).unwrap();
+        let implementation = ConformingImplementation::new(
+            Arc::new(Vdb {
+                descriptors: vec![ImplementationDescriptor {
+                    export: "database".into(),
+                    interface: InterfaceRef {
+                        package: PACKAGE_NAME.into(),
+                        module: MODULE_NAME.into(),
+                        contract: None,
+                        name: INTERFACE_NAME.into(),
+                    },
+                    package_version: "1.0.0".into(),
+                    fingerprint: fingerprint.clone(),
+                }],
+            }),
+            BTreeMap::from([("database".into(), declaration.clone())]),
+            definitions.clone(),
+        )
+        .unwrap();
+        assert_eq!(implementation.descriptors()[0].fingerprint, fingerprint);
+        block_on(async {
+            let invoke = |method: &str, args: Vec<Value>| {
+                implementation.invoke(
+                    ValidatedInvocation {
+                        export: "database".into(),
+                        method: method.into(),
+                        arguments: args.into_iter().map(InvocationArgument::Value).collect(),
+                    },
+                    InvocationContext::default(),
+                )
+            };
+            let InvocationOutput::Values(values) = invoke("describe", vec![]).await.unwrap() else {
+                panic!("values")
+            };
+            DatabaseDescriptor::from_value(values[0].clone()).unwrap();
+            let Err(error) = invoke("negotiate", vec![Value::Null]).await else {
+                panic!("invalid input accepted")
+            };
+            assert_eq!(error.code, "invalid_argument");
+            let request = ScanRequest {
+                filters: vec![Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(
+                        semantic_data::value::FieldPath::from_fields(["id"]),
+                    ))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::String("one".into())))),
+                }],
+                ..Default::default()
+            };
+            let InvocationOutput::Values(values) =
+                invoke("negotiate", vec![request.clone().into_value()])
+                    .await
+                    .unwrap()
+            else {
+                panic!("values")
+            };
+            let ScanPlan::Accepted { plan } = ScanPlan::from_value(values[0].clone()).unwrap()
+            else {
+                panic!("accepted")
+            };
+            let InvocationOutput::Stream(mut rows) = invoke(
+                "scan",
+                vec![request.into_value(), plan.into_value(), object(vec![])],
+            )
+            .await
+            .unwrap() else {
+                panic!("stream")
+            };
+            assert!(matches!(
+                rows.next().await.unwrap().unwrap(),
+                StreamEvent::Item(_)
+            ));
+            assert!(matches!(
+                rows.next().await.unwrap().unwrap(),
+                StreamEvent::End(Some(_))
+            ));
+        });
+    }
 
     #[test]
     fn reference_constraints_survive_argument_result_and_stream_validation() {
