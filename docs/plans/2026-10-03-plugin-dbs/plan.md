@@ -29,22 +29,35 @@ Update this list as tasks land (one commit per task, see §7).
 - [x] T1.1: `semantic.vdb` package and DTOs (`crates/data`)
 - [x] T1.2: register the package in the app
 - [x] T2.1: federation module split, `QuerySource` trait, referenced collections
-- [ ] T2.2: overlay catalog and planning
-- [ ] T2.3: pushdown pass and negotiation
+- [x] T2.2: overlay catalog and planning
+- [x] T2.3: pushdown pass and negotiation
 - [ ] T2.4: composite data source, execution, explain
 - [ ] T2.5: port the legacy `FederatedBackend` onto the engine
 - [x] T3.1: `semantic_vdb` crate, plugin-author trait, plugin adapter
-- [ ] T3.2: `PluginSource` (binding → `QuerySource`)
-- [ ] T3.3: `ScopeVdbs` (naming, conflicts, runtime schema cache)
-- [ ] T3.4: fixture VDB plugin for tests
+- [x] T3.2: `PluginSource` (binding → `QuerySource`)
+- [x] T3.3: `ScopeVdbs` (naming, conflicts, runtime schema cache)
+- [x] T3.4: fixture VDB plugin for tests
 - [ ] T4.1: `LocalSource`, `FederatedScopeDb`, routing
 - [ ] T4.2: `semantic.vdb.list` / `semantic.vdb.explain` commands
 - [ ] T4.3: app integration test suite and differential oracle
 - [ ] T5.1: bind joins: parameterized negotiation and synthetic indexes
 - [ ] T5.2: batched index nested loop (**gated: user review first**)
-- [ ] T6.1: example JSON-directory VDB plugin
+- [x] T6.1: example JSON-directory VDB plugin
 - [ ] T6.2: CLI rendering, UI surfacing
 - [ ] T6.3: documentation
+
+Validation through T3.3 (2026-10-03): Nix workspace checks passed after every
+integration. The integrated fixture/plugin-source suite passed 20 tests, and
+the T2.3 federation suite passed 34 tests. The scope-cache task passed 23 SDK
+tests (30 with `testing` enabled). The JSON-directory example passed its two
+tests, binary build and activation/in-process smoke checks. Every task was
+formatted. Checks and tests reuse the main clone's target directory through
+`CARGO_TARGET_DIR=/home/theduke/dev/github.com/theduke/semantic/target`;
+when another worktree leaves stale artifacts, refresh the current source
+entrypoint modification times before checking, without cleaning that cache.
+
+T6.1 landed early so the T4.3 CLI checkpoint can configure the actual stdio
+example as activation `fx`, using its `--activation fx` JSON output.
 
 ## 1. Decisions
 
@@ -311,6 +324,13 @@ and functions.
    (PRQL against a VDB returns the normal unknown-collection error).
 2. `referenced = referenced_collections(&query)`, covering the base, joins,
    and subqueries in `Exists`, `InList`/`In`, `Subquery` and `Insert ... Select`.
+   Include `unresolved_join_collections(&query, local)` as routing candidates:
+   the existing SQL parser represents `JOIN fx` as a class and
+   `JOIN activation.export` as a collection/class pair. Once VDB names are
+   available, `normalize_virtual_joins` converts only matching virtual
+   candidates to collection joins. Resolved local classes and explicit local
+   collections retain precedence. Apply the same rules in nested queries;
+   leave the SQL parser and local query behavior unchanged.
 3. If every name in `referenced` is local (in `inner.catalog()`, the default
    collection, or the `all` alias), **delegate the original input unchanged.**
 4. Otherwise resolve the scope's `VdbSet` (activates plugins).
@@ -328,11 +348,12 @@ and functions.
 ### 5.2 Planning (`FederatedEngine`)
 
 1. Bind parameters (`into_bound`) and convert to core `SelectQuery`.
-2. Build the overlay catalog: start from the local catalog. For each
-   referenced VDB, apply its validated `schema.to_ddl_batch()` with
+2. Build the overlay catalog: start from the local catalog. Seed every
+   referenced VDB name as a polymorphic/permissive collection before applying
+   any schema DDL, so declared relationships can refer to their collection.
+   For each referenced VDB, apply its validated `schema.to_ddl_batch()` with
    `ddl::apply_ddl_batch` (§4.5; the result is cached per revision, so this is
-   a merge of already validated definitions), and add the VDB as
-   `CollectionKind::Polymorphic`, `IntegrityMode::Permissive`. Apply the S2
+   a merge of already validated definitions). Apply the S2
    decision so lowering never produces index access paths: after applying all
    schema DDL and adding collections, remove every overlay index using
    `Catalog::delete_index` (collection creation always adds builtin indexes).
@@ -633,11 +654,15 @@ Steps:
    `ddl::apply_ddl_batch(local, schema)`. Its errors cover dangling references
    and invalid definitions (rule 2/4); if S2/T2.2 testing shows it accepts
    dangling refs, add an explicit closure check here.
+   The named form, `validate_virtual_schema_for_collection(local, name,
+   schema)`, checks conflicts against the original local catalog, then seeds
+   the effective virtual collection before applying DDL. In v1 each declared
+   relationship's `source_collection` must equal that effective name.
    `pub(crate) fn overlay_catalog(local: &Catalog, virtual_sources: &[(&str, &VirtualSource)]) -> Result<Catalog, DbError>`:
-   start from `local`, apply each VDB's `schema` with `ddl::apply_ddl_batch`
+   start from `local`, seed all VDB collections, then apply each VDB's `schema` with `ddl::apply_ddl_batch`
    (two VDBs defining the same id differently → `DbError::InvalidQuery`
-   conflict), add each VDB name as a polymorphic/permissive collection, and
-   apply the S2 index decision. Error if a name already exists locally (callers
+   conflict), and remove every overlay index last, including indexes created
+   by collection/schema DDL. Error if a name already exists locally (callers
    should have filtered it out; this is a guard).
 2. `pub(crate) struct PlannedSelect { overlay: Arc<Catalog>, logical: LogicalPlan, field_format: FieldFormat }`
    and `pub(crate) fn plan_select(query: SelectQuery, overlay: Arc<Catalog>, sources: &FederationSources) -> Result<PlannedSelect, DbError>`:
@@ -910,9 +935,10 @@ Steps:
    schema_revision):
    1. `invoke("describe")` → `DatabaseDescriptor`.
    2. `schema = descriptor.schema.to_ddl_batch()`; then
-      `semantic_db_core::validate_virtual_schema(&local_catalog, &schema)`
+      `semantic_db_core::validate_virtual_schema_for_collection(&local_catalog, name, &schema)`
       (§4.5 rules 2–4, T2.2). Error → `Err(reason)`.
-   3. `overlay = ddl::apply_ddl_batch(&local_catalog, &schema)`.
+   3. Seed `name` as a polymorphic/permissive collection in a local catalog
+      clone, then `overlay = ddl::apply_ddl_batch(&clone, &schema)`.
 
    Nothing is installed or persisted. This is a pure in-memory computation.
 3. `pub struct ScopeVdbs { cache: Mutex<BTreeMap<VdbKey, Arc<OnceCell<Result<Arc<PreparedVdb>, String>>>>> }`,
