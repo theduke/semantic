@@ -291,6 +291,8 @@ mod tests {
         let input = fixture(300);
         let start = std::time::Instant::now();
         TreeLayout::default().layout(&input);
-        assert!(start.elapsed() < std::time::Duration::from_millis(50));
+        let elapsed = start.elapsed();
+        eprintln!("300-node tree: {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_millis(50));
     }
 }

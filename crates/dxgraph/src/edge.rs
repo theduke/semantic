@@ -138,7 +138,7 @@ pub fn edge_geometry_with_offset(
     if source == target {
         let start = Point::new(source.right(), source.origin.y + source.size.height * 0.25);
         let end = Point::new(source.origin.x + source.size.width * 0.75, source.origin.y);
-        let distance = 40.0 + f64::from(offset_index.abs()) * 12.0;
+        let distance = 40.0 + f64::from(offset_index.unsigned_abs()) * 12.0;
         let a = Point::new(start.x + distance, start.y - distance);
         let b = Point::new(end.x + distance, end.y - distance);
         return EdgeGeometry {

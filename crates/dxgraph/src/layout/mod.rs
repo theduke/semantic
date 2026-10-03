@@ -131,7 +131,7 @@ pub fn pack_components(
                     && other.bottom() > candidate.origin.y
             });
             match collision {
-                Some(rect) => cursor.x = rect.right() + gap,
+                Some(rect) => cursor.x = (rect.right() + gap).max(cursor.x + 1e-6),
                 None => break,
             }
         }
@@ -172,6 +172,13 @@ pub(super) fn remove_overlaps(
     positions: &mut IndexMap<NodeId, Point>,
     padding: f64,
 ) {
+    // Keep the quadratic collision loop in indexed arrays. Looking up string ids
+    // in the ordered map for every pair dominates layout time in debug builds.
+    let mut points: Vec<_> = input
+        .nodes
+        .iter()
+        .map(|node| positions.get(&node.id).copied())
+        .collect();
     for _ in 0..80 {
         let mut changed = false;
         for i in 0..input.nodes.len() {
@@ -180,22 +187,19 @@ pub(super) fn remove_overlaps(
                 if a.fixed.is_some() && b.fixed.is_some() {
                     continue;
                 }
-                let (Some(pa), Some(pb)) =
-                    (positions.get(&a.id).copied(), positions.get(&b.id).copied())
-                else {
+                let (Some(pa), Some(pb)) = (points[i], points[j]) else {
                     continue;
                 };
-                let ra = Rect::new(pa, a.size).inflate(padding / 2.0);
-                let rb = Rect::new(pb, b.size).inflate(padding / 2.0);
-                let ox = ra.right().min(rb.right()) - ra.origin.x.max(rb.origin.x);
-                let oy = ra.bottom().min(rb.bottom()) - ra.origin.y.max(rb.origin.y);
+                let ox = (pa.x + a.size.width).min(pb.x + b.size.width) - pa.x.max(pb.x) + padding;
+                let oy =
+                    (pa.y + a.size.height).min(pb.y + b.size.height) - pa.y.max(pb.y) + padding;
                 if ox <= 0.0 || oy <= 0.0 {
                     continue;
                 }
                 changed = true;
                 let delta = if ox < oy {
                     Point::new(
-                        if ra.center().x <= rb.center().x {
+                        if pa.x + a.size.width / 2.0 <= pb.x + b.size.width / 2.0 {
                             -ox - 0.001
                         } else {
                             ox + 0.001
@@ -205,7 +209,7 @@ pub(super) fn remove_overlaps(
                 } else {
                     Point::new(
                         0.0,
-                        if ra.center().y <= rb.center().y {
+                        if pa.y + a.size.height / 2.0 <= pb.y + b.size.height / 2.0 {
                             -oy - 0.001
                         } else {
                             oy + 0.001
@@ -220,18 +224,23 @@ pub(super) fn remove_overlaps(
                     0.5
                 };
                 let share_b = 1.0 - share_a;
-                positions.insert(
-                    a.id.clone(),
-                    Point::new(pa.x + delta.x * share_a, pa.y + delta.y * share_a),
-                );
-                positions.insert(
-                    b.id.clone(),
-                    Point::new(pb.x - delta.x * share_b, pb.y - delta.y * share_b),
-                );
+                points[i] = Some(Point::new(
+                    pa.x + delta.x * share_a,
+                    pa.y + delta.y * share_a,
+                ));
+                points[j] = Some(Point::new(
+                    pb.x - delta.x * share_b,
+                    pb.y - delta.y * share_b,
+                ));
             }
         }
         if !changed {
-            return;
+            break;
+        }
+    }
+    for (node, point) in input.nodes.iter().zip(points) {
+        if let Some(point) = point {
+            positions.insert(node.id.clone(), point);
         }
     }
     let mut placed: Vec<Rect> = input
@@ -335,6 +344,37 @@ mod tests {
                 Point::new(-120.0, -80.0)
             );
             assert_clear(&input, &output);
+        }
+    }
+    #[test]
+    fn pack_components_accepts_touching_padding_boundaries() {
+        let mut input = fixture(3);
+        for node in &mut input.nodes {
+            node.layout_parent = None;
+            node.size = Size::new(40.0, 20.0);
+        }
+        let mut positions = input
+            .nodes
+            .iter()
+            .map(|node| (node.id.clone(), Point::default()))
+            .collect();
+        pack_components(&input, &[vec![0], vec![1], vec![2]], &mut positions, 10.0);
+        for (index, node) in input.nodes.iter().enumerate() {
+            assert_eq!(positions[&node.id], Point::new(index as f64 * 50.0, 0.0));
+        }
+        // Fractional measurements may leave a sub-ulp intersection after a
+        // jump. Packing must still make progress instead of repeating it.
+        for width in [40.1, 40.123456789, 40.99999999] {
+            for node in &mut input.nodes {
+                node.size.width = width;
+            }
+            for point in positions.values_mut() {
+                *point = Point::new(-0.17, -0.31);
+            }
+            pack_components(&input, &[vec![0], vec![1], vec![2]], &mut positions, 10.1);
+            for (index, node) in input.nodes.iter().enumerate() {
+                assert!((positions[&node.id].x - index as f64 * (width + 10.1)).abs() < 1e-4);
+            }
         }
     }
     #[test]

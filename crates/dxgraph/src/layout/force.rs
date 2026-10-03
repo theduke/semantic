@@ -3,7 +3,7 @@ use super::{
     LayoutAlgorithm, LayoutInput, LayoutOutput, pack_components, remove_overlaps, rng::Rng,
     spanning::forest,
 };
-use crate::Point;
+use crate::{Point, Rect};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,11 +95,7 @@ impl LayoutAlgorithm for ForceLayout {
             positions.push(position);
         }
         let mut velocity = vec![Point::default(); n];
-        let anchored: Vec<_> = input
-            .nodes
-            .iter()
-            .map(|n| n.fixed.is_some() || n.previous.is_some())
-            .collect();
+        let anchored = warm_anchors(input, self.0.collision_padding.max(0.0));
         for iteration in 0..self.0.iterations {
             let alpha = (1.0 - iteration as f64 / self.0.iterations.max(1) as f64).powi(2);
             let mut acceleration = vec![Point::default(); n];
@@ -107,27 +103,34 @@ impl LayoutAlgorithm for ForceLayout {
                 positions.iter().map(|p| p.x).sum::<f64>() / n as f64,
                 positions.iter().map(|p| p.y).sum::<f64>() / n as f64,
             );
+            let centers: Vec<_> = positions
+                .iter()
+                .zip(&input.nodes)
+                .map(|(p, node)| {
+                    Point::new(p.x + node.size.width / 2.0, p.y + node.size.height / 2.0)
+                })
+                .collect();
+            let charge = self.0.charge.max(0.0) * alpha;
             for i in 0..n {
-                for j in i + 1..n {
-                    let mut dx = positions[j].x + input.nodes[j].size.width / 2.0
-                        - positions[i].x
-                        - input.nodes[i].size.width / 2.0;
-                    let mut dy = positions[j].y + input.nodes[j].size.height / 2.0
-                        - positions[i].y
-                        - input.nodes[i].size.height / 2.0;
+                let center = centers[i];
+                let (before, after) = acceleration.split_at_mut(i + 1);
+                let current = &mut before[i];
+                for (other, force) in centers[i + 1..].iter().zip(after) {
+                    let mut dx = other.x - center.x;
+                    let mut dy = other.y - center.y;
                     if dx.abs() + dy.abs() < 0.001 {
                         dx = (rng.next() - 0.5) * 0.01;
                         dy = (rng.next() - 0.5) * 0.01;
                     }
                     let squared = (dx * dx + dy * dy).max(25.0);
-                    let strength = self.0.charge.max(0.0) * alpha / squared;
+                    let strength = charge / squared;
                     let len = squared.sqrt();
                     let fx = dx / len * strength;
                     let fy = dy / len * strength;
-                    acceleration[i].x -= fx;
-                    acceleration[i].y -= fy;
-                    acceleration[j].x += fx;
-                    acceleration[j].y += fy;
+                    current.x -= fx;
+                    current.y -= fy;
+                    force.x += fx;
+                    force.y += fy;
                 }
             }
             for &(a, b, weight) in &links {
@@ -172,8 +175,10 @@ impl LayoutAlgorithm for ForceLayout {
         // Existing positions act as temporary pins during incremental exploration.
         // New nodes absorb collision displacement, preserving the mental map.
         let mut collision_input = input.clone();
-        for node in &mut collision_input.nodes {
-            node.fixed = node.fixed.or(node.previous);
+        for (node, anchored) in collision_input.nodes.iter_mut().zip(anchored) {
+            if anchored {
+                node.fixed = node.fixed.or(node.previous);
+            }
         }
         remove_overlaps(
             &collision_input,
@@ -186,6 +191,41 @@ impl LayoutAlgorithm for ForceLayout {
         }
         output
     }
+}
+// Measurement can enlarge an existing node. Previous positions are soft anchors:
+// release affected nodes when their rectangles already overlap, while retaining
+// user pins and the stable positions of unaffected neighbors.
+fn warm_anchors(input: &LayoutInput, padding: f64) -> Vec<bool> {
+    let mut anchored: Vec<_> = input
+        .nodes
+        .iter()
+        .map(|n| n.fixed.is_some() || n.previous.is_some())
+        .collect();
+    for (i, a) in input.nodes.iter().enumerate() {
+        let Some(pa) = a.fixed.or(a.previous) else {
+            continue;
+        };
+        let ra = Rect::new(pa, a.size).inflate(padding / 2.0);
+        for (j, b) in input.nodes.iter().enumerate().skip(i + 1) {
+            let Some(pb) = b.fixed.or(b.previous) else {
+                continue;
+            };
+            let rb = Rect::new(pb, b.size).inflate(padding / 2.0);
+            if ra.right() > rb.origin.x
+                && rb.right() > ra.origin.x
+                && ra.bottom() > rb.origin.y
+                && rb.bottom() > ra.origin.y
+            {
+                if a.fixed.is_none() {
+                    anchored[i] = false;
+                }
+                if b.fixed.is_none() {
+                    anchored[j] = false;
+                }
+            }
+        }
+    }
+    anchored
 }
 #[cfg(test)]
 mod tests {
@@ -219,10 +259,23 @@ mod tests {
         assert_clear(&input, &output);
     }
     #[test]
+    fn overlapping_previous_rectangles_can_move_but_pins_cannot() {
+        let mut input = fixture(4);
+        for node in &mut input.nodes {
+            node.previous = Some(Point::default());
+        }
+        input.nodes[0].fixed = Some(Point::default());
+        let output = ForceLayout::default().layout(&input);
+        assert_eq!(output.positions[&input.nodes[0].id], Point::default());
+        assert_clear(&input, &output);
+    }
+    #[test]
     #[ignore = "performance smoke test"]
     fn three_hundred_nodes() {
         let start = std::time::Instant::now();
         ForceLayout::default().layout(&fixture(300));
-        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        let elapsed = start.elapsed();
+        eprintln!("300-node force: {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_millis(500));
     }
 }

@@ -333,6 +333,14 @@ impl GestureState {
         ctx: &GestureContext<'_>,
         effects: &mut Vec<GestureEffect>,
     ) {
+        let viewport = effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                GestureEffect::SetViewport(viewport) => Some(*viewport),
+                _ => None,
+            })
+            .unwrap_or(ctx.viewport);
         self.pointers.shift_remove(&pointer);
         effects.push(GestureEffect::ReleasePointer(pointer));
         self.mode = if let Some((&pointer, &client)) = self.pointers.first() {
@@ -341,7 +349,7 @@ impl GestureState {
                 client,
                 target: GestureTarget::Background,
                 shift: false,
-                viewport: ctx.viewport,
+                viewport,
                 node_origin: Point::default(),
             })
         } else {
@@ -588,6 +596,35 @@ mod tests {
                 .handle(up(2, Point::new(50.0, 20.0), 100), &ctx)
                 .iter()
                 .any(|e| matches!(e, GestureEffect::BackgroundClick { .. }))
+        );
+    }
+    #[test]
+    fn remaining_pointer_continues_from_final_pinch_viewport() {
+        let ctx = context();
+        let mut state = GestureState::default();
+        state.handle(
+            down(1, Point::new(10.0, 20.0), GestureTarget::Background),
+            &ctx,
+        );
+        state.handle(
+            down(2, Point::new(30.0, 20.0), GestureTarget::Background),
+            &ctx,
+        );
+        let final_effects = state.handle(up(2, Point::new(50.0, 20.0), 100), &ctx);
+        let final_viewport = viewport(&final_effects);
+        let effects = state.handle(
+            GestureInput::PointerMove {
+                pointer: 1,
+                client: Point::new(20.0, 20.0),
+            },
+            &ctx,
+        );
+        assert_eq!(
+            viewport(&effects),
+            Viewport {
+                x: final_viewport.x + 10.0,
+                ..final_viewport
+            }
         );
     }
     #[test]
