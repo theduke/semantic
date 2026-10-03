@@ -1,5 +1,7 @@
 //! Small constructors shared by the programmatic UI queries.
 
+pub(crate) const RELATION_EDGES_COLLECTION: &str = "__semantic.relationship_edges";
+
 use semantic_data::{
     builtin::DEFAULT_COLLECTION,
     query::{

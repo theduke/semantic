@@ -1,3 +1,4 @@
+pub mod graph;
 pub mod query_ast;
 pub use components::{
     CommentComposer, CommentComposerProps, CommentTree, CommentTreeProps, EntityComments,

@@ -6,7 +6,9 @@ use semantic_data::{
 
 use crate::{
     EntityComments,
-    query_ast::{all, any, binary, field, order, query_payload, select, wildcard},
+    query_ast::{
+        RELATION_EDGES_COLLECTION, all, any, binary, field, order, query_payload, select, wildcard,
+    },
     ui_catalog::{EntityTarget, use_ui_catalog},
     use_active_scope_id, use_rpc_client,
 };
@@ -14,7 +16,6 @@ use crate::{
 use super::card::EntityLink;
 
 const PAGE_SIZE: usize = 10;
-const RELATION_EDGES_COLLECTION: &str = "__semantic.relationship_edges";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AssociationKind {
