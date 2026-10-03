@@ -132,6 +132,7 @@ pub fn AppRoot(props: AppRootProps) -> Element {
     });
     rsx! {
         dxcomp::Stylesheet {}
+        dxgraph::Stylesheet {}
         document::Stylesheet { href: CORE_STYLES }
         document::Link { rel: "icon", href: FAVICON }
         UiCatalogProvider {

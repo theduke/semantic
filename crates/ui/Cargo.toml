@@ -17,6 +17,8 @@ markdown = ["semantic_ui_core/markdown"]
 web = [
   "markdown",
   "dioxus/web",
+  "dxgraph/web",
+  "semantic_ui_core/web",
   "semantic_rpc/client-http-web",
   "time/wasm-bindgen",
 ]
@@ -39,6 +41,7 @@ dioxus = { workspace = true, features = ["router"] }
 dioxus-icons = "0.1.0"
 dioxus-sdk-time = "0.7.0"
 dxcomp = { path = "../dxcomp" }
+dxgraph = { path = "../dxgraph" }
 futures = "0.3.31"
 infer = { version = "0.19.0", default-features = false }
 regex = "1.12.2"

@@ -8,6 +8,8 @@ mod collection;
 mod data;
 mod entity;
 mod form;
+mod graph;
+pub use graph::GraphPage;
 mod home;
 mod import;
 mod jobs;
@@ -89,6 +91,13 @@ pub enum Route {
         root: Option<String>,
         hierarchy: Option<bool>,
         kind: Option<String>,
+    },
+    #[route("/graph?:root&:collection&:mode&:layout")]
+    GraphPage {
+        root: Option<String>,
+        collection: Option<String>,
+        mode: Option<String>,
+        layout: Option<String>,
     },
     #[route("/upload")]
     UploadPage,

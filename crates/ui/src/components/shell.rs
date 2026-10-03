@@ -92,6 +92,7 @@ enum NavItem {
     Home,
     Browse,
     Tree,
+    Graph,
     Labels,
     Tasks,
     CreateEntity,
@@ -186,6 +187,13 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                     label: "Tree",
                     icon: rsx! { FolderTree { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Tree),
+                    on_navigate: move |_| menu_open.set(false),
+                }
+                PrimaryNavLink {
+                    to: Route::GraphPage { root: None, collection: None, mode: None, layout: None },
+                    label: "Graph",
+                    icon: rsx! { FolderTree { width: 17, height: 17 } },
+                    active: nav_item_is_active(&route, NavItem::Graph),
                     on_navigate: move |_| menu_open.set(false),
                 }
                 if tasks_available() == Some(true) {
@@ -322,6 +330,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::CollectionEditEntityPage { .. }, NavItem::Browse)
             | (Route::BrowsePage { .. }, NavItem::Browse)
             | (Route::TreePage { .. }, NavItem::Tree)
+            | (Route::GraphPage { .. }, NavItem::Graph)
             | (Route::LabelsPage, NavItem::Labels)
             | (
                 Route::TasksPage | Route::TaskPage { .. } | Route::CreateTaskPage { .. },
