@@ -8,6 +8,9 @@ mod author;
 mod descriptor;
 mod helpers;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use author::{EntityStream, VirtualDatabase, VirtualDatabasePlugin};
 pub use descriptor::implementation_descriptor;
 pub use helpers::{classify_simple, simple_eq_value};
