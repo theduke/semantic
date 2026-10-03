@@ -1,4 +1,5 @@
 mod auth;
+mod commands;
 mod config;
 mod error;
 mod file;
@@ -752,6 +753,63 @@ mod tests {
             _ => RpcResult::Err(serde_json::from_slice(&bytes).unwrap()),
         };
         (status, result)
+    }
+
+    #[tokio::test]
+    async fn server_config_get_works_without_a_database_scope() {
+        use semantic_base::server::{ConfigGet, ServerConfig as PublicServerConfig};
+        use semantic_data::value::FromValue;
+        use semantic_rpc_core::RpcCommandSpec;
+
+        let app = semantic_app::SemanticApp::builder().build().unwrap();
+        let server = SemanticServer::new(app.clone());
+        let response = post_rpc(
+            &server,
+            "/api/v1/rpc?scope=missing",
+            None,
+            ConfigGet::NAME,
+            Value::Void,
+        )
+        .await;
+        assert_eq!(response.id, 11);
+        let RpcResult::Ok(value) = response.result else {
+            panic!("expected server configuration");
+        };
+        assert_eq!(
+            PublicServerConfig::from_value(value).unwrap(),
+            PublicServerConfig::default()
+        );
+
+        let (status, result) =
+            post_command(&server, "/api/v1/rpc/semantic.server.config_get", vec![]).await;
+        assert_eq!(status, http::StatusCode::OK);
+        let RpcResult::Ok(value) = result else {
+            panic!("expected server configuration");
+        };
+        assert_eq!(
+            PublicServerConfig::from_value(value).unwrap(),
+            PublicServerConfig::default()
+        );
+        app.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_config_get_rejects_invalid_payloads() {
+        let app = semantic_app::SemanticApp::builder().build().unwrap();
+        let server = SemanticServer::new(app.clone());
+        let response = post_rpc(
+            &server,
+            "/api/v1/rpc",
+            None,
+            "semantic.server.config_get",
+            Value::Bool(true),
+        )
+        .await;
+        let RpcResult::Err(error) = response.result else {
+            panic!("expected invalid payload error");
+        };
+        assert_eq!(error.code, "invalid_payload");
+        app.shutdown().await.unwrap();
     }
 
     fn select_db_name(response: RpcResponse) -> String {

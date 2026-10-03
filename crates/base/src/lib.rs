@@ -13,6 +13,7 @@ pub mod directory_query;
 pub mod labels;
 pub mod migrations;
 pub mod schema;
+pub mod server;
 
 pub use bundle::{MODULE_NAME, PACKAGE_NAME, package, root_module};
 

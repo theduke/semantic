@@ -27,6 +27,7 @@ pub struct SemanticServer {
 #[derive(Clone)]
 pub(crate) struct ServerState {
     pub app: SemanticApp,
+    pub commands: Arc<semantic_rpc::RpcRegistry<ServerState, semantic_app::AppError>>,
     pub config: ServerConfig,
     pub resolver: Arc<dyn PrincipalResolver>,
 }
@@ -51,7 +52,12 @@ impl SemanticServer {
     }
 
     pub fn router(&self) -> Router {
+        let mut commands = semantic_rpc::RpcRegistry::new();
+        commands
+            .register(semantic_base::server::ConfigGet)
+            .expect("valid server config command");
         let state = ServerState {
+            commands: Arc::new(commands),
             app: self.app.clone(),
             config: self.config.clone(),
             resolver: Arc::clone(&self.resolver),
@@ -118,7 +124,7 @@ pub async fn rpc_http_handler(
     Json(request): Json<RpcRequest>,
 ) -> Json<RpcResponse> {
     match request_context(&state, &headers, &query).await {
-        Ok(ctx) => Json(state.app.invoke(ctx, request).await),
+        Ok(ctx) => Json(state.invoke(ctx, request).await),
         Err(err) => Json(RpcResponse::err(request.id, err.into())),
     }
 }
@@ -150,7 +156,7 @@ pub async fn command_http_handler(
         Ok(ctx) => ctx,
         Err(err) => return server_error_response(err),
     };
-    match state.app.call(ctx, &command, payload).await {
+    match state.call(ctx, &command, payload).await {
         Ok(value) => Json(TypedValue(value)).into_response(),
         Err(err) => call_error_response(err),
     }

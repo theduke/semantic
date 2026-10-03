@@ -9236,6 +9236,7 @@ dependencies = [
  "objstore_logfs",
  "rpassword",
  "semantic_app",
+ "semantic_base",
  "semantic_data",
  "semantic_db_core",
  "semantic_db_redb",
