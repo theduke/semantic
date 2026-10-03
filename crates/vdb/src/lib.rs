@@ -11,6 +11,9 @@ mod scope;
 mod source;
 mod validate;
 
+#[cfg(test)]
+mod test_support;
+
 #[cfg(feature = "testing")]
 pub mod testing;
 

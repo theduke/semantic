@@ -43,10 +43,18 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
         semantic_data::filestore::package(),
     ];
     let mut db = semantic_db_kv::open_memory().unwrap();
+    let shared_ownership = semantic_data::bundles::shared::migration_v1();
+    let legacy_count = |package: &semantic_data::schema::Package| {
+        package
+            .migrations
+            .iter()
+            .position(|migration| migration == &shared_ownership)
+            .expect("shared ownership migration follows the historical package")
+    };
     for current in &packages {
         let mut legacy = current.clone();
         legacy.modules.clear();
-        legacy.migrations.truncate(9);
+        legacy.migrations.truncate(legacy_count(current));
         if current.name == semantic_base::PACKAGE_NAME {
             legacy
                 .root
@@ -80,7 +88,7 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
     let mut db = EmbeddedDb::open(storage).unwrap();
     for current in &packages {
         let outcome = db.upsert_package(current.clone()).unwrap();
-        let expected = current.migrations[9..].to_vec();
+        let expected = current.migrations[legacy_count(current)..].to_vec();
         assert_eq!(
             outcome
                 .executed_migrations

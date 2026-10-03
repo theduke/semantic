@@ -21,7 +21,7 @@ impl CompositeDataSource {
         &self,
         source: SourceRef,
         predicate: Option<&Expr>,
-        lookup: Option<(FieldRef, Vec<Value>, bool)>,
+        lookup: Option<(FieldRef, Vec<Value>)>,
     ) -> SendableRecordBatchStream {
         let Some(fragment) = self.fragments.get(&LeafKey::from(&source)) else {
             return error_stream(format!("federation: no fragment for source {source:?}"));
@@ -29,17 +29,11 @@ impl CompositeDataSource {
         if let Some(predicate) = predicate {
             debug_assert_eq!(fragment.pushed_predicate.as_ref(), Some(predicate));
         }
-        let batch_lookup = lookup.as_ref().is_some_and(|(_, _, batch)| *batch);
-        let (request, plan, residual) = if batch_lookup {
-            let Some(batch) = &fragment.batch else {
-                return error_stream("federation: no negotiated bulk lookup".into());
-            };
-            (&batch.request, &batch.plan, &batch.residual)
-        } else {
-            (&fragment.request, &fragment.plan, &fragment.residual)
-        };
+        // Accepted IN :__keys plans support lists for both singleton and
+        // bounded bulk lookups; request, token and residual stay identical.
+        let (request, plan, residual) = (&fragment.request, &fragment.plan, &fragment.residual);
         let bindings = match (&fragment.bind_field, lookup) {
-            (Some(expected), Some((field, values, _))) if expected == &field => {
+            (Some(expected), Some((field, values))) if expected == &field => {
                 BTreeMap::from([(super::bind::KEYS_PARAMETER.into(), Value::List(values))])
             }
             (None, None) => BTreeMap::new(),
@@ -120,7 +114,7 @@ impl AsyncPhysicalDataSource for CompositeDataSource {
         field: FieldRef,
         value: Value,
     ) -> SendableRecordBatchStream {
-        self.read(source, None, Some((field, vec![value], false)))
+        self.read(source, None, Some((field, vec![value])))
     }
     fn index_lookup_filtered_stream(
         &self,
@@ -132,13 +126,13 @@ impl AsyncPhysicalDataSource for CompositeDataSource {
         self.read(
             source,
             residual_predicate.as_ref(),
-            Some((field, vec![value], false)),
+            Some((field, vec![value])),
         )
     }
     fn index_lookup_batch_size(&self, source: &SourceRef) -> Option<NonZeroUsize> {
         self.fragments
             .get(&LeafKey::from(source))
-            .filter(|fragment| fragment.batch.is_some())
+            .filter(|fragment| fragment.bind_field.is_some())
             .and_then(|_| NonZeroUsize::new(super::bind::BIND_JOIN_BATCH_SIZE))
     }
     fn index_lookup_batch_stream(
@@ -148,11 +142,7 @@ impl AsyncPhysicalDataSource for CompositeDataSource {
         values: Vec<Value>,
         residual_predicate: Option<Expr>,
     ) -> SendableRecordBatchStream {
-        self.read(
-            source,
-            residual_predicate.as_ref(),
-            Some((field, values, true)),
-        )
+        self.read(source, residual_predicate.as_ref(), Some((field, values)))
     }
     fn index_range_stream(&self, _: PhysicalIndexScan) -> SendableRecordBatchStream {
         unsupported_index()

@@ -14,7 +14,9 @@ mod test_support;
 pub use backend::*;
 pub use engine::FederatedEngine;
 pub use explain::{FederatedExplain, LeafExplain};
-pub use planner::{validate_virtual_schema, validate_virtual_schema_for_collection};
+pub use planner::{
+    validate_virtual_schema, validate_virtual_schema_for_collection, virtual_overlay,
+};
 pub use references::{
     normalize_virtual_joins, referenced_collections, unresolved_join_collections,
 };

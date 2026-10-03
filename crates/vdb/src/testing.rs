@@ -7,7 +7,6 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -49,7 +48,7 @@ pub struct FixtureVdb {
     pub activations: Arc<AtomicUsize>,
     pub cancelled: Arc<Notify>,
     pub schema: SchemaHandle,
-    pub scan_delay: Duration,
+    pub scan_gate: Option<Arc<Notify>>,
 }
 
 impl FixtureVdb {
@@ -63,7 +62,7 @@ impl FixtureVdb {
             activations: Arc::new(AtomicUsize::new(0)),
             cancelled: Arc::new(Notify::new()),
             schema: Arc::new(Mutex::new((fixture_schema(), "1".into()))),
-            scan_delay: Duration::ZERO,
+            scan_gate: None,
         }
     }
 
@@ -81,8 +80,8 @@ impl FixtureVdb {
         self
     }
 
-    pub fn with_scan_delay(mut self, delay: Duration) -> Self {
-        self.scan_delay = delay;
+    pub fn with_scan_gate(mut self, gate: Arc<Notify>) -> Self {
+        self.scan_gate = Some(gate);
         self
     }
 }
@@ -179,7 +178,7 @@ impl VirtualDatabase for FixtureVdb {
     ) -> EntityStream {
         self.scans.fetch_add(1, Ordering::SeqCst);
         let mut rows = self.entities.clone();
-        let delay = self.scan_delay;
+        let gate = self.scan_gate.clone();
         let guard = CancelledScan {
             notification: self.cancelled.clone(),
             completed: false,
@@ -208,13 +207,18 @@ impl VirtualDatabase for FixtureVdb {
             });
             let offset = if plan.offset_applied { usize::try_from(request.offset).unwrap_or(usize::MAX) } else { 0 };
             let limit = if plan.limit_applied { usize::try_from(request.limit.unwrap()).unwrap_or(usize::MAX) } else { usize::MAX };
-            for row in rows.into_iter().skip(offset).take(limit) {
+            if let Some(gate) = gate {
                 let cancelled = tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => true,
-                    _ = tokio::time::sleep(delay) => false,
+                    _ = gate.notified() => false,
                 };
                 if cancelled {
+                    Err(VdbError { code: "cancelled".into(), message: "fixture scan cancelled".into() })?;
+                }
+            }
+            for row in rows.into_iter().skip(offset).take(limit) {
+                if cancellation.is_cancelled() {
                     Err(VdbError { code: "cancelled".into(), message: "fixture scan cancelled".into() })?;
                 }
                 yield row;
@@ -518,8 +522,11 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_and_dropping_unpolled_scans() {
+        use futures_util::FutureExt;
+        use std::time::Duration;
+
         let fixture = FixtureVdb::new(rows(), NegotiationMode::AllExact)
-            .with_scan_delay(Duration::from_secs(60));
+            .with_scan_gate(Arc::new(Notify::new()));
         let request = request();
         let ScanPlan::Accepted { plan } = fixture.negotiate(&request).await.unwrap() else {
             panic!("accepted")
@@ -536,6 +543,7 @@ mod tests {
             .unwrap();
         let token = CancellationToken::new();
         let mut stream = fixture.scan(request, plan, Object::new(), token.clone());
+        assert!(stream.next().now_or_never().is_none());
         token.cancel();
         assert_eq!(stream.next().await.unwrap().unwrap_err().code, "cancelled");
     }

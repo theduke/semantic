@@ -30,7 +30,7 @@ fn schema() -> semantic_vdb::DatabaseSchema {
     schema
 }
 
-const CORPUS: [&str; 20] = [
+const CORPUS: [&str; 22] = [
     "SELECT id FROM {coll} ORDER BY id",
     "SELECT id, fixture_name FROM {coll} ORDER BY id",
     "SELECT id FROM {coll} WHERE fixture_name = 'Alpha' ORDER BY id",
@@ -51,6 +51,8 @@ const CORPUS: [&str; 20] = [
     "SELECT id FROM {coll} WHERE id IN (SELECT v.id FROM {coll} v WHERE v.fixture_score > 20) ORDER BY id",
     "SELECT a.id, b.fixture_title AS fixture_title FROM peers a JOIN {coll}._ b ON a.id = b.id ORDER BY a.id",
     "SELECT a.id FROM {coll} a JOIN {other}._ b ON a.id = b.id WHERE b.\"fixture:name\" = 'Alpha' ORDER BY a.id",
+    "SELECT a.id FROM {coll} a WHERE EXISTS (SELECT l.id FROM peers l WHERE l.id = 'a') AND a.id IN (SELECT l.id FROM peers l) ORDER BY a.id",
+    "SELECT a.id FROM {coll} a WHERE EXISTS (SELECT v.id FROM {other} v WHERE v.id = 'a') AND a.id IN (SELECT v.id FROM {other} v) ORDER BY a.id",
 ];
 #[test]
 fn corpus_sql_and_plain_aliases_preflight() {
@@ -145,20 +147,24 @@ async fn stored_corpus_smoke_and_qualified_join_predicate() {
     populate(&db, "mirror", &data).await;
     populate(&db, "mirror2", &data).await;
     populate(&db, "peers", &data).await;
-    let mut results = Vec::new();
     for sql in CORPUS {
-        results.push(
-            rows(
-                &db,
-                &sql.replace("{coll}", "mirror")
-                    .replace("{other}", "mirror2"),
-            )
-            .await,
-        );
+        rows(
+            &db,
+            &sql.replace("{coll}", "mirror")
+                .replace("{other}", "mirror2"),
+        )
+        .await;
     }
     let mut expected = Object::new();
     expected.insert("id", "a".to_owned());
-    assert_eq!(results.last().unwrap(), &vec![expected]);
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT a.id FROM mirror a JOIN mirror2._ b ON a.id = b.id WHERE b.\"fixture:name\" = 'Alpha' ORDER BY a.id",
+        )
+        .await,
+        vec![expected],
+    );
 }
 
 fn context(app: SemanticApp) -> AppRequestContext {
@@ -304,7 +310,7 @@ async fn stored_local_oracle_matches_four_plugin_modes_and_runtime_lifecycle() {
         .with_schema(broken_fixture_schema(), "1");
     let slow = FixtureVdb::new(data.clone(), NegotiationMode::AllUnsupported)
         .with_schema(schema(), "1")
-        .with_scan_delay(Duration::from_secs(30));
+        .with_scan_gate(Arc::new(tokio::sync::Notify::new()));
     let requires_id = FixtureVdb::new(data.clone(), NegotiationMode::AllExact)
         .with_schema(schema(), "1")
         .with_reject_without("id");

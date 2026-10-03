@@ -1,6 +1,7 @@
 # T5.2 design for review: opt-in bounded virtual join probes
 
-Status: design only; implementation requires user approval after T5.1.
+Status: implemented after user approval. Review 1 clarified that the existing
+membership-list contract needs one accepted plan, without duplicate negotiation.
 
 ## Existing behavior and scope
 
@@ -52,34 +53,36 @@ their overrides. No implementer must change. The borrowed data-source adapter
 must forward both new methods so a wrapper preserves the source's policy.
 
 `CompositeDataSource` returns `Some(64)` only when the referenced fragment is
-virtual and has an accepted batched binding negotiation. It returns `None`
-for local fragments and for single-key-only virtual fragments. A global
+virtual and has an exact accepted membership binding plan. It returns `None`
+for local fragments and ordinary virtual scans. A global
 source flag or backend-tag substring test is insufficient: this decision
 must resolve the precise `SourceRef`/fragment being probed.
 
 ## Virtual negotiation and binding
 
-T5.1 first provides the single-key parameterized request and its synthetic
-equality index. T5.2 additionally negotiates a separate candidate using
+T5.1 provides the parameterized membership request and its synthetic
+equality index. As clarified by review 1, one accepted plan uses
 `parameters = ["__keys"]` and a canonical membership predicate for the probe
 field. Each batch scan passes `bindings["__keys"] = Value::List(keys)`; keys
 are concrete, distinct, non-null values from that batch. List membership
 binding must have explicit tested semantics in the adapter/plugin; a list
 must not accidentally become one scalar equality key.
 
-The batch candidate has no limit or offset: truncating the inner lookup
+The binding candidate has no limit or offset: truncating the inner lookup
 could lose matches for later outer rows. Projection remains a hint. The
 candidate carries only ordering already valid for the existing fragment;
 the host promises no new join ordering. Validate accepted filter support,
 ordering, and schema revision as for every other negotiation. Preserve and
-echo the batch candidate's own token; do not reuse a single-key token.
-Rejection means ordinary single-key execution. Protocol violations and
+echo the accepted candidate's token for every list, including singleton lists.
+There is no second negotiation for a different cardinality: the protocol
+already defines `__keys` as a list. Rejection retains an accepted ordinary scan.
+Protocol violations and
 revision changes fail normally, without treating them as rejection.
 
 Batch enablement requires exact membership support. Other inexact or
 unsupported conjuncts are checked by the host, preserving their existing
 semantics. Explain exposes the actual negotiated batch request/support and
-batch size; it must not claim one remote call if the source fell back.
+batch size; it must not claim batching for an ordinary scan.
 
 ## Executor behavior, memory, and ordering
 
@@ -121,7 +124,7 @@ duplicate outer keys, duplicate keys across boundaries, one-to-many matches,
 residual predicates, and 63/64/65 outer rows. Compare eligible results with
 the existing single-key path, including explicit ordering and alias binding.
 Count remote batch requests and verify exact `__keys` lists. Cover rejected
-batch negotiation, distinct tokens, schema changes, first/later batch errors,
+binding negotiation, token reuse, schema changes, first/later batch errors,
 stream cancellation, and LIMIT avoiding later groups. Verify all local and
 outer-join cases still call the existing many hook, even through the borrowed
 adapter. No production change is authorized by this document.

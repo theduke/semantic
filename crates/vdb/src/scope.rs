@@ -4,11 +4,14 @@ use std::{
 };
 
 use semantic_data::{FromValue, query::DdlBatch};
-use semantic_db_core::catalog::{Catalog, CollectionKind, IntegrityMode};
-use semantic_db_core::{VirtualSource, apply_ddl_batch, validate_virtual_schema_for_collection};
+use semantic_db_core::catalog::Catalog;
+use semantic_db_core::{VirtualSource, virtual_overlay};
 use semantic_plugin::PluginBinding;
 use semantic_rpc::interface::InvocationOutput;
-use tokio::sync::OnceCell;
+use tokio::{
+    sync::OnceCell,
+    time::{Duration, Instant},
+};
 
 use crate::{
     DatabaseDescriptor, DatabaseSchema, INTERFACE_NAME, MODULE_NAME, PACKAGE_NAME, PluginSource,
@@ -61,11 +64,26 @@ impl VdbSet {
 }
 
 type VdbKey = (String, String, u64);
+const DESCRIBE_RETRY_BACKOFF: Duration = Duration::from_secs(5);
+struct Description {
+    result: Result<Arc<DatabaseDescriptor>, String>,
+    retry_at: Option<Instant>,
+}
 
 struct CachedVdb {
     name: String,
-    local: Arc<Catalog>,
-    prepared: Arc<OnceCell<Result<Arc<PreparedVdb>, String>>>,
+    description: Arc<OnceCell<Description>>,
+    prepared: Option<(Arc<Catalog>, Result<Arc<PreparedVdb>, String>)>,
+}
+
+impl CachedVdb {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            description: Arc::new(OnceCell::new()),
+            prepared: None,
+        }
+    }
 }
 
 /// Runtime schema cache for one scope. Definitions never enter persisted state.
@@ -79,13 +97,34 @@ impl ScopeVdbs {
         Self::default()
     }
 
-    /// Resolve only the VDB exports among the current generation's bindings.
-    /// Preparation is shared by concurrent callers. Transport failures leave
-    /// the cell uninitialized so a later snapshot can retry.
+    /// Describe all active exports concurrently for a complete listing.
+    /// Descriptors survive local catalog changes; transient invocation failures
+    /// retry after five seconds, while permanent failures last for the generation.
     pub async fn snapshot(
         &self,
         bindings: Vec<PluginBinding>,
         local_catalog: Arc<Catalog>,
+    ) -> VdbSet {
+        self.snapshot_selected(bindings, local_catalog, None).await
+    }
+
+    /// Prepare only requested names. Naming and conflicts still consider every
+    /// active binding, and unrelated cached exports remain available.
+    pub async fn snapshot_named(
+        &self,
+        bindings: Vec<PluginBinding>,
+        local_catalog: Arc<Catalog>,
+        names: &BTreeSet<String>,
+    ) -> VdbSet {
+        self.snapshot_selected(bindings, local_catalog, Some(names))
+            .await
+    }
+
+    async fn snapshot_selected(
+        &self,
+        bindings: Vec<PluginBinding>,
+        local_catalog: Arc<Catalog>,
+        selected: Option<&BTreeSet<String>>,
     ) -> VdbSet {
         let bindings = bindings
             .into_iter()
@@ -126,63 +165,57 @@ impl ScopeVdbs {
             .lock()
             .expect("VDB cache poisoned")
             .retain(|key, _| active.contains(key));
-        let mut set = VdbSet::default();
-        for (name, binding) in named {
-            let mut entry = VdbEntry {
-                name: name.clone(),
-                plugin_id: binding.plugin_id().into(),
-                export: binding.descriptor().export.clone(),
-                generation: binding.generation(),
-                status: VdbStatus::Available,
-                descriptor: None,
-            };
-            let prepared = if local_catalog.collection_by_name(&name).is_some() {
-                Err("conflicts with local collection".into())
-            } else if names[&name] > 1 {
-                Err("conflicts with another virtual database collection name".into())
-            } else {
-                let prepared = {
-                    let mut cache = self.cache.lock().expect("VDB cache poisoned");
-                    let cached = cache.entry(key(&binding)).or_insert_with(|| CachedVdb {
-                        name: name.clone(),
-                        local: local_catalog.clone(),
-                        prepared: Arc::new(OnceCell::new()),
-                    });
-                    if !Arc::ptr_eq(&cached.local, &local_catalog) || cached.name != name {
-                        *cached = CachedVdb {
+        let prepared = futures_util::future::join_all(
+            named
+                .into_iter()
+                .filter(|(name, _)| selected.is_none_or(|selected| selected.contains(name)))
+                .map(|(name, binding)| {
+                    let local_catalog = local_catalog.clone();
+                    let names = &names;
+                    async move {
+                        let mut entry = VdbEntry {
                             name: name.clone(),
-                            local: local_catalog.clone(),
-                            prepared: Arc::new(OnceCell::new()),
+                            plugin_id: binding.plugin_id().into(),
+                            export: binding.descriptor().export.clone(),
+                            generation: binding.generation(),
+                            status: VdbStatus::Available,
+                            descriptor: None,
                         };
+                        let prepared = if local_catalog.collection_by_name(&name).is_some() {
+                            Err("conflicts with local collection".into())
+                        } else if names[&name] > 1 {
+                            Err("conflicts with another virtual database collection name".into())
+                        } else {
+                            self.prepare(&binding, &name, local_catalog).await
+                        };
+                        let source = match prepared {
+                            Ok(prepared) => {
+                                entry.descriptor = Some((*prepared.descriptor).clone());
+                                Some(VirtualSource {
+                                    source: Arc::new(PluginSource::new(
+                                        binding,
+                                        prepared.descriptor.clone(),
+                                        prepared.overlay.clone(),
+                                        name,
+                                    )),
+                                    schema: prepared.schema.clone(),
+                                    schema_revision: prepared.descriptor.schema_revision.clone(),
+                                })
+                            }
+                            Err(reason) => {
+                                entry.status = VdbStatus::Unavailable { reason };
+                                None
+                            }
+                        };
+                        (entry, source)
                     }
-                    cached.prepared.clone()
-                };
-                match prepared
-                    .get_or_try_init(|| prepare(&binding, &name, &local_catalog))
-                    .await
-                {
-                    Ok(result) => result.clone(),
-                    Err(reason) => Err(reason),
-                }
-            };
-            match prepared {
-                Ok(prepared) => {
-                    entry.descriptor = Some((*prepared.descriptor).clone());
-                    set.sources.insert(
-                        name.clone(),
-                        VirtualSource {
-                            source: Arc::new(PluginSource::new(
-                                binding,
-                                prepared.descriptor.clone(),
-                                prepared.overlay.clone(),
-                                name,
-                            )),
-                            schema: prepared.schema.clone(),
-                            schema_revision: prepared.descriptor.schema_revision.clone(),
-                        },
-                    );
-                }
-                Err(reason) => entry.status = VdbStatus::Unavailable { reason },
+                }),
+        )
+        .await;
+        let mut set = VdbSet::default();
+        for (entry, source) in prepared {
+            if let Some(source) = source {
+                set.sources.insert(entry.name.clone(), source);
             }
             set.entries.push(entry);
         }
@@ -195,19 +228,70 @@ impl ScopeVdbs {
         set
     }
 
-    /// Remove the stale revision observed in a failed query's snapshot.
-    /// A newer completed revision or a refresh already in progress survives
-    /// delayed concurrent invalidations of the old revision.
+    async fn prepare(
+        &self,
+        binding: &PluginBinding,
+        name: &str,
+        local: Arc<Catalog>,
+    ) -> Result<Arc<PreparedVdb>, String> {
+        let description = {
+            let mut cache = self.cache.lock().expect("VDB cache poisoned");
+            let cached = cache
+                .entry(key(binding))
+                .or_insert_with(|| CachedVdb::new(name));
+            if cached.name != name
+                || cached.description.get().is_some_and(|description| {
+                    description
+                        .retry_at
+                        .is_some_and(|deadline| Instant::now() >= deadline)
+                })
+            {
+                *cached = CachedVdb::new(name);
+            }
+            cached.description.clone()
+        };
+        let descriptor = description
+            .get_or_init(|| describe(binding))
+            .await
+            .result
+            .as_ref()
+            .map_err(Clone::clone)?
+            .clone();
+        {
+            let cache = self.cache.lock().expect("VDB cache poisoned");
+            if let Some(cached) = cache.get(&key(binding))
+                && Arc::ptr_eq(&cached.description, &description)
+                && let Some((catalog, prepared)) = &cached.prepared
+                && Arc::ptr_eq(catalog, &local)
+            {
+                return prepared.clone();
+            }
+        }
+        // Catalog identity only skips repeated pure validation. A changed or
+        // freshly deserialized catalog never causes another describe call.
+        let prepared = prepare(descriptor, name, &local);
+        let mut cache = self.cache.lock().expect("VDB cache poisoned");
+        if let Some(cached) = cache.get_mut(&key(binding))
+            && Arc::ptr_eq(&cached.description, &description)
+        {
+            cached.prepared = Some((local, prepared.clone()));
+        }
+        prepared
+    }
+
+    /// Remove only the stale revision observed by the failed query. Newer
+    /// descriptors and in-flight refreshes survive delayed invalidations.
     pub fn invalidate(&self, name: &str, observed_revision: &str) {
         self.cache
             .lock()
             .expect("VDB cache poisoned")
             .retain(|_, cached| {
                 !(cached.name == name
-                    && cached.prepared.get().is_some_and(|result| {
-                        result.as_ref().is_ok_and(|prepared| {
-                            prepared.descriptor.schema_revision == observed_revision
-                        })
+                    && cached.description.get().is_some_and(|description| {
+                        description
+                            .result
+                            .as_ref()
+                            .is_ok_and(|descriptor| descriptor.schema_revision == observed_revision)
                     }))
             });
     }
@@ -221,46 +305,59 @@ fn key(binding: &PluginBinding) -> VdbKey {
     )
 }
 
-// The outer error is an invocation failure, which must not initialize the
-// OnceCell. Schema/codec errors are inner errors cached for this generation.
-async fn prepare(
-    binding: &PluginBinding,
-    name: &str,
-    local: &Catalog,
-) -> Result<Result<Arc<PreparedVdb>, String>, String> {
-    let output = binding
-        .invoke("describe", vec![])
-        .await
-        .map_err(|error| format!("{}: {}", error.code, error.message))?;
-    let prepared = || -> Result<Arc<PreparedVdb>, String> {
+// Descriptions are independent of the local catalog. Transient invocation
+// failures back off; permanent failures stay cached for the generation.
+async fn describe(binding: &PluginBinding) -> Description {
+    let output = match binding.invoke("describe", vec![]).await {
+        Ok(output) => output,
+        Err(error) => {
+            return Description {
+                retry_at: (crate::source::is_unavailable(&error.code)
+                    || matches!(
+                        error.code.as_str(),
+                        "temporary_failure" | "timeout" | "rate_limited" | "cancelled"
+                    ))
+                .then(|| Instant::now() + DESCRIBE_RETRY_BACKOFF),
+                result: Err(format!("{}: {}", error.code, error.message)),
+            };
+        }
+    };
+    let result = (|| {
         let InvocationOutput::Values(mut values) = output else {
             return Err("describe must return one value".into());
         };
         if values.len() != 1 {
             return Err("describe must return one value".into());
         }
-        let descriptor = DatabaseDescriptor::from_value(values.remove(0))
-            .map_err(|error| format!("invalid database descriptor: {error}"))?;
-        let schema = descriptor.schema.to_ddl_batch();
-        validate_virtual_schema_for_collection(local, name, &schema)?;
-        let mut overlay = local.clone();
-        overlay
-            .upsert_collection(name, CollectionKind::Polymorphic, IntegrityMode::Permissive)
-            .map_err(|error| error.to_string())?;
-        let (overlay, _) = apply_ddl_batch(&overlay, &schema).map_err(|error| error.to_string())?;
-        Ok(Arc::new(PreparedVdb {
-            descriptor: Arc::new(descriptor),
-            schema: Arc::new(schema),
-            overlay: Arc::new(overlay),
-        }))
-    };
-    Ok(prepared())
+        DatabaseDescriptor::from_value(values.remove(0))
+            .map(Arc::new)
+            .map_err(|error| format!("invalid database descriptor: {error}"))
+    })();
+    Description {
+        result,
+        retry_at: None,
+    }
+}
+
+fn prepare(
+    descriptor: Arc<DatabaseDescriptor>,
+    name: &str,
+    local: &Catalog,
+) -> Result<Arc<PreparedVdb>, String> {
+    let schema = Arc::new(descriptor.schema.to_ddl_batch());
+    let overlay = virtual_overlay(local, &[(name, schema.as_ref())])?;
+    Ok(Arc::new(PreparedVdb {
+        descriptor,
+        schema,
+        overlay: Arc::new(overlay),
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use crate::test_support::EmptyStore;
     use async_trait::async_trait;
     use semantic_data::schema::{
         AnyType, AttributeRef, AttributeType, ClassAttribute, ClassType, Meta,
@@ -268,10 +365,7 @@ mod tests {
         Visibility,
     };
     use semantic_data::{Object, Value};
-    use semantic_jobs::{
-        JobId, JobListPage, JobListQuery, JobRecord, JobStore, JobStoreError, JobsBuilder,
-        ScopeJobs,
-    };
+    use semantic_jobs::{JobsBuilder, ScopeJobs};
     use semantic_plugin::{
         Plugin, PluginActivation, PluginManifest, PluginProvider, PluginRegistry, ScopePlugins,
         portable_export,
@@ -283,32 +377,7 @@ mod tests {
         AcceptedScan, CancellationToken, EntityStream, ScanRequest, VdbError, VirtualDatabase,
         VirtualDatabasePlugin, implementation_descriptor,
     };
-
-    struct EmptyStore;
-    #[async_trait]
-    impl JobStore for EmptyStore {
-        async fn initialize(&self) -> Result<(), JobStoreError> {
-            Ok(())
-        }
-        async fn get(&self, _: &JobId) -> Result<Option<JobRecord>, JobStoreError> {
-            Ok(None)
-        }
-        async fn put(&self, _: &JobRecord) -> Result<(), JobStoreError> {
-            Ok(())
-        }
-        async fn list(&self, _: JobListQuery) -> Result<JobListPage, JobStoreError> {
-            Ok(JobListPage {
-                records: vec![],
-                next_cursor: None,
-            })
-        }
-        async fn count(&self) -> Result<u64, JobStoreError> {
-            Ok(0)
-        }
-        async fn delete_ids(&self, _: &[JobId]) -> Result<u64, JobStoreError> {
-            Ok(0)
-        }
-    }
+    use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
 
     fn attribute(id: &str) -> AttributeType {
         AttributeType {
@@ -381,6 +450,7 @@ mod tests {
         descriptor: Arc<Mutex<DatabaseDescriptor>>,
         calls: Arc<AtomicUsize>,
         fail_next: Arc<AtomicBool>,
+        failure_code: Arc<Mutex<&'static str>>,
         pause_next: Arc<AtomicBool>,
         entered: Arc<Notify>,
         release: Arc<Semaphore>,
@@ -392,6 +462,7 @@ mod tests {
                 descriptor: Arc::new(Mutex::new(descriptor())),
                 calls: Arc::new(AtomicUsize::new(0)),
                 fail_next: Arc::new(AtomicBool::new(false)),
+                failure_code: Arc::new(Mutex::new("temporary_failure")),
                 pause_next: Arc::new(AtomicBool::new(false)),
                 entered: Arc::new(Notify::new()),
                 release: Arc::new(Semaphore::new(0)),
@@ -405,7 +476,7 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_next.swap(false, Ordering::SeqCst) {
                 return Err(VdbError {
-                    code: "temporary_failure".into(),
+                    code: self.failure_code.lock().unwrap().to_string(),
                     message: "retry describe".into(),
                 });
             }
@@ -574,8 +645,9 @@ mod tests {
             .next()
             .unwrap()
             .prepared
-            .get()
+            .as_ref()
             .unwrap()
+            .1
             .as_ref()
             .unwrap()
             .clone();
@@ -643,10 +715,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invocation_failure_retries_on_next_snapshot() {
+    async fn named_snapshots_skip_unrelated_describes_and_keep_global_export_names() {
+        let database = TestDb::new();
+        let (runtime, jobs, _) = runtime(database.clone(), &["one", "two"]).await;
+        let scope = Arc::new(ScopeVdbs::new());
+        let local = local();
+        let bindings = runtime.bindings().await;
+        let names = BTreeSet::from(["fx.one".into()]);
+        let set = scope
+            .snapshot_named(bindings.clone(), local.clone(), &names)
+            .await;
+        assert!(set.get_available("fx.one").is_some());
+        assert_eq!(set.entries().len(), 1);
+        assert_eq!(database.calls.load(Ordering::SeqCst), 1);
+
+        database.pause_next.store(true, Ordering::SeqCst);
+        let listing = {
+            let scope = scope.clone();
+            let local = local.clone();
+            let bindings = bindings.clone();
+            tokio::spawn(async move { scope.snapshot(bindings, local).await })
+        };
+        database.entered.notified().await;
+        let selected = tokio::time::timeout(
+            Duration::from_secs(1),
+            scope.snapshot_named(bindings, local, &names),
+        )
+        .await
+        .unwrap();
+        assert!(selected.get_available("fx.one").is_some());
+        assert!(
+            !listing.is_finished(),
+            "unrelated describe must remain pending"
+        );
+        assert_eq!(database.calls.load(Ordering::SeqCst), 2);
+        database.release.add_permits(1);
+        assert_eq!(listing.await.unwrap().sources.len(), 2);
+        close(&runtime, jobs).await;
+    }
+
+    #[tokio::test]
+    async fn listing_describes_exports_concurrently() {
+        let database = TestDb::new();
+        database.pause_next.store(true, Ordering::SeqCst);
+        let (runtime, jobs, _) = runtime(database.clone(), &["one", "two"]).await;
+        let listing = {
+            let bindings = runtime.bindings().await;
+            tokio::spawn(async move { ScopeVdbs::new().snapshot(bindings, local()).await })
+        };
+        database.entered.notified().await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while database.calls.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!listing.is_finished());
+        database.release.add_permits(1);
+        assert_eq!(listing.await.unwrap().sources.len(), 2);
+        close(&runtime, jobs).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn permanent_describe_failure_waits_for_generation_replacement() {
         let database = TestDb::new();
         database.fail_next.store(true, Ordering::SeqCst);
-        let (runtime, jobs, _) = runtime(database.clone(), &["database"]).await;
+        *database.failure_code.lock().unwrap() = "invalid_schema";
+        let (runtime, jobs, mut activation) = runtime(database.clone(), &["database"]).await;
         let scope = ScopeVdbs::new();
         let local = local();
         assert!(
@@ -656,8 +792,20 @@ mod tests {
                     .await,
                 "fx"
             )
-            .contains("retry describe")
+            .contains("invalid_schema")
         );
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(
+            scope
+                .snapshot(runtime.bindings().await, local.clone())
+                .await
+                .get_available("fx")
+                .is_none()
+        );
+        assert_eq!(database.calls.load(Ordering::SeqCst), 1);
+        activation.generation = 2;
+        runtime.activate(activation).await.unwrap();
+        tokio::task::yield_now().await;
         assert!(
             scope
                 .snapshot(runtime.bindings().await, local)
@@ -667,6 +815,42 @@ mod tests {
         );
         assert_eq!(database.calls.load(Ordering::SeqCst), 2);
         close(&runtime, jobs).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invocation_failure_backs_off_then_recovers() {
+        for code in ["temporary_failure", "cancelled"] {
+            let database = TestDb::new();
+            database.fail_next.store(true, Ordering::SeqCst);
+            *database.failure_code.lock().unwrap() = code;
+            let (runtime, jobs, _) = runtime(database.clone(), &["database"]).await;
+            let scope = ScopeVdbs::new();
+            let local = local();
+            assert!(
+                reason(
+                    &scope
+                        .snapshot(runtime.bindings().await, local.clone())
+                        .await,
+                    "fx"
+                )
+                .contains("retry describe")
+            );
+            let set = scope
+                .snapshot(runtime.bindings().await, local.clone())
+                .await;
+            assert!(reason(&set, "fx").contains("retry describe"));
+            assert_eq!(database.calls.load(Ordering::SeqCst), 1);
+            tokio::time::advance(Duration::from_secs(5)).await;
+            assert!(
+                scope
+                    .snapshot(runtime.bindings().await, local)
+                    .await
+                    .get_available("fx")
+                    .is_some()
+            );
+            assert_eq!(database.calls.load(Ordering::SeqCst), 2);
+            close(&runtime, jobs).await;
+        }
     }
 
     #[tokio::test]
@@ -774,13 +958,29 @@ mod tests {
                 .get_available("fx")
                 .is_some()
         );
+        assert!(
+            scope
+                .snapshot(runtime.bindings().await, Arc::new((*local).clone()))
+                .await
+                .get_available("fx")
+                .is_some()
+        );
+        assert_eq!(database.calls.load(Ordering::SeqCst), 1);
         let mut changed = (*local).clone();
         changed.upsert_attribute(attribute("test:value"));
         let set = scope
             .snapshot(runtime.bindings().await, Arc::new(changed))
             .await;
         assert!(reason(&set, "fx").contains("test:value"));
-        assert_eq!(database.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(database.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            scope
+                .snapshot(runtime.bindings().await, local)
+                .await
+                .get_available("fx")
+                .is_some(),
+            "restored catalog must discard the conflicting overlay"
+        );
         close(&runtime, jobs).await;
     }
 

@@ -20,15 +20,6 @@ pub(crate) struct LeafFragment {
     pub pushed_predicate: Option<Expr>,
     pub sole_input: bool,
     pub bind_field: Option<FieldRef>,
-    pub host_residual: Option<Expr>,
-    pub batch: Option<BatchFragment>,
-}
-
-#[derive(Clone)]
-pub(crate) struct BatchFragment {
-    pub request: ScanRequest,
-    pub plan: AcceptedScan,
-    pub residual: Option<Expr>,
 }
 
 pub(crate) fn combine_filters(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
@@ -207,8 +198,14 @@ pub(crate) async fn negotiate_leaves_with_bind(
             if let ScanPlan::Accepted { plan } = &plain {
                 validate(plan, &request)?;
             }
+            let prefer_bind = match &plain {
+                ScanPlan::Rejected { .. } => true,
+                ScanPlan::Accepted { plan } => plan
+                    .estimated_rows
+                    .is_some_and(|rows| rows > BIND_JOIN_THRESHOLD),
+            };
             let candidate = candidates.get(&leaf.key);
-            let bound = if let Some(candidate) = candidate {
+            let bound = if let Some(candidate) = candidate.filter(|_| prefer_bind) {
                 let mut bound_request = request.clone();
                 bound_request.filters.push(
                     Expr::Binary {
@@ -232,12 +229,6 @@ pub(crate) async fn negotiate_leaves_with_bind(
             if let Some((request, ScanPlan::Accepted { plan })) = &bound {
                 validate(plan, request)?;
             }
-            let prefer_bind = match &plain {
-                ScanPlan::Rejected { .. } => true,
-                ScanPlan::Accepted { plan } => plan
-                    .estimated_rows
-                    .is_some_and(|rows| rows > BIND_JOIN_THRESHOLD),
-            };
             let exact_bound = bound.as_ref().is_some_and(|(_, plan)| {
                 matches!(plan,
                 ScanPlan::Accepted { plan } if plan.filters.last() == Some(&FilterSupport::Exact))
@@ -279,8 +270,6 @@ pub(crate) async fn negotiate_leaves_with_bind(
                 pushed_predicate: leaf.pushed_predicate,
                 sole_input: leaf.sole_input,
                 bind_field,
-                host_residual: combine_filters(host_only),
-                batch: None,
             };
             Ok::<_, FederatedError>((leaf.key, fragment))
         }
@@ -379,10 +368,7 @@ mod tests {
         sources.virtual_sources.get_mut("fx").unwrap().source = source;
         let overlay =
             Arc::new(overlay_catalog(&local, &[("fx", &sources.virtual_sources["fx"])]).unwrap());
-        (
-            plan_select(query, overlay, &sources, &local).unwrap(),
-            sources,
-        )
+        (plan_select(query, overlay, &sources).unwrap(), sources)
     }
 
     #[test]
@@ -460,7 +446,7 @@ mod tests {
                 plan: accepted(request),
             })
         }));
-        let query = crate::sql::parse_sql_query_unbound("SELECT a.id FROM local a JOIN fx b ON a.id = b.id WHERE b.title = 'x' ORDER BY a.id LIMIT 2", crate::sql::SqlDialectKind::Generic).unwrap();
+        let query = crate::sql::parse_sql_query_unbound("SELECT a.id FROM local a JOIN fx._ b ON a.id = b.id WHERE b.title = 'x' ORDER BY a.id LIMIT 2", crate::sql::SqlDialectKind::Generic).unwrap();
         let semantic_data::query::Query::Select(query) = query else {
             panic!("select")
         };

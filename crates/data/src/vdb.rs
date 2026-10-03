@@ -11,6 +11,27 @@ pub const PACKAGE_NAME: &str = "semantic.vdb";
 pub const MODULE_NAME: &str = "v1";
 pub const INTERFACE_NAME: &str = "VirtualDatabase";
 
+/// Runtime collection metadata returned by `semantic.vdb.list`.
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, Default, PartialEq)]
+pub struct VdbInfo {
+    pub name: String,
+    pub plugin_id: String,
+    pub export: String,
+    pub generation: u64,
+    pub available: bool,
+    pub reason: Option<String>,
+    pub title: Option<String>,
+    pub schema_revision: Option<String>,
+    pub classes: Vec<String>,
+}
+
+/// Scope and collection requested by `semantic.vdb.schema`.
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq)]
+pub struct VdbSchemaRequest {
+    pub scope_id: Option<String>,
+    pub name: String,
+}
+
 #[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq)]
 pub struct DatabaseDescriptor {
     pub title: String,
@@ -247,6 +268,31 @@ mod tests {
     use super::*;
     use crate::query::{BinaryOp, Expr, Operand, OrderBy, SortDirection};
     use crate::value::FieldPath;
+
+    #[test]
+    fn command_metadata_accepts_absent_optional_fields() {
+        let info = VdbInfo::from_value(
+            crate::Object::from_iter([
+                ("name".into(), Value::String("fx".into())),
+                ("plugin_id".into(), Value::String("plugin".into())),
+                ("export".into(), Value::String("db".into())),
+                ("generation".into(), Value::U64(1)),
+                ("available".into(), Value::Bool(true)),
+                ("classes".into(), Value::List(vec![])),
+            ])
+            .into_value(),
+        )
+        .unwrap();
+        assert_eq!(
+            (info.reason, info.title, info.schema_revision),
+            (None, None, None)
+        );
+        let request = VdbSchemaRequest::from_value(
+            crate::Object::from_iter([("name".into(), Value::String("fx".into()))]).into_value(),
+        )
+        .unwrap();
+        assert_eq!(request.scope_id, None);
+    }
 
     fn request() -> ScanRequest {
         ScanRequest {

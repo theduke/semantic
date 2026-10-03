@@ -1254,8 +1254,9 @@ to the existing `index_lookup_many_stream`, preserving specialized embedded
 bulk lookups.
 An additive `index_lookup_batch_size` hook defaults to `None`; only eligible
 inner equality joins with an accepted exact virtual batch candidate opt in to
-groups of 64 outer rows. Negotiate that candidate separately, preserve its own
-token and residual support, and expose the selected `batch_size` in explain.
+groups of 64 outer rows. Reuse the exact accepted `IN :__keys` membership plan
+and its token for every group; the list contract already covers singleton and
+multi-key lookups. Expose the selected `batch_size` in explain.
 Deduplicate non-null keys within each group, retain duplicate outer matches and
 output order, stop after errors, and cancel active scans when the stream drops.
 The existing embedded and outer-join behaviour must be unchanged (verify with

@@ -216,6 +216,7 @@ mod tests {
             source_name: Some("right".into()),
             binding: Some("r".into()),
             backend_tag: Some(tag.into()),
+            occurrence_id: None,
             collection_id: None,
         };
         PhysicalPlan::Join(PhysicalJoinPlan {
@@ -224,6 +225,7 @@ mod tests {
                     source_name: Some("left".into()),
                     binding: Some("l".into()),
                     backend_tag: None,
+                    occurrence_id: None,
                     collection_id: None,
                 },
             })),

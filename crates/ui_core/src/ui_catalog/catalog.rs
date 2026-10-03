@@ -83,22 +83,11 @@ impl UiCatalog {
         collection: &str,
         schema: &semantic_data::vdb::DatabaseSchema,
     ) -> Result<Self, String> {
-        use semantic_db_core::catalog::{Catalog, CollectionKind, IntegrityMode};
+        use semantic_db_core::catalog::Catalog;
         let local = Catalog::from_storage_snapshot(self.snapshot().clone())
             .map_err(|error| error.to_string())?;
         let ddl = schema.to_ddl_batch();
-        semantic_db_core::validate_virtual_schema_for_collection(&local, collection, &ddl)?;
-        let mut overlay = local;
-        overlay
-            .upsert_collection(
-                collection,
-                CollectionKind::Polymorphic,
-                IntegrityMode::Permissive,
-            )
-            .map_err(|error| error.to_string())?;
-        let overlay = semantic_db_core::apply_ddl_batch(&overlay, &ddl)
-            .map_err(|error| error.to_string())?
-            .0;
+        let overlay = semantic_db_core::virtual_overlay(&local, &[(collection, &ddl)])?;
         let rebuilt = Self::from_snapshot(overlay.to_storage_snapshot());
         let mut catalog = self.clone();
         let inner = Rc::make_mut(&mut catalog.inner);

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use semantic_data::{FromValue, IntoValue, Object, Value};
 use semantic_db_core::CoreError;
-use semantic_db_core::catalog::{Catalog, CollectionKind, IntegrityMode};
+use semantic_db_core::catalog::Catalog;
 use semantic_db_core::{DEFAULT_EXECUTION_BATCH_SIZE, DynObject, SendableRecordBatchStream};
 use semantic_db_core::{DbError, QuerySource, SourceScan};
 use semantic_plugin::PluginBinding;
@@ -22,28 +22,14 @@ pub struct PluginSource {
 }
 
 impl PluginSource {
+    /// The overlay must contain the named virtual collection and its exposed
+    /// definitions, as produced by `semantic_db_core::virtual_overlay`.
     pub fn new(
         binding: PluginBinding,
         descriptor: Arc<DatabaseDescriptor>,
         overlay: Arc<Catalog>,
         name: impl Into<String>,
     ) -> Self {
-        let overlay = if overlay
-            .collections()
-            .any(|(_, collection)| collection.kind != CollectionKind::Untyped)
-        {
-            overlay
-        } else {
-            let mut validation_overlay = (*overlay).clone();
-            validation_overlay
-                .upsert_collection(
-                    "vdb_validation",
-                    CollectionKind::Polymorphic,
-                    IntegrityMode::Permissive,
-                )
-                .expect("empty polymorphic collection is valid");
-            Arc::new(validation_overlay)
-        };
         Self {
             binding,
             descriptor,
@@ -128,7 +114,7 @@ impl QuerySource for PluginSource {
             while let Some(event) = stream.next().await {
                 match event.map_err(|error| CoreError::new(self.invocation_error(error).to_string()))? {
                     StreamEvent::Item(Value::Object(entity)) => {
-                        validate_entity(&entity, &self.descriptor, &self.overlay).map_err(|error| CoreError::new(self.error(error).to_string()))?;
+                        validate_entity(&entity, &self.descriptor, &self.overlay, &self.name).map_err(|error| CoreError::new(self.error(error).to_string()))?;
                         let id = entity.get("id").and_then(Value::as_str).expect("validated id");
                         if !seen.insert(id.to_owned()) { Err(CoreError::new(self.protocol_error(format!("duplicate entity id '{id}'")).to_string()))?; }
                         rows = rows.checked_add(1).ok_or_else(|| CoreError::new(self.protocol_error("row count overflow").to_string()))?;
@@ -167,14 +153,13 @@ pub(crate) fn is_unavailable(code: &str) -> bool {
 mod tests {
     use std::{collections::BTreeMap, future::Future, pin::Pin};
 
+    use crate::test_support::EmptyStore;
     use semantic_data::schema::{
         AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, LengthSpec, Meta,
         StringType, Type, TypeKind,
     };
-    use semantic_jobs::{
-        JobId, JobListPage, JobListQuery, JobRecord, JobStore, JobStoreError, JobsBuilder,
-        ScopeJobs,
-    };
+    use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
+    use semantic_jobs::{JobsBuilder, ScopeJobs};
     use semantic_plugin::{
         Plugin, PluginActivation, PluginError, PluginInstanceContext, PluginManifest,
         PluginProvider, PluginRegistry, ScopePlugins, portable_export,
@@ -189,33 +174,6 @@ mod tests {
         AcceptedScan, CancellationToken, DatabaseSchema, EntityStream, VirtualDatabase,
         VirtualDatabasePlugin, implementation_descriptor,
     };
-
-    struct EmptyStore;
-
-    #[async_trait]
-    impl JobStore for EmptyStore {
-        async fn initialize(&self) -> Result<(), JobStoreError> {
-            Ok(())
-        }
-        async fn get(&self, _: &JobId) -> Result<Option<JobRecord>, JobStoreError> {
-            Ok(None)
-        }
-        async fn put(&self, _: &JobRecord) -> Result<(), JobStoreError> {
-            Ok(())
-        }
-        async fn list(&self, _: JobListQuery) -> Result<JobListPage, JobStoreError> {
-            Ok(JobListPage {
-                records: vec![],
-                next_cursor: None,
-            })
-        }
-        async fn count(&self) -> Result<u64, JobStoreError> {
-            Ok(0)
-        }
-        async fn delete_ids(&self, _: &[JobId]) -> Result<u64, JobStoreError> {
-            Ok(0)
-        }
-    }
 
     fn schema(required: bool) -> DatabaseSchema {
         DatabaseSchema {
@@ -468,25 +426,25 @@ mod tests {
         let catalog = catalog(&descriptor);
         let mut row = entity("one", Some("tiny:Item"));
         assert!(
-            validate_entity(&row, &descriptor, &catalog)
+            validate_entity(&row, &descriptor, &catalog, "tiny")
                 .unwrap_err()
                 .message
                 .contains("required")
         );
         row.insert("tiny:name", Value::Bool(false));
-        assert!(validate_entity(&row, &descriptor, &catalog).is_err());
+        assert!(validate_entity(&row, &descriptor, &catalog, "tiny").is_err());
         row.insert("tiny:name", Value::String("a".into()));
         assert!(
-            validate_entity(&row, &descriptor, &catalog)
+            validate_entity(&row, &descriptor, &catalog, "tiny")
                 .unwrap_err()
                 .message
                 .contains("length")
         );
         row.insert("tiny:name", Value::String("valid".into()));
-        validate_entity(&row, &descriptor, &catalog).unwrap();
+        validate_entity(&row, &descriptor, &catalog, "tiny").unwrap();
         row.insert("other:field", Value::Null);
         assert!(
-            validate_entity(&row, &descriptor, &catalog)
+            validate_entity(&row, &descriptor, &catalog, "tiny")
                 .unwrap_err()
                 .message
                 .contains("does not belong")
@@ -495,7 +453,7 @@ mod tests {
         row.remove("tiny:name");
         row.insert("name", Value::String("valid".into()));
         assert!(
-            validate_entity(&row, &descriptor, &catalog).is_err(),
+            validate_entity(&row, &descriptor, &catalog, "tiny").is_err(),
             "plain attribute aliases are not canonical rows"
         );
     }

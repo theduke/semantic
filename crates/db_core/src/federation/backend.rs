@@ -10,12 +10,12 @@ use semantic_data::vdb::{AcceptedScan, FilterSupport, ScanPlan, ScanRequest};
 use super::{FederatedEngine, FederatedError, FederationSources, QuerySource, SourceScan};
 use crate::catalog::{Catalog, CollectionKind, IntegrityMode, LocalCollectionId, SharedCatalog};
 use crate::{
-    AccessPath, AsyncPhysicalDataSource, Backend, Batch, BatchOperation, BatchOutcome, BatchStats,
-    CoreResult, DEFAULT_EXECUTION_BATCH_SIZE, DbError, DdlBatch, DdlOutcome, DeleteQuery,
-    DeleteResult, DynObject, EntityRecord, Expr, FieldRef, InsertQuery, InsertResult, InsertSource,
-    JoinSource, LogicalJoinPlan, LogicalPlan, Operand, OrderBy, PackageRegistrationOutcome, Query,
+    AccessPath, Backend, Batch, BatchOperation, BatchOutcome, BatchStats,
+    DEFAULT_EXECUTION_BATCH_SIZE, DbError, DdlBatch, DdlOutcome, DeleteQuery, DeleteResult,
+    DynObject, EntityRecord, Expr, InsertQuery, InsertResult, InsertSource, JoinSource,
+    LogicalJoinPlan, LogicalPlan, Operand, OrderBy, PackageRegistrationOutcome, Query,
     QueryExplain, QueryField, QueryPlan, QueryResult, SelectQuery, SendableRecordBatchStream,
-    SourceRef, StorageErrorKind, TextQueryInput, UpdateQuery, UpdateResult, evaluate_filter_expr,
+    SourceRef, StorageErrorKind, TextQueryInput, UpdateQuery, UpdateResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,59 +318,13 @@ impl FederatedBackend {
         })
     }
 
-    #[allow(dead_code)]
-    fn normalize_select(
-        &self,
-        registry: &SourceRegistry,
-        query: SelectQuery,
-    ) -> std::result::Result<(SelectQuery, SourceRef), DbError> {
-        let base = self.resolve_collection(registry, query.collection.as_deref())?;
-        let mut query = query;
-        query.joins = query
-            .joins
-            .into_iter()
-            .map(|mut join| {
-                if let Some(collection) = federated_join_collection(registry, &join.source) {
-                    join.source = JoinSource {
-                        collection: Some(collection),
-                        class: None,
-                    };
-                }
-                join
-            })
-            .collect();
-        let source = SourceRef {
-            source_name: Some(base.collection),
-            collection_id: None,
-            binding: query.source_alias.clone(),
-            backend_tag: Some(base.source),
-        };
-        Ok((query, source))
-    }
-
-    #[allow(dead_code)]
-    fn plan_select(
-        &self,
-        registry: &SourceRegistry,
-        query: &SelectQuery,
-    ) -> std::result::Result<crate::PlanPair, DbError> {
-        let (query, source) = self.normalize_select(registry, query.clone())?;
-        let optimizer = crate::Optimizer::core();
-        let context = crate::QueryContext::new(self.catalog.catalog_arc());
-        let mut pair = optimizer.optimize_query_with_source(&query, source, None, &context);
-        pair.logical =
-            resolve_logical_sources(registry, self.default_source.as_deref(), pair.logical)?;
-        pair.physical = optimizer.lower_to_physical(&pair.logical, None, &context);
-        Ok(pair)
-    }
-
     async fn query_select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
         let registry = self.registry_snapshot()?;
         let (engine, query) = self.engine_select(&registry, query)?;
         engine
             .select(query, &BTreeMap::new())
             .await
-            .map_err(legacy_engine_error)
+            .map_err(backend_engine_error)
     }
 
     fn engine_select(
@@ -429,7 +383,7 @@ impl FederatedBackend {
         let engine = FederatedEngine::new(
             Arc::new(catalog),
             FederationSources {
-                local: Arc::new(LegacyQuerySource {
+                local: Arc::new(BackendQuerySource {
                     registry: registry.clone(),
                 }),
                 virtual_sources: BTreeMap::new(),
@@ -652,7 +606,7 @@ impl Backend for FederatedBackend {
         let explain = engine
             .explain(select, &BTreeMap::new())
             .await
-            .map_err(legacy_engine_error)?;
+            .map_err(backend_engine_error)?;
         let logical =
             resolve_logical_sources(&registry, self.default_source.as_deref(), explain.logical)?;
         let overlay = super::planner::overlay_catalog(&self.catalog.catalog_arc(), &[])?;
@@ -725,7 +679,7 @@ struct ResolvedCollection {
     federated_collection: Option<String>,
 }
 
-fn legacy_engine_error(error: FederatedError) -> DbError {
+fn backend_engine_error(error: FederatedError) -> DbError {
     match error {
         FederatedError::Db(error) => error,
         FederatedError::SchemaChanged { collection } => {
@@ -734,11 +688,11 @@ fn legacy_engine_error(error: FederatedError) -> DbError {
     }
 }
 
-struct LegacyQuerySource {
+struct BackendQuerySource {
     registry: SourceRegistry,
 }
 
-impl LegacyQuerySource {
+impl BackendQuerySource {
     fn request(&self, collection: &str) -> Result<SourceScanRequest, DbError> {
         let (source, collection) =
             split_source_collection(&self.registry, collection).ok_or_else(|| {
@@ -749,7 +703,7 @@ impl LegacyQuerySource {
 }
 
 #[async_trait]
-impl QuerySource for LegacyQuerySource {
+impl QuerySource for BackendQuerySource {
     async fn negotiate(
         &self,
         collection: &str,
@@ -824,115 +778,6 @@ impl QuerySource for LegacyQuerySource {
                 Err(crate::CoreError::new(error.to_string()))
             })),
         }
-    }
-}
-
-#[allow(dead_code)]
-struct FederatedAsyncPhysicalDataSource {
-    registry: SourceRegistry,
-}
-
-#[allow(dead_code)]
-impl FederatedAsyncPhysicalDataSource {
-    fn request_for_source(&self, source: &SourceRef) -> CoreResult<SourceScanRequest> {
-        let source_name = source.backend_tag.clone().ok_or_else(|| {
-            crate::CoreError::new("federated physical source is missing backend tag")
-        })?;
-        let collection = source.source_name.clone().ok_or_else(|| {
-            crate::CoreError::new("federated physical source is missing collection name")
-        })?;
-        Ok(SourceScanRequest::full_scan(source_name, collection))
-    }
-
-    fn stream_request(&self, request: SourceScanRequest) -> SendableRecordBatchStream {
-        let registered = match self.registry.source(&request.source) {
-            Ok(source) => source.clone(),
-            Err(err) => {
-                return stream::once(async move { Err(crate::CoreError::new(err.to_string())) })
-                    .boxed();
-            }
-        };
-        registered.backend.scan_stream(request)
-    }
-}
-
-impl AsyncPhysicalDataSource for FederatedAsyncPhysicalDataSource {
-    fn scan_stream(&self, source: SourceRef) -> SendableRecordBatchStream {
-        match self.request_for_source(&source) {
-            Ok(request) => self.stream_request(request),
-            Err(err) => stream::once(async move { Err(err) }).boxed(),
-        }
-    }
-
-    fn scan_filtered_stream(
-        &self,
-        source: SourceRef,
-        predicate: Expr,
-    ) -> SendableRecordBatchStream {
-        let mut request = match self.request_for_source(&source) {
-            Ok(request) => request,
-            Err(err) => return stream::once(async move { Err(err) }).boxed(),
-        };
-        let registered = match self.registry.source(&request.source) {
-            Ok(source) => source.clone(),
-            Err(err) => {
-                return stream::once(async move { Err(crate::CoreError::new(err.to_string())) })
-                    .boxed();
-            }
-        };
-        if registered.capabilities.supports_filter_pushdown {
-            request.predicate = Some(predicate);
-            return self.stream_request(request);
-        }
-
-        self.scan_stream(source)
-            .map_ok(move |batch| {
-                batch
-                    .into_iter()
-                    .filter(|row| evaluate_filter_expr(row.as_ref(), &predicate))
-                    .collect::<Vec<_>>()
-            })
-            .boxed()
-    }
-
-    fn index_lookup_stream(
-        &self,
-        source: SourceRef,
-        field: FieldRef,
-        value: Value,
-    ) -> SendableRecordBatchStream {
-        let mut request = match self.request_for_source(&source) {
-            Ok(request) => request,
-            Err(err) => return stream::once(async move { Err(err) }).boxed(),
-        };
-        let registered = match self.registry.source(&request.source) {
-            Ok(source) => source.clone(),
-            Err(err) => {
-                return stream::once(async move { Err(crate::CoreError::new(err.to_string())) })
-                    .boxed();
-            }
-        };
-        if registered.capabilities.supports_index_lookup {
-            if let Some(path) = field_path_for_ref(&field) {
-                request.predicate = Some(Expr::Binary {
-                    op: semantic_data::query::BinaryOp::Eq,
-                    left: Box::new(Expr::Operand(Operand::Field(path))),
-                    right: Box::new(Expr::Operand(Operand::Literal(value))),
-                });
-                return self.stream_request(request);
-            }
-        }
-
-        self.scan_filtered_stream(
-            source,
-            Expr::Binary {
-                op: semantic_data::query::BinaryOp::Eq,
-                left: Box::new(Expr::Operand(Operand::Field(
-                    field_path_for_ref(&field).unwrap_or_else(|| FieldPath::from_fields(["id"])),
-                ))),
-                right: Box::new(Expr::Operand(Operand::Literal(value))),
-            },
-        )
     }
 }
 
@@ -1195,14 +1040,6 @@ fn resolve_source_ref(
     })
 }
 
-fn field_path_for_ref(field: &FieldRef) -> Option<FieldPath> {
-    match field {
-        FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
-        FieldRef::Path(path) => Some(path.clone()),
-        FieldRef::AttrId(_) | FieldRef::FieldId(_) => None,
-    }
-}
-
 fn reject_cross_source_insert(
     registry: &SourceRegistry,
     default_source: Option<&str>,
@@ -1387,7 +1224,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::{evaluate_usize_expr, project_object};
+    use crate::{evaluate_filter_expr, evaluate_usize_expr, project_object};
 
     fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
         let mut pool = futures::executor::LocalPool::new();

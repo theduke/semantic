@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, future::Future, pin::Pin, sync::Arc};
 use semantic_data::{
     Value,
     value::{FromValue, IntoValue, SemanticType},
+    vdb::{VdbInfo, VdbSchemaRequest},
 };
 use semantic_db_core::FederatedExplain;
 use semantic_rpc::RpcRegistry;
@@ -22,25 +23,6 @@ pub(crate) fn register(
     registry.register(Schema)?;
     registry.register(Explain)?;
     Ok(())
-}
-
-#[derive(SemanticType, IntoValue, FromValue)]
-struct VdbInfo {
-    name: String,
-    plugin_id: String,
-    export: String,
-    generation: u64,
-    available: bool,
-    reason: Option<String>,
-    title: Option<String>,
-    schema_revision: Option<String>,
-    classes: Vec<String>,
-}
-
-#[derive(SemanticType, IntoValue, FromValue)]
-struct SchemaPayload {
-    scope_id: Option<String>,
-    name: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
@@ -72,9 +54,10 @@ async fn access(
 async fn snapshot(
     ctx: &AppRequestContext,
     scope_id: Option<DbScopeId>,
+    names: Option<&BTreeSet<String>>,
 ) -> Result<(VdbAccess, VdbSet), AppError> {
     let (db, access) = access(ctx, scope_id).await?;
-    let (_, set) = access.snapshot(db.catalog().await?).await?;
+    let (_, set) = access.snapshot(db.catalog().await?, names).await?;
     Ok((access, set))
 }
 
@@ -92,7 +75,7 @@ impl RpcCommand<AppRequestContext> for List {
         payload: Self::Payload,
     ) -> CommandFuture<'a, Self::Output> {
         Box::pin(async move {
-            let (_, set) = snapshot(ctx, payload.unwrap_or_default().scope_id()).await?;
+            let (_, set) = snapshot(ctx, payload.unwrap_or_default().scope_id(), None).await?;
             Ok(set
                 .entries()
                 .iter()
@@ -129,7 +112,7 @@ impl RpcCommand<AppRequestContext> for List {
 
 struct Schema;
 impl RpcCommandSpec for Schema {
-    type Payload = SchemaPayload;
+    type Payload = VdbSchemaRequest;
     type Output = DatabaseSchema;
     type Error = AppError;
     const NAME: &'static str = "semantic.vdb.schema";
@@ -141,7 +124,9 @@ impl RpcCommand<AppRequestContext> for Schema {
         payload: Self::Payload,
     ) -> CommandFuture<'a, Self::Output> {
         Box::pin(async move {
-            let (access, set) = snapshot(ctx, payload.scope_id.map(DbScopeId::new)).await?;
+            let names = BTreeSet::from([payload.name.clone()]);
+            let (access, set) =
+                snapshot(ctx, payload.scope_id.map(DbScopeId::new), Some(&names)).await?;
             if let Some(error) = access
                 .unavailable(&BTreeSet::from([payload.name.clone()]), &set)
                 .await?

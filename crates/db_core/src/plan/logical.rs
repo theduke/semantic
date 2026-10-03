@@ -105,6 +105,7 @@ pub fn source_ref_for_collection(
         collection_id,
         binding: source_alias,
         backend_tag: None,
+        occurrence_id: None,
     }
 }
 
@@ -137,6 +138,7 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
                 collection_id: None,
                 binding: Some(right_binding.clone()),
                 backend_tag: None,
+                occurrence_id: None,
             },
             pushed_predicate: right_predicate,
         };

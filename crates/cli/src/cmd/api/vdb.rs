@@ -1,5 +1,5 @@
 use clap::ValueEnum;
-use semantic_data::{Object, Value};
+use semantic_data::{Object, Value, value::IntoValue, vdb::VdbSchemaRequest};
 
 use super::query::{self, QueryFormat, QuerySource};
 use crate::CliError;
@@ -15,12 +15,24 @@ pub struct Args {
 enum Command {
     /// List virtual collections available in the scope.
     List(ListArgs),
+    /// Show the schema exposed by a virtual collection.
+    Schema(SchemaArgs),
     /// Explain a SELECT over local and virtual collections without scanning rows.
     Explain(ExplainArgs),
 }
 
 #[derive(Debug, clap::Args)]
 struct ListArgs {
+    #[command(flatten)]
+    client: ApiClientArgs,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, clap::Args)]
+struct SchemaArgs {
+    /// Virtual collection name.
+    name: String,
     #[command(flatten)]
     client: ApiClientArgs,
     #[command(flatten)]
@@ -53,6 +65,16 @@ struct ExplainArgs {
 pub async fn run(args: Args) -> Result<(), CliError> {
     let (command, mut payload, client, output) = match args.command {
         Command::List(args) => ("semantic.vdb.list", Object::new(), args.client, args.output),
+        Command::Schema(args) => {
+            let Value::Object(payload) = VdbSchemaRequest {
+                scope_id: args.client.scope.clone(),
+                name: args.name,
+            }
+            .into_value() else {
+                unreachable!("schema request is a record")
+            };
+            ("semantic.vdb.schema", payload, args.client, args.output)
+        }
         Command::Explain(args) => {
             let format = match args.format {
                 ExplainFormat::Sql => QueryFormat::Sql,
@@ -82,9 +104,9 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn vdb_commands_parse_scope_output_and_query_options() {
+    fn schema_and_explain_parse_scope_output_and_query_options() {
         let parsed = crate::cmd::Args::try_parse_from([
-            "semantic", "api", "vdb", "list", "--scope", "main", "--pretty",
+            "semantic", "api", "vdb", "schema", "fx", "--scope", "main", "--pretty",
         ])
         .unwrap();
         let crate::cmd::SubCmd::Api(api) = parsed.command else {
@@ -93,9 +115,10 @@ mod tests {
         let super::super::SubCmd::Vdb(args) = api.command else {
             panic!("vdb")
         };
-        let Command::List(args) = args.command else {
-            panic!("list")
+        let Command::Schema(args) = args.command else {
+            panic!("schema")
         };
+        assert_eq!(args.name, "fx");
         assert_eq!(args.client.scope.as_deref(), Some("main"));
         assert!(args.output.pretty);
 

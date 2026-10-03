@@ -1,41 +1,22 @@
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::collections::BTreeSet;
 
 use semantic_data::{Object, Value};
-use semantic_db_core::catalog::{
-    Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalClassId,
-    is_special_builtin_field,
-};
+use semantic_db_core::catalog::{Catalog, LocalClassId, is_special_builtin_field};
 use semantic_db_core::normalize_object_for_collection;
 use semantic_db_core::{WriteSettings, validate_stored_object_with_settings};
 
 use crate::{DatabaseDescriptor, VdbError};
-
-// The existing pure value validator needs collection metadata. This neutral
-// collection supplies no fields of its own; classes come from the real overlay.
-static VALIDATION_COLLECTION: LazyLock<CollectionSchema> = LazyLock::new(|| {
-    let mut catalog = Catalog::new();
-    catalog
-        .upsert_collection(
-            "vdb_validation",
-            CollectionKind::Polymorphic,
-            IntegrityMode::Permissive,
-        )
-        .expect("empty polymorphic collection is valid");
-    catalog
-        .collection_by_name("vdb_validation")
-        .expect("just registered")
-        .clone()
-});
-
 /// Validate the entity's structure, canonical class attributes and value types
 /// with the existing transaction-free normalizer and stored-value validator.
 /// Required fields and declared value constraints are checked; defaults are
 /// not filled into remote entities. Foreign-key existence is
 /// intentionally not checked: virtual rows do not belong to persisted storage.
+/// `collection` identifies the virtual collection in the prepared overlay.
 pub fn validate_entity(
     entity: &Object,
     descriptor: &DatabaseDescriptor,
     overlay: &Catalog,
+    collection: &str,
 ) -> Result<(), VdbError> {
     let invalid = |message: String| VdbError {
         code: "invalid_entity".into(),
@@ -63,27 +44,13 @@ pub fn validate_entity(
         }
         Some(_) => return Err(invalid("type must name an exposed class".into())),
     }
+    let collection = overlay
+        .collection_by_name(collection)
+        .ok_or_else(|| invalid("virtual collection is absent from the overlay".into()))?;
     let mut normalized = entity.clone();
-    normalize_object_for_collection(overlay, &VALIDATION_COLLECTION, &mut normalized)
+    normalize_object_for_collection(overlay, collection, &mut normalized)
         .map_err(|error| invalid(error.to_string()))?;
-    if let Some((_, collection)) = overlay
-        .collections()
-        .find(|(_, collection)| collection.kind != CollectionKind::Untyped)
-    {
-        validate_values(entity, overlay, &collection.name)
-    } else {
-        // Standalone callers may supply a catalog with definitions but no
-        // collections. PluginSource prepares this context once instead.
-        let mut overlay = overlay.clone();
-        overlay
-            .upsert_collection(
-                "vdb_validation",
-                CollectionKind::Polymorphic,
-                IntegrityMode::Permissive,
-            )
-            .map_err(|error| invalid(error.to_string()))?;
-        validate_values(entity, &overlay, "vdb_validation")
-    }
+    validate_values(entity, overlay, &collection.name)
 }
 
 fn validate_values(entity: &Object, overlay: &Catalog, collection: &str) -> Result<(), VdbError> {

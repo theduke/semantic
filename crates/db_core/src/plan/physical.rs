@@ -6,12 +6,31 @@ use semantic_data::{
 use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId, LocalIndexId};
 use crate::query::Expr;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SourceRef {
     pub source_name: Option<String>,
     pub collection_id: Option<LocalCollectionId>,
     pub binding: Option<String>,
     pub backend_tag: Option<String>,
+    /// Identifies a source occurrence when distinct scans share a collection
+    /// and SQL binding. Federation assigns this after logical optimization;
+    /// ordinary embedded plans leave it unset.
+    pub occurrence_id: Option<u64>,
+}
+
+impl std::fmt::Debug for SourceRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut source = f.debug_struct("SourceRef");
+        source
+            .field("source_name", &self.source_name)
+            .field("collection_id", &self.collection_id)
+            .field("binding", &self.binding)
+            .field("backend_tag", &self.backend_tag);
+        if let Some(id) = self.occurrence_id {
+            source.field("occurrence_id", &id);
+        }
+        source.finish()
+    }
 }
 
 impl SourceRef {
@@ -21,6 +40,7 @@ impl SourceRef {
             collection_id: None,
             binding: None,
             backend_tag: None,
+            occurrence_id: None,
         }
     }
 }

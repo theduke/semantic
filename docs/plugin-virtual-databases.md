@@ -98,10 +98,14 @@ changes; changing rows alone does not require a new revision. The synchronous
 would currently return. The adapter copies that revision into every accepted
 scan plan.
 
-Schemas are prepared once per plugin generation and current revision, shared
-across concurrent snapshots. Invocation failures are retried on a later
-snapshot; invalid schemas are cached until refresh or generation replacement.
-A changed local catalog also requires preparation again. If negotiation reports
+Queries and schema requests prepare only their referenced virtual collections;
+list prepares all exports concurrently. Descriptions are shared across
+concurrent snapshots and retained through local catalog changes, which only
+revalidate the cached schema. Transient invocation failures have a five-second
+retry backoff. Permanent describe/descriptor-codec failures remain cached until
+generation replacement. Overlay validation failures are rechecked when the
+local catalog changes; explicit revision invalidation refreshes descriptions.
+If negotiation reports
 a revision different from the query's snapshot, the app invalidates that
 **observed old revision**, refreshes `describe`, and retries the query once. An
 old concurrent invalidation cannot evict a newer revision or a refresh already
@@ -179,13 +183,12 @@ matching entity for every supplied key; interpret the list as membership,
 including lists with multiple keys. An opaque accepted-plan token must be echoed
 from that negotiation's plan into its scans.
 
-The host selects a bind lookup when the ordinary scan is rejected or estimates
-more than 10,000 rows. It can negotiate a separate accepted plan for groups of
-64 outer rows; rejection or non-exact membership retains singleton lookups,
-while malformed plans and revision changes still fail. Batch requests retain
-the same membership shape, and each accepted plan keeps its own token. Eligible
-leaves report `batch_size = 64` in explain; ordinary and singleton leaves leave
-that field absent or null. Embedded and outer joins retain their existing bulk
+The host offers a bind lookup only when the ordinary scan is rejected or estimates
+more than 10,000 rows. One exact accepted membership plan supports groups of
+64 outer rows; that plan and its token are reused for every key list. A rejected
+or non-exact membership offer retains an accepted ordinary scan; malformed
+plans and revision changes still fail. Eligible leaves report `batch_size = 64`
+in explain; ordinary leaves leave that field absent or null. Embedded and outer joins retain their existing bulk
 lookup path. A group can have large inner fanout; the bound applies to outer
 rows and their keys, not total query memory.
 
@@ -295,6 +298,9 @@ Configure the generated activation and query it:
 
 ```sh
 "$CARGO_TARGET_DIR/debug/semantic" api plugin configure /tmp/fx.json
+"$CARGO_TARGET_DIR/debug/semantic" api vdb list
+"$CARGO_TARGET_DIR/debug/semantic" api vdb schema fx
+"$CARGO_TARGET_DIR/debug/semantic" api vdb explain 'SELECT id FROM fx'
 "$CARGO_TARGET_DIR/debug/semantic" api query 'SELECT * FROM fx ORDER BY id'
 "$CARGO_TARGET_DIR/debug/semantic" api query "SELECT id FROM fx WHERE type = 'json_dir:Document'"
 ```

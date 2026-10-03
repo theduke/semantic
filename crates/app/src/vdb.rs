@@ -11,17 +11,19 @@ use semantic_data::{
 };
 use semantic_db_core::catalog::Catalog;
 use semantic_db_core::{
-    Batch, BatchOperation, CoreError, DEFAULT_COLLECTION, DEFAULT_EXECUTION_BATCH_SIZE, DbError,
-    DynObject, EntityRecord, FederatedEngine, FederatedError, FederatedExplain, FederationSources,
-    QueryResult, QuerySource, SendableRecordBatchStream, SourceScan, TextQueryInput,
-    normalize_virtual_joins, referenced_collections, unresolved_join_collections,
+    ALL_COLLECTION_ALIAS, Batch, BatchOperation, CoreError, DEFAULT_COLLECTION,
+    DEFAULT_EXECUTION_BATCH_SIZE, DbError, DynObject, EntityRecord, FederatedEngine,
+    FederatedError, FederatedExplain, FederationSources, QueryResult, QuerySource,
+    SendableRecordBatchStream, SourceScan, TextQueryInput, referenced_collections,
+    unresolved_join_collections,
 };
 use semantic_vdb::{AcceptedScan, FilterSupport, ScanPlan, ScanRequest, ScopeVdbs, VdbSet};
 
 use crate::{DbScopeId, Principal, SemanticApp, SemanticDb};
 
-/// Local leaves execute through the asynchronous database API, retaining the
-/// local optimizer and indexes without entering the embedded LocalPool path.
+/// Local leaves execute pushed filters through the asynchronous database API.
+/// Results are buffered before streaming; mixed joins do not perform local
+/// index lookups based on virtual join keys.
 pub(crate) struct LocalSource {
     inner: Arc<dyn SemanticDb>,
 }
@@ -130,16 +132,18 @@ impl VdbAccess {
     pub(crate) async fn snapshot(
         &self,
         local: Arc<Catalog>,
+        names: Option<&BTreeSet<String>>,
     ) -> Result<(Arc<ScopeVdbs>, VdbSet), DbError> {
         let plugins = self
             .app
             .plugins(&self.principal, self.scope.clone())
             .await
             .map_err(app_db_error)?;
-        let set = plugins
-            .vdbs
-            .snapshot(plugins.runtime.bindings().await, local)
-            .await;
+        let bindings = plugins.runtime.bindings().await;
+        let set = match names {
+            Some(names) => plugins.vdbs.snapshot_named(bindings, local, names).await,
+            None => plugins.vdbs.snapshot(bindings, local).await,
+        };
         Ok((plugins.vdbs.clone(), set))
     }
 
@@ -238,7 +242,17 @@ impl FederatedScopeDb {
     }
 
     fn is_local(catalog: &Catalog, name: &str) -> bool {
-        name == DEFAULT_COLLECTION || name == "all" || catalog.collection_by_name(name).is_some()
+        name == DEFAULT_COLLECTION
+            || name.eq_ignore_ascii_case(ALL_COLLECTION_ALIAS)
+            || catalog.collection_by_name(name).is_some()
+    }
+
+    fn virtual_candidates(query: &Query, local: &Catalog) -> BTreeSet<String> {
+        referenced_collections(query)
+            .into_iter()
+            .chain(unresolved_join_collections(query, local))
+            .filter(|name| !Self::is_local(local, name))
+            .collect()
     }
 
     async fn parse_for_routing(&self, sql: &str) -> Option<Query> {
@@ -267,7 +281,8 @@ impl FederatedScopeDb {
         {
             return Ok(None);
         }
-        self.check_writes(write_collections(&query)).await?;
+        self.check_writes_with_catalog(&local, write_collections(&query))
+            .await?;
         if !matches!(query, Query::Select(_)) {
             let reserved = self.vdbs.reserved_names().await?;
             if names
@@ -280,22 +295,15 @@ impl FederatedScopeDb {
             }
             return Ok(None);
         }
-        let (cache, set) = self.vdbs.snapshot(local.clone()).await?;
         let unknown: BTreeSet<_> = names
             .into_iter()
             .filter(|name| !Self::is_local(&local, name))
             .collect();
+        let (cache, set) = self.vdbs.snapshot(local.clone(), Some(&unknown)).await?;
         if let Some(error) = self.vdbs.unavailable(&unknown, &set).await? {
             return Err(error);
         }
-        let available: BTreeSet<_> = set.sources.keys().cloned().collect();
-        let mut query = query;
-        normalize_virtual_joins(&mut query, &local, &available);
-        let references = referenced_collections(&query);
-        if !references
-            .iter()
-            .any(|name| set.get_available(name).is_some())
-        {
+        if !unknown.iter().any(|name| set.get_available(name).is_some()) {
             return Ok(None);
         }
         let Query::Select(query) = query else {
@@ -313,31 +321,20 @@ impl FederatedScopeDb {
 
     pub(crate) async fn explain(
         &self,
-        mut query: SelectQuery,
+        query: SelectQuery,
         params: &BTreeMap<String, Value>,
     ) -> Result<FederatedExplain, DbError> {
         let local = self.inner.catalog().await?;
-        let (cache, set) = self.vdbs.snapshot(local.clone()).await?;
-        let mut ast = Query::Select(query);
-        normalize_virtual_joins(&mut ast, &local, &set.sources.keys().cloned().collect());
-        let names = referenced_collections(&ast);
-        let unknown: BTreeSet<_> = names
-            .iter()
-            .filter(|name| !Self::is_local(&local, name))
-            .cloned()
-            .collect();
+        let unknown = Self::virtual_candidates(&Query::Select(query.clone()), &local);
+        let (cache, set) = self.vdbs.snapshot(local.clone(), Some(&unknown)).await?;
         if let Some(error) = self.vdbs.unavailable(&unknown, &set).await? {
             return Err(error);
         }
-        if !names.iter().any(|name| set.get_available(name).is_some()) {
+        if !unknown.iter().any(|name| set.get_available(name).is_some()) {
             return Err(DbError::InvalidQuery(
                 "query references no virtual database".into(),
             ));
         }
-        let Query::Select(normalized) = ast else {
-            unreachable!()
-        };
-        query = normalized;
         match self.execute(query, params, local, cache, set, true).await? {
             FederatedOutput::Explain(explain) => Ok(explain),
             FederatedOutput::Rows(_) => unreachable!(),
@@ -382,11 +379,8 @@ impl FederatedScopeDb {
                         cache.invalidate(&collection, &schema.schema_revision);
                     }
                     local = self.inner.catalog().await?;
-                    (cache, set) = self.vdbs.snapshot(local.clone()).await?;
-                    let names = referenced_collections(&Query::Select(query.clone()))
-                        .into_iter()
-                        .filter(|name| !Self::is_local(&local, name))
-                        .collect();
+                    let names = Self::virtual_candidates(&Query::Select(query.clone()), &local);
+                    (cache, set) = self.vdbs.snapshot(local.clone(), Some(&names)).await?;
                     if let Some(error) = self.vdbs.unavailable(&names, &set).await? {
                         return Err(error);
                     }
@@ -403,6 +397,14 @@ impl FederatedScopeDb {
 
     async fn check_writes(&self, targets: BTreeSet<String>) -> Result<(), DbError> {
         let local = self.inner.catalog().await?;
+        self.check_writes_with_catalog(&local, targets).await
+    }
+
+    async fn check_writes_with_catalog(
+        &self,
+        local: &Catalog,
+        targets: BTreeSet<String>,
+    ) -> Result<(), DbError> {
         let targets: BTreeSet<_> = targets
             .into_iter()
             .filter(|name| !Self::is_local(&local, name))

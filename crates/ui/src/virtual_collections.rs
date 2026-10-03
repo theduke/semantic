@@ -1,20 +1,27 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::{Object, Value, value::FromValue, vdb::DatabaseSchema};
+use semantic_data::{
+    Object, Value,
+    value::{FromValue, IntoValue},
+    vdb::{DatabaseSchema, VdbInfo, VdbSchemaRequest},
+};
 use semantic_ui_core::{
     UiCatalog, UiCatalogContext,
     components::{InlineNotice, NoticeVariant},
     use_active_scope_id, use_rpc_client, use_ui_catalog_context,
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct VirtualCollection {
-    pub name: String,
-    pub generation: u64,
-    pub available: bool,
-    pub reason: Option<String>,
-    pub revision: Option<String>,
+pub(crate) type VirtualCollection = VdbInfo;
+
+/// Memo completions compare by identity, without comparing full catalogs.
+#[derive(Clone)]
+struct CatalogResult(Rc<Result<Option<UiCatalog>, String>>);
+
+impl PartialEq for CatalogResult {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -151,40 +158,7 @@ async fn load_virtual_collections(
         .invoke_value("semantic.vdb.list", Value::Object(scoped_payload(scope_id)))
         .await
         .map_err(|error| error.to_string())?;
-    let Value::List(entries) = response else {
-        return Err("virtual collection list must be an array".into());
-    };
-    entries
-        .into_iter()
-        .map(|entry| {
-            let Value::Object(entry) = entry else {
-                return Err("virtual collection must be an object".into());
-            };
-            Ok(VirtualCollection {
-                name: entry
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or("virtual collection name missing")?
-                    .to_owned(),
-                generation: u64::from_value(
-                    entry
-                        .get("generation")
-                        .cloned()
-                        .ok_or("virtual collection generation missing")?,
-                )
-                .map_err(|error| error.to_string())?,
-                available: matches!(entry.get("available"), Some(Value::Bool(true))),
-                reason: entry
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                revision: entry
-                    .get("schema_revision")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            })
-        })
-        .collect()
+    Vec::<VdbInfo>::from_value(response).map_err(|error| error.to_string())
 }
 
 fn scoped_payload(scope_id: Option<String>) -> Object {
@@ -211,24 +185,32 @@ pub(crate) fn VirtualEntityCatalog(collection: Option<String>, children: Element
             .as_deref()
             .unwrap_or(semantic_data::builtin::DEFAULT_COLLECTION),
     );
-    let entries = list
-        .as_ref()
-        .and_then(|result| result.as_ref().ok())
-        .cloned()
-        .unwrap_or_default();
     let entry = collection
         .as_ref()
-        .and_then(|name| entries.iter().find(|entry| &entry.name == name))
+        .and_then(|name| {
+            list.as_ref()?
+                .as_ref()
+                .ok()?
+                .iter()
+                .find(|entry| &entry.name == name)
+        })
+        .cloned();
+    let listing_error = list
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
         .cloned();
     let key = (source, entry);
     let mut schema = use_resource(use_reactive((&key,), |(key,)| async move {
         let result = match &key.1 {
             Some(entry) if entry.available => {
-                let mut payload = scoped_payload(key.0.scope_id.clone());
-                payload.insert("name", entry.name.clone());
+                let payload = VdbSchemaRequest {
+                    scope_id: key.0.scope_id.clone(),
+                    name: entry.name.clone(),
+                }
+                .into_value();
                 key.0
                     .client
-                    .invoke_value("semantic.vdb.schema", Value::Object(payload))
+                    .invoke_value("semantic.vdb.schema", payload)
                     .await
                     .map_err(|error| error.to_string())
                     .and_then(|value| {
@@ -247,45 +229,45 @@ pub(crate) fn VirtualEntityCatalog(collection: Option<String>, children: Element
     }));
     let mut rendering = use_signal(|| parent.peek().clone());
     use_context_provider(|| UiCatalogContext::new(rendering));
-    let local = parent.read().clone();
-    let completion = schema.read();
-    let result = completion
-        .as_ref()
-        .filter(|(loaded, _)| loaded == &key)
-        .map(|(_, result)| result.clone());
-    let combined = match (&local, result) {
-        (Some(local), _) if identity == CollectionIdentity::Local => Ok(Some(local.clone())),
-        _ if identity == CollectionIdentity::Pending => Ok(None),
-        (Some(local), Some(Ok(Some(schema)))) => local
-            .with_virtual_schema(collection.as_deref().unwrap_or_default(), &schema)
-            .map(Some),
-        (_, Some(Ok(None))) => Err("Unknown collection".into()),
-        (_, Some(Err(error))) => Err(error),
-        _ => match &list {
-            Some(Err(error)) => Err(error.clone()),
-            _ => Ok(None),
-        },
-    };
-    let effect_catalog = combined.as_ref().ok().cloned().flatten();
-    use_effect(use_reactive(
-        (&effect_catalog
-            .as_ref()
-            .map(|catalog| catalog.snapshot().clone()),),
-        move |_| {
-            rendering.set(effect_catalog.clone());
+    let combined = use_memo(use_reactive(
+        (&key, &identity, &listing_error, &collection),
+        move |(key, identity, listing_error, collection)| {
+            let local = parent.read().clone();
+            let completion = schema.read();
+            let result = completion
+                .as_ref()
+                .filter(|(loaded, _)| loaded == &key)
+                .map(|(_, result)| result.clone());
+            CatalogResult(Rc::new(match (&local, result) {
+                (Some(local), _) if identity == CollectionIdentity::Local => {
+                    Ok(Some(local.clone()))
+                }
+                _ if identity == CollectionIdentity::Pending => Ok(None),
+                (Some(local), Some(Ok(Some(schema)))) => local
+                    .with_virtual_schema(collection.as_deref().unwrap_or_default(), &schema)
+                    .map(Some),
+                (_, Some(Ok(None))) => Err("Unknown collection".into()),
+                (_, Some(Err(error))) => Err(error),
+                _ => match listing_error {
+                    Some(error) => Err(error),
+                    _ => Ok(None),
+                },
+            }))
         },
     ));
-    match combined {
-        Err(error) => rsx! { InlineNotice { title: "Could not load virtual schema", message: error,
-        variant: NoticeVariant::Error, action_label: "Retry", on_action: move |_| schema.restart() } },
-        Ok(Some(catalog))
-            if rendering
-                .read()
-                .as_ref()
-                .is_some_and(|rendering| rendering.snapshot() == catalog.snapshot()) =>
-        {
-            children
+    let mut rendered = use_signal(|| None::<CatalogResult>);
+    use_effect(move || {
+        let completed = combined.read().clone();
+        rendering.set(completed.0.as_ref().as_ref().ok().cloned().flatten());
+        rendered.set(Some(completed));
+    });
+    let completed = combined.read();
+    match completed.0.as_ref() {
+        Err(error) => {
+            rsx! { InlineNotice { title: "Could not load virtual schema", message: error.clone(),
+            variant: NoticeVariant::Error, action_label: "Retry", on_action: move |_| schema.restart() } }
         }
+        Ok(Some(_)) if rendered.read().as_ref() == Some(&completed) => children,
         _ => rsx! { div { class: "semantic-loading", "Loading collection schema…" } },
     }
 }
@@ -306,6 +288,7 @@ mod tests {
     };
 
     struct Request {
+        command: String,
         payload: Value,
         response: oneshot::Sender<Value>,
     }
@@ -317,9 +300,16 @@ mod tests {
             command: String,
             payload: Value,
         ) -> RpcClientFuture<Result<Value, RpcClientError>> {
-            assert_eq!(command, "semantic.vdb.list");
+            assert!(matches!(
+                command.as_str(),
+                "semantic.vdb.list" | "semantic.vdb.schema"
+            ));
             let (response, receiver) = oneshot::channel();
-            self.0.lock().unwrap().push(Request { payload, response });
+            self.0.lock().unwrap().push(Request {
+                command,
+                payload,
+                response,
+            });
             Box::pin(async move { Ok(receiver.await.unwrap()) })
         }
     }
@@ -360,12 +350,103 @@ mod tests {
         }
     }
     fn listing(name: &str) -> Value {
-        Value::List(vec![Value::Object(Object::from_iter([
-            ("name".into(), Value::String(name.into())),
-            ("generation".into(), Value::U64(1)),
-            ("available".into(), Value::Bool(true)),
-            ("schema_revision".into(), Value::String("1".into())),
-        ]))])
+        vec![VdbInfo {
+            name: name.into(),
+            generation: 1,
+            available: true,
+            schema_revision: Some("1".into()),
+            ..Default::default()
+        }]
+        .into_value()
+    }
+
+    #[derive(Clone)]
+    struct CatalogProps {
+        client: Client,
+        repaint: Rc<Cell<Option<Signal<u64>>>>,
+        observed: Rc<RefCell<Vec<usize>>>,
+    }
+
+    fn catalog_app(props: CatalogProps) -> Element {
+        let catalog = use_signal(|| {
+            Some(UiCatalog::from_snapshot(
+                semantic_db_core::catalog::Catalog::new().to_storage_snapshot(),
+            ))
+        });
+        use_context_provider(|| UiCatalogContext::new(catalog));
+        let scope = use_signal(|| Some("first".into()));
+        use_context_provider(|| UiScopeContext::new(scope));
+        let repaint = use_signal(|| 0_u64);
+        use_hook(|| props.repaint.set(Some(repaint)));
+        let rpc = use_hook(|| RpcClient::new(props.client));
+        provide_rpc_client(rpc);
+        rsx! {
+            VirtualCollectionsProvider {
+                VirtualEntityCatalog { collection: Some("remote".into()),
+                    CatalogProbe { observed: props.observed, repaint: *repaint.read() }
+                }
+            }
+        }
+    }
+
+    #[component]
+    fn CatalogProbe(observed: Rc<RefCell<Vec<usize>>>, repaint: u64) -> Element {
+        let signal = use_ui_catalog_context().catalog_signal();
+        let catalog = signal.read();
+        let catalog = catalog.as_ref().unwrap();
+        assert!(
+            catalog
+                .collections()
+                .any(|collection| collection.name == "remote")
+        );
+        observed
+            .borrow_mut()
+            .push(catalog.render_registry() as *const _ as usize);
+        rsx! { div { "{repaint}" } }
+    }
+
+    #[test]
+    fn unrelated_renders_reuse_the_virtual_rendering_catalog() {
+        let client = Client::default();
+        let repaint = Rc::new(Cell::new(None));
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let mut dom = VirtualDom::new_with_props(
+            catalog_app,
+            CatalogProps {
+                client: client.clone(),
+                repaint: repaint.clone(),
+                observed: observed.clone(),
+            },
+        );
+        dom.rebuild_to_vec();
+        flush(&mut dom);
+        client
+            .0
+            .lock()
+            .unwrap()
+            .remove(0)
+            .response
+            .send(listing("remote"))
+            .unwrap();
+        flush(&mut dom);
+        let schema = client.0.lock().unwrap().remove(0);
+        assert_eq!(schema.command, "semantic.vdb.schema");
+        assert_eq!(
+            schema.payload.get_field("name").and_then(Value::as_str),
+            Some("remote")
+        );
+        schema
+            .response
+            .send(DatabaseSchema::default().into_value())
+            .unwrap();
+        flush(&mut dom);
+        assert!(!observed.borrow().is_empty());
+        repaint.get().unwrap().set(1);
+        flush(&mut dom);
+        let observed = observed.borrow();
+        assert!(observed.len() >= 2);
+        assert!(observed.iter().all(|identity| identity == &observed[0]));
+        assert!(client.0.lock().unwrap().is_empty());
     }
     #[test]
     fn scope_switch_discards_old_virtual_navigation() {
@@ -419,7 +500,7 @@ mod tests {
             generation: 1,
             available: false,
             reason: Some("unavailable".into()),
-            revision: None,
+            ..Default::default()
         };
         let list = Ok(vec![unavailable("fx"), unavailable("remote")]);
         assert_eq!(
@@ -475,12 +556,14 @@ mod tests {
         assert_eq!(read_only.get(), (false, true));
         let request = client.0.lock().unwrap().remove(0);
         let unavailable = |name: &str| {
-            Value::Object(Object::from_iter([
-                ("name".into(), Value::String(name.into())),
-                ("generation".into(), Value::U64(1)),
-                ("available".into(), Value::Bool(false)),
-                ("reason".into(), Value::String("unavailable".into())),
-            ]))
+            VdbInfo {
+                name: name.into(),
+                generation: 1,
+                available: false,
+                reason: Some("unavailable".into()),
+                ..Default::default()
+            }
+            .into_value()
         };
         request
             .response

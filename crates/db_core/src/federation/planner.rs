@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use semantic_data::builtin::DEFAULT_COLLECTION;
@@ -58,33 +58,36 @@ pub fn validate_virtual_schema_for_collection(
     name: &str,
     schema: &DdlBatch,
 ) -> Result<(), String> {
-    if local.collection_by_name(name).is_some() {
-        return Err(format!(
-            "virtual collection '{name}' conflicts with a local collection"
-        ));
-    }
-    validate_declarations(local, schema)?;
-    let mut catalog = local.clone();
-    catalog
-        .upsert_collection(name, CollectionKind::Polymorphic, IntegrityMode::Permissive)
-        .map_err(|error| error.to_string())?;
-    crate::apply_ddl_batch(&catalog, schema)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    virtual_overlay(local, &[(name, schema)]).map(|_| ())
 }
 
-pub(crate) fn overlay_catalog(
-    local: &Catalog,
-    virtual_sources: &[(&str, &VirtualSource)],
-) -> Result<Catalog, DbError> {
+/// Validate runtime declarations and apply them to a disposable catalog.
+/// Collection shells exist before relationship DDL is applied. Local schema
+/// definitions remain immutable, and conflicting virtual definitions fail.
+pub fn virtual_overlay(local: &Catalog, schemas: &[(&str, &DdlBatch)]) -> Result<Catalog, String> {
     let mut overlay = local.clone();
     let mut declared = BTreeMap::<&str, (&str, &DdlOperation)>::new();
+    let mut names = BTreeSet::new();
     // Collection shells must exist before relationship definitions are applied.
-    for (name, _) in virtual_sources {
+    for (name, schema) in schemas {
         if local.collection_by_name(name).is_some() {
-            return Err(DbError::InvalidQuery(format!(
+            return Err(format!(
                 "virtual collection '{name}' conflicts with a local collection"
-            )));
+            ));
+        }
+        if !names.insert(*name) {
+            return Err(format!("duplicate virtual collection '{name}'"));
+        }
+        validate_declarations(local, schema).map_err(|reason| format!("{name}: {reason}"))?;
+        for operation in &schema.operations {
+            let id = definition_id(operation)?;
+            if let Some((previous_name, previous)) = declared.insert(id, (name, operation))
+                && previous != operation
+            {
+                return Err(format!(
+                    "virtual schemas '{previous_name}' and '{name}' conflict on '{id}'"
+                ));
+            }
         }
         overlay
             .upsert_collection(
@@ -92,25 +95,25 @@ pub(crate) fn overlay_catalog(
                 CollectionKind::Polymorphic,
                 IntegrityMode::Permissive,
             )
-            .map_err(|error| DbError::InvalidQuery(error.to_string()))?;
+            .map_err(|error| error.to_string())?;
     }
-    for (name, source) in virtual_sources {
-        validate_virtual_schema_for_collection(local, name, &source.schema)
-            .map_err(|reason| DbError::InvalidQuery(format!("{name}: {reason}")))?;
-        for operation in &source.schema.operations {
-            let id = definition_id(operation).map_err(DbError::InvalidQuery)?;
-            if let Some((previous_name, previous)) = declared.insert(id, (name, operation))
-                && previous != operation
-            {
-                return Err(DbError::InvalidQuery(format!(
-                    "virtual schemas '{previous_name}' and '{name}' conflict on '{id}'"
-                )));
-            }
-        }
-        overlay = crate::apply_ddl_batch(&overlay, &source.schema)
-            .map_err(|error| DbError::InvalidQuery(format!("{name}: {error}")))?
+    for (name, schema) in schemas {
+        overlay = crate::apply_ddl_batch(&overlay, schema)
+            .map_err(|error| format!("{name}: {error}"))?
             .0;
     }
+    Ok(overlay)
+}
+
+pub(crate) fn overlay_catalog(
+    local: &Catalog,
+    virtual_sources: &[(&str, &VirtualSource)],
+) -> Result<Catalog, DbError> {
+    let schemas = virtual_sources
+        .iter()
+        .map(|(name, source)| (*name, source.schema.as_ref()))
+        .collect::<Vec<_>>();
+    let mut overlay = virtual_overlay(local, &schemas).map_err(DbError::InvalidQuery)?;
     // Collection creation adds builtin indexes. Remove all indexes last.
     let indexes = overlay
         .indexes()
@@ -132,18 +135,7 @@ pub(crate) fn plan_select(
     query: SelectQuery,
     overlay: Arc<Catalog>,
     sources: &FederationSources,
-    local: &Catalog,
 ) -> Result<PlannedSelect, DbError> {
-    let mut query = semantic_data::query::Query::Select(query.into());
-    super::normalize_virtual_joins(
-        &mut query,
-        local,
-        &sources.virtual_sources.keys().cloned().collect(),
-    );
-    let semantic_data::query::Query::Select(query) = query else {
-        unreachable!()
-    };
-    let query: SelectQuery = query.into();
     let name = query.collection.as_deref().unwrap_or(DEFAULT_COLLECTION);
     let collection =
         overlay
@@ -161,6 +153,7 @@ pub(crate) fn plan_select(
     let mut logical = Optimizer::core()
         .optimize_query_with_source(&query, source, None, &context)
         .logical;
+    let mut occurrence_id = 0;
     visit_sources(&mut logical, &mut |source| {
         let name = source
             .source_name
@@ -179,6 +172,8 @@ pub(crate) fn plan_select(
         } else {
             LOCAL_SOURCE_TAG.into()
         });
+        source.occurrence_id = Some(occurrence_id);
+        occurrence_id += 1;
         Ok(())
     })?;
     Ok(PlannedSelect {
@@ -232,6 +227,7 @@ pub(crate) struct LeafKey {
     pub backend_tag: String,
     pub source_name: String,
     pub binding: Option<String>,
+    pub occurrence_id: Option<u64>,
 }
 
 impl From<&SourceRef> for LeafKey {
@@ -246,6 +242,7 @@ impl From<&SourceRef> for LeafKey {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_COLLECTION.into()),
             binding: source.binding.clone(),
+            occurrence_id: source.occurrence_id,
         }
     }
 }
@@ -457,7 +454,6 @@ pub(crate) mod tests {
                 .with_predicate(predicate),
             overlay,
             &sources,
-            &local,
         )
         .unwrap();
         let leaves = collect_leaves(&planned.logical);
@@ -477,12 +473,12 @@ pub(crate) mod tests {
         assert_eq!(overlay.indexes().count(), 0);
         assert!(local.indexes().count() > 0);
         let query = crate::sql::parse_sql_query_unbound(
-            "SELECT a.id AS local_id, b.id AS vdb_id FROM local a JOIN fx b ON a.id = b.id WHERE a.name = 'x' AND b.title = 'y'",
+            "SELECT a.id AS local_id, b.id AS vdb_id FROM local a JOIN fx._ b ON a.id = b.id WHERE a.name = 'x' AND b.title = 'y'",
             crate::sql::SqlDialectKind::Generic).unwrap();
         let semantic_data::query::Query::Select(query) = query else {
             panic!("select")
         };
-        let planned = plan_select(query.into(), overlay.clone(), &sources, &local).unwrap();
+        let planned = plan_select(query.into(), overlay.clone(), &sources).unwrap();
         let leaves = collect_leaves(&planned.logical);
         assert_eq!(leaves.len(), 2);
         assert!(

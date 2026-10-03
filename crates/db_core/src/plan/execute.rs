@@ -3046,6 +3046,7 @@ mod tests {
                 collection_id: None,
                 binding: None,
                 backend_tag: None,
+                occurrence_id: None,
             },
             FieldRef::Path(FieldPath::from_fields(["id"])),
             Value::I64(7),
@@ -3067,6 +3068,7 @@ mod tests {
                         collection_id: None,
                         binding: None,
                         backend_tag: None,
+                        occurrence_id: None,
                     },
                 }),
                 Arc::new(EmptyBatchSource),
@@ -3092,6 +3094,7 @@ mod tests {
                             collection_id: None,
                             binding: None,
                             backend_tag: None,
+                            occurrence_id: None,
                         },
                     })),
                     predicate: Expr::Binary {
@@ -3137,6 +3140,7 @@ mod tests {
                     collection_id: None,
                     binding: Some("i".to_string()),
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             projection: vec![PhysicalProjectionField {
@@ -3438,6 +3442,7 @@ mod tests {
             collection_id: None,
             binding: None,
             backend_tag: None,
+            occurrence_id: None,
         };
 
         let filtered = run_async(execute_physical_plan_collect(
@@ -3491,6 +3496,7 @@ mod tests {
             collection_id: None,
             binding: Some("r".to_string()),
             backend_tag: None,
+            occurrence_id: None,
         };
         let plan = PhysicalPlan::Join(PhysicalJoinPlan {
             left: Box::new(PhysicalPlan::Values { values: left_rows }),
@@ -3566,6 +3572,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             right: Box::new(PhysicalPlan::Source(PhysicalSource::Scan {
@@ -3574,6 +3581,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             join_type: JoinType::Inner,
@@ -3617,6 +3625,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })
         };
@@ -3748,6 +3757,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             subquery: Box::new(PhysicalPlan::Source(PhysicalSource::FilteredScan {
@@ -3756,6 +3766,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
                 predicate: Expr::Binary {
                     op: semantic_data::query::BinaryOp::Eq,
@@ -3792,6 +3803,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             projection: vec![PhysicalProjectionField {
@@ -3844,6 +3856,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             predicate: Expr::Binary {

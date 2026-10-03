@@ -70,13 +70,11 @@ impl FederatedEngine {
             .into_iter()
             .map(|(key, fragment)| {
                 let batch_size = fragment
-                    .batch
+                    .bind_field
                     .as_ref()
                     .map(|_| super::bind::BIND_JOIN_BATCH_SIZE as u64);
-                let (request, plan, residual) = match fragment.batch {
-                    Some(batch) => (batch.request, batch.plan, batch.residual),
-                    None => (fragment.request, fragment.plan, fragment.residual),
-                };
+                let (request, plan, residual) =
+                    (fragment.request, fragment.plan, fragment.residual);
                 LeafExplain {
                     collection: fragment.collection,
                     source_tag: key.backend_tag,
@@ -129,14 +127,14 @@ impl FederatedEngine {
         // Truncation is unsafe when the host still has to evaluate its offset.
         let limit = offset.and_then(|_| query.limit.as_ref().and_then(literal_limit));
         let offset = offset.unwrap_or(0);
-        let mut planned = plan_select(query, overlay.clone(), &self.sources, &self.local_catalog)?;
+        let mut planned = plan_select(query, overlay.clone(), &self.sources)?;
         let baseline = Optimizer::core().lower_to_physical(
             &planned.logical,
             None,
             &QueryContext::new(overlay.clone()),
         );
         let candidates = super::bind::candidates(&baseline, &self.sources, &overlay)?;
-        let mut fragments = negotiate_leaves_with_bind(
+        let fragments = negotiate_leaves_with_bind(
             &mut planned,
             &order,
             limit,
@@ -145,7 +143,6 @@ impl FederatedEngine {
             &candidates,
         )
         .await?;
-        super::bind::negotiate_batches(&mut fragments, &self.sources).await?;
         // Metadata only for the selected exact lookup, after ordinary index
         // removal. Core lowering stays index-free and is rewritten below.
         let mut lookup_overlay = (*overlay).clone();
@@ -305,6 +302,9 @@ mod tests {
             "SELECT id FROM local WHERE id IN (SELECT v.id FROM {v} v WHERE v.title = 'Alpha')",
             "SELECT id FROM local WHERE EXISTS (SELECT v.id FROM {v} v WHERE v.id = 'a')",
             "SELECT id FROM {v} WHERE owner = 'one' AND title LIKE '%a' ORDER BY id LIMIT 1 OFFSET 1",
+            "SELECT a.id FROM {v} a WHERE EXISTS (SELECT l.id FROM local l WHERE l.id = 'a') AND a.id IN (SELECT l.id FROM local l)",
+            "SELECT a.id FROM {v} a WHERE EXISTS (SELECT v.title FROM {w} v WHERE v.id = 'a') AND a.id IN (SELECT v.id FROM {w} v WHERE v.id = 'c')",
+            "SELECT a.id FROM {v} a WHERE EXISTS (SELECT {w}.title FROM {w} WHERE {w}.id = 'a') AND a.id IN (SELECT {w}.id FROM {w} WHERE {w}.id = 'c')",
         ];
         for mode in [
             NegotiationMode::Exact,
@@ -327,6 +327,99 @@ mod tests {
                 assert_eq!(actual, expected, "{mode:?}: {virtual_sql}");
             }
         }
+    }
+
+    #[cfg(feature = "sql")]
+    #[test]
+    fn sibling_subqueries_keep_distinct_leaf_plans_and_tokens() {
+        struct TokenSource {
+            inner: Arc<dyn QuerySource>,
+            scans: Arc<std::sync::Mutex<Vec<SourceScan>>>,
+        }
+        fn token(collection: &str, request: &ScanRequest) -> Value {
+            Value::String(format!("{collection}:{:?}", request.filters))
+        }
+        #[async_trait]
+        impl QuerySource for TokenSource {
+            async fn negotiate(
+                &self,
+                collection: &str,
+                request: &ScanRequest,
+            ) -> Result<ScanPlan, DbError> {
+                let mut plan = self.inner.negotiate(collection, request).await?;
+                if let ScanPlan::Accepted { plan } = &mut plan {
+                    plan.token = Some(token(collection, request));
+                }
+                Ok(plan)
+            }
+            fn scan(self: Arc<Self>, scan: SourceScan) -> SendableRecordBatchStream {
+                assert_eq!(
+                    scan.plan.token,
+                    Some(token(&scan.collection, &scan.request))
+                );
+                self.scans.lock().unwrap().push(scan.clone());
+                self.inner.clone().scan(scan)
+            }
+        }
+        for mode in [
+            NegotiationMode::Exact,
+            NegotiationMode::Inexact,
+            NegotiationMode::Unsupported,
+        ] {
+            for (collection, query) in [
+                (
+                    "local",
+                    "SELECT a.id FROM fx a WHERE EXISTS (SELECT l.id FROM local l WHERE l.id = 'a') AND a.id IN (SELECT l.id FROM local l WHERE l.id = 'c')",
+                ),
+                (
+                    "fx2",
+                    "SELECT a.id FROM fx a WHERE EXISTS (SELECT v.title FROM fx2 v WHERE v.id = 'a') AND a.id IN (SELECT v.id FROM fx2 v WHERE v.id = 'c')",
+                ),
+                (
+                    "fx2",
+                    "SELECT a.id FROM fx a WHERE EXISTS (SELECT fx2.title FROM fx2 WHERE fx2.id = 'a') AND a.id IN (SELECT fx2.id FROM fx2 WHERE fx2.id = 'c')",
+                ),
+            ] {
+                let (mut engine, _) = engines(mode);
+                let scans = Arc::new(std::sync::Mutex::new(Vec::new()));
+                engine.sources.local = Arc::new(TokenSource {
+                    inner: engine.sources.local.clone(),
+                    scans: scans.clone(),
+                });
+                for source in engine.sources.virtual_sources.values_mut() {
+                    source.source = Arc::new(TokenSource {
+                        inner: source.source.clone(),
+                        scans: scans.clone(),
+                    });
+                }
+                let explanation = run(engine.explain(select(query), &BTreeMap::new())).unwrap();
+                let leaves = super::super::planner::collect_leaves(&explanation.logical);
+                assert_eq!(leaves.len(), 3);
+                let occurrences = leaves
+                    .iter()
+                    .map(|leaf| leaf.key.occurrence_id)
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(occurrences.len(), 3);
+                assert!(!occurrences.contains(&None));
+                assert_eq!(
+                    run(engine.select(select(query), &BTreeMap::new())).unwrap(),
+                    vec![Object::from_iter([(
+                        "id".into(),
+                        Value::String("c".into())
+                    )])],
+                    "{mode:?}: {query}"
+                );
+                let scans = scans.lock().unwrap();
+                let nested = scans
+                    .iter()
+                    .filter(|scan| scan.collection == collection)
+                    .collect::<Vec<_>>();
+                assert_eq!(nested.len(), 2);
+                assert_ne!(nested[0].plan.token, nested[1].plan.token);
+                assert_ne!(nested[0].request.filters, nested[1].request.filters);
+            }
+        }
+        assert!(!format!("{:?}", crate::SourceRef::unnamed()).contains("occurrence_id"));
     }
 
     #[cfg(feature = "sql")]
