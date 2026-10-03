@@ -31,20 +31,20 @@ Update this list as tasks land (one commit per task, see §7).
 - [x] T2.1: federation module split, `QuerySource` trait, referenced collections
 - [x] T2.2: overlay catalog and planning
 - [x] T2.3: pushdown pass and negotiation
-- [ ] T2.4: composite data source, execution, explain
-- [ ] T2.5: port the legacy `FederatedBackend` onto the engine
+- [x] T2.4: composite data source, execution, explain
+- [x] T2.5: port the legacy `FederatedBackend` onto the engine
 - [x] T3.1: `semantic_vdb` crate, plugin-author trait, plugin adapter
 - [x] T3.2: `PluginSource` (binding → `QuerySource`)
 - [x] T3.3: `ScopeVdbs` (naming, conflicts, runtime schema cache)
 - [x] T3.4: fixture VDB plugin for tests
-- [ ] T4.1: `LocalSource`, `FederatedScopeDb`, routing
+- [x] T4.1: `LocalSource`, `FederatedScopeDb`, routing
 - [ ] T4.2: `semantic.vdb.list` / `semantic.vdb.explain` commands
 - [ ] T4.3: app integration test suite and differential oracle
 - [ ] T5.1: bind joins: parameterized negotiation and synthetic indexes
 - [ ] T5.2: batched index nested loop (**gated: user review first**)
 - [x] T6.1: example JSON-directory VDB plugin
 - [ ] T6.2: CLI rendering, UI surfacing
-- [ ] T6.3: documentation
+- [x] T6.3: documentation
 
 Validation through T3.3 (2026-10-03): Nix workspace checks passed after every
 integration. The integrated fixture/plugin-source suite passed 20 tests, and
@@ -58,6 +58,18 @@ entrypoint modification times before checking, without cleaning that cache.
 
 T6.1 landed early so the T4.3 CLI checkpoint can configure the actual stdio
 example as activation `fx`, using its `--activation fx` JSON output.
+
+Further validation (2026-10-03): T2.4 passed the full 443-test core suite,
+including 60 federation source comparisons and a direct joined-title assertion.
+T2.5 changed only the legacy backend (297 added/deleted lines), preserving
+its 14 existing tests and adding two regressions; all 16 passed. T4.1 passed
+three focused forwarding, local-routing and readonly-dispatch tests. T6.3
+documentation samples compiled and ran. The CLI part of T6.2 passed two Clap
+tests and actual help invocations; its UI part remains in progress. All these
+tasks passed Nix workspace checks and formatting. The actual stdio CLI
+checkpoint remains pending: native and stdio activation exposed missing
+RPC value-variant support, which is being addressed separately before the
+command and application integration suites can complete.
 
 ## 1. Decisions
 
