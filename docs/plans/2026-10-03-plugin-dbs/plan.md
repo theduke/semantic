@@ -39,7 +39,7 @@ Update this list as tasks land (one commit per task, see §7).
 - [x] T3.4: fixture VDB plugin for tests
 - [x] T4.1: `LocalSource`, `FederatedScopeDb`, routing
 - [x] T4.2: `semantic.vdb.list` / `semantic.vdb.explain` commands
-- [ ] T4.3: app integration test suite and differential oracle
+- [x] T4.3: app integration test suite and differential oracle
 - [ ] T5.1: bind joins: parameterized negotiation and synthetic indexes
 - [ ] T5.2: batched index nested loop (**gated: user review first**)
 - [x] T6.1: example JSON-directory VDB plugin
@@ -77,8 +77,24 @@ The actual CLI checkpoint passed with the JSON-directory example configured
 as `fx` over stdio and a localhost server. The command
 `semantic api query 'SELECT id, type FROM fx ORDER BY id'` returned
 `alpha.json` and `beta.json`, both with type `json_dir:Document`. The demo
-daemon and plugin child were stopped after verification. The full application
-differential/lifecycle suite and workspace test gate remain pending.
+daemon and plugin child were stopped after verification.
+
+T4.3 passed the complete combined application test in 813.90 seconds: 18 queries
+against an independent stored database in each of four honest negotiation modes
+(72 comparisons), four direct plain join-alias assertions, AST/get/read-only
+checks, runtime schema isolation and refresh, unavailable-source diagnostics,
+disable/re-enable, generation cancellation and local-name conflicts. The
+ordinary embedded planner has an existing RHS join-alias pushdown limitation;
+the differential query uses the same qualified attribute id on both sides, and
+the plain virtual alias has a direct expected-result assertion in every mode.
+The corpus now contains 20 queries, including the required LIKE and BETWEEN
+cases. All 20 passed parser/canonicalization preflight and the ordinary stored-db
+smoke test; the two added cases await virtual coverage in the broad workspace
+gate (80 comparisons). Fresh Nix workspace checks and formatting passed.
+
+The user reviewed and approved the [T5.2 batching design](batched-join-design.md)
+before implementation. T5.1/T5.2 implementation and the broad workspace test gate
+remain pending.
 
 ## 1. Decisions
 
