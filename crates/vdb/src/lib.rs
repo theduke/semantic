@@ -7,6 +7,7 @@
 mod author;
 mod descriptor;
 mod helpers;
+mod scope;
 mod source;
 mod validate;
 
@@ -16,6 +17,7 @@ pub mod testing;
 pub use author::{EntityStream, VirtualDatabase, VirtualDatabasePlugin};
 pub use descriptor::implementation_descriptor;
 pub use helpers::{classify_simple, simple_eq_value};
+pub use scope::{PreparedVdb, ScopeVdbs, VdbEntry, VdbSet, VdbStatus};
 pub use semantic_data::vdb::*;
 pub use semantic_rpc::interface::CancellationToken;
 pub use source::PluginSource;
