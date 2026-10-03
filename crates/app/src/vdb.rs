@@ -109,6 +109,16 @@ pub(crate) struct VdbAccess {
 }
 
 impl VdbAccess {
+    fn may_have_virtual_databases(&self, local: &Catalog) -> bool {
+        // Persisted host-provider activations require this schema. Native
+        // registrations may also be used with a custom database catalog.
+        local
+            .collection_by_name(semantic_data::plugin::COLLECTION)
+            .is_some()
+            || local.class_id(semantic_data::plugin::CLASS_ID).is_some()
+            || self.app.has_native_virtual_databases()
+    }
+
     pub(crate) fn new(app: SemanticApp, principal: Principal, scope: DbScopeId) -> Self {
         Self {
             app,
@@ -231,6 +241,18 @@ impl FederatedScopeDb {
         name == DEFAULT_COLLECTION || name == "all" || catalog.collection_by_name(name).is_some()
     }
 
+    async fn parse_for_routing(&self, sql: &str) -> Option<Query> {
+        match self.inner.parse_sql(sql.to_owned()).await {
+            Ok(query) => Some(query),
+            Err(_) => semantic_db_core::sql::parse_sql_query_unbound(
+                sql,
+                semantic_db_core::sql::SqlDialectKind::Generic,
+            )
+            .ok()
+            .map(Into::into),
+        }
+    }
+
     async fn route(
         &self,
         query: Query,
@@ -240,7 +262,9 @@ impl FederatedScopeDb {
         let mut names = referenced_collections(&query);
         names.extend(write_collections(&query));
         names.extend(unresolved_join_collections(&query, &local));
-        if names.iter().all(|name| Self::is_local(&local, name)) {
+        if names.iter().all(|name| Self::is_local(&local, name))
+            || !self.vdbs.may_have_virtual_databases(&local)
+        {
             return Ok(None);
         }
         self.check_writes(write_collections(&query)).await?;
@@ -383,7 +407,7 @@ impl FederatedScopeDb {
             .into_iter()
             .filter(|name| !Self::is_local(&local, name))
             .collect();
-        if targets.is_empty() {
+        if targets.is_empty() || !self.vdbs.may_have_virtual_databases(&local) {
             return Ok(());
         }
         // Reject writes using persisted export metadata before describe,
@@ -490,7 +514,10 @@ impl SemanticDb for FederatedScopeDb {
                 ..
             } => return self.inner.query(input).await,
             TextQueryInput::Text { query, params, .. } => {
-                (self.inner.parse_sql(query.clone()).await?, params.clone())
+                let Some(query) = self.parse_for_routing(query).await else {
+                    return self.inner.query(input).await;
+                };
+                (query, params.clone())
             }
         };
         match self.route(query, &params).await? {
@@ -508,7 +535,10 @@ impl SemanticDb for FederatedScopeDb {
                 ..
             } => return self.inner.query_data(input).await,
             QueryInput::Text { query, params, .. } => {
-                (self.inner.parse_sql(query.clone()).await?, params.clone())
+                let Some(query) = self.parse_for_routing(query).await else {
+                    return self.inner.query_data(input).await;
+                };
+                (query, params.clone())
             }
         };
         match self.route(query, &params).await? {
@@ -685,6 +715,7 @@ mod tests {
     use super::*;
 
     struct CountingDb {
+        parse_supported: bool,
         catalog: RwLock<Arc<Catalog>>,
         records: Mutex<BTreeMap<(String, String), Object>>,
         calls: Mutex<Vec<&'static str>>,
@@ -698,6 +729,7 @@ mod tests {
                 .upsert_collection("local", CollectionKind::Untyped, IntegrityMode::Permissive)
                 .unwrap();
             Self {
+                parse_supported: true,
                 catalog: RwLock::new(Arc::new(catalog)),
                 records: Mutex::new(BTreeMap::new()),
                 calls: Mutex::new(vec![]),
@@ -743,6 +775,11 @@ mod tests {
             .await
         }
         async fn parse_sql(&self, sql: String) -> Result<Query, DbError> {
+            if !self.parse_supported {
+                return Err(DbError::InvalidQuery(
+                    "SQL parsing is not implemented by this database".into(),
+                ));
+            }
             semantic_db_core::sql::parse_sql_query_unbound(
                 &sql,
                 semantic_db_core::sql::SqlDialectKind::Generic,
@@ -899,6 +936,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn text_only_backend_preserves_sql_text_and_parameters() {
+        let mut database = CountingDb::new();
+        database.parse_supported = false;
+        let inner = Arc::new(database);
+        let app = SemanticApp::builder().build().unwrap();
+        let wrapper = FederatedScopeDb::new(
+            inner.clone(),
+            VdbAccess::new(app, Principal::system(), DbScopeId::new("missing")),
+        );
+        for sql in [
+            "SELECT id FROM local WHERE id = :key",
+            "select * from _",
+            "SELECT id FROM private_backend_table WHERE id = :key",
+            "BACKEND QUERY :key",
+        ] {
+            let params = BTreeMap::from([("key".into(), Value::String("one".into()))]);
+            let expected = QueryInput::sql_with_params(sql, params.clone());
+            wrapper
+                .query(TextQueryInput::Text {
+                    format: semantic_db_core::TextQueryFormat::Sql,
+                    query: sql.into(),
+                    params,
+                })
+                .await
+                .unwrap();
+            assert_eq!(inner.inputs.lock().unwrap().last(), Some(&expected));
+            wrapper.query_data(expected.clone()).await.unwrap();
+            assert_eq!(inner.inputs.lock().unwrap().last(), Some(&expected));
+        }
+        assert!(
+            wrapper
+                .parse_sql("SELECT id FROM local".into())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("SQL parsing is not implemented")
+        );
+    }
+
+    #[tokio::test]
     async fn forwards_default_methods_to_inner_database() {
         let (inner, wrapper) = wrapper();
         let db: &dyn SemanticDb = &wrapper;
@@ -1033,8 +1110,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readonly_ddl_and_writes_do_not_invoke_virtual_database() {
-        let inner = Arc::new(CountingDb::new());
+    async fn text_only_backend_routes_virtual_reads_and_rejects_writes() {
+        let mut database = CountingDb::new();
+        database.parse_supported = false;
+        let inner = Arc::new(database);
         let calls = Arc::new(AtomicUsize::new(0));
         let database = NeverInvoked(calls.clone());
         let mut catalog = Catalog::new();
@@ -1183,6 +1262,32 @@ mod tests {
                 .collection_by_name("fx")
                 .is_none()
         );
+        for sql in ["INSERT INTO fx (id) VALUES ('one')", "DELETE FROM fx"] {
+            assert!(
+                wrapper
+                    .query_data(QueryInput::sql(sql))
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("read-only")
+            );
+            assert!(
+                wrapper
+                    .query(TextQueryInput::sql(sql))
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("read-only")
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let input = QueryInput::sql("SELECT id FROM fx");
+        assert_eq!(
+            wrapper.query_data(input.clone()).await.unwrap(),
+            QueryResult::Select(vec![])
+        );
+        assert!(calls.load(Ordering::SeqCst) > 0);
+        assert!(!inner.inputs.lock().unwrap().contains(&input));
         app.shutdown().await.unwrap();
     }
 }

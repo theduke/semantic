@@ -71,6 +71,17 @@ pub struct SemanticAppBuilder {
 }
 
 impl SemanticApp {
+    pub(crate) fn has_native_virtual_databases(&self) -> bool {
+        self.inner.plugins.manifests().iter().any(|manifest| {
+            manifest.exports.iter().any(|export| {
+                export.interface.package == semantic_vdb::PACKAGE_NAME
+                    && export.interface.module == semantic_vdb::MODULE_NAME
+                    && export.interface.contract.is_none()
+                    && export.interface.name == semantic_vdb::INTERFACE_NAME
+            })
+        })
+    }
+
     pub async fn plugins(
         &self,
         principal: &crate::Principal,
