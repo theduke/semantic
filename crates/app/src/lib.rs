@@ -26,6 +26,7 @@ mod task_comment_tests;
 #[cfg(feature = "base")]
 mod task_comments;
 pub mod transfer;
+mod vdb;
 
 pub use auth::{Principal, PrincipalId, PrincipalKind};
 pub use command::{SemanticApp, SemanticAppBuilder, SemanticAppInner};

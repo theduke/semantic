@@ -8835,6 +8835,7 @@ dependencies = [
  "semantic_plugin",
  "semantic_rpc",
  "semantic_rpc_core",
+ "semantic_vdb",
  "serde",
  "serde_json",
  "sha2 0.10.9",

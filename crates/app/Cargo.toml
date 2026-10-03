@@ -34,6 +34,7 @@ semantic_data = { workspace = true }
 semantic_jobs = { path = "../jobs" }
 semantic_plugin = { path = "../plugin" }
 semantic_import = { path = "../import" }
+semantic_vdb = { path = "../vdb" }
 semantic_base = { path = "../base", optional = true }
 semantic_db_core = { path = "../db_core" }
 semantic_db_redb = { path = "../db_redb", optional = true }

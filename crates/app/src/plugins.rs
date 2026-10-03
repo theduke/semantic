@@ -19,6 +19,7 @@ pub(crate) fn error(error: impl std::fmt::Display) -> AppError {
 
 pub struct AppScopePlugins {
     pub runtime: ScopePlugins,
+    pub(crate) vdbs: Arc<semantic_vdb::ScopeVdbs>,
     db: Arc<dyn SemanticDb>,
     changes: tokio::sync::Mutex<()>,
     catalog: Arc<std::sync::RwLock<Arc<semantic_db_core::catalog::Catalog>>>,
@@ -230,6 +231,7 @@ impl AppScopePlugins {
             });
         let result = Self {
             runtime,
+            vdbs: Arc::new(semantic_vdb::ScopeVdbs::new()),
             db,
             changes: tokio::sync::Mutex::new(()),
             catalog,
