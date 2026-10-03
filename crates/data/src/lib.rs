@@ -8,6 +8,7 @@ pub mod filestore;
 pub mod import;
 pub mod jobs;
 pub mod plugin;
+pub mod vdb;
 
 pub mod builtin;
 
