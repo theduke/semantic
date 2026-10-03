@@ -389,7 +389,9 @@ fn contains_unsupported(expr: &Expr) -> bool {
         Expr::Subquery(_) | Expr::Exists { .. } | Expr::RelationExists { .. } => true,
         Expr::Aggregate { .. } => true,
         Expr::Operand(_) => false,
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => contains_unsupported(expr),
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+            contains_unsupported(expr)
+        }
         Expr::Binary { left, right, .. } => {
             contains_unsupported(left) || contains_unsupported(right)
         }
@@ -967,8 +969,10 @@ fn collect_field_paths(expr: &Expr, out: &mut BTreeSet<FieldPath>) {
         Expr::Operand(Operand::Field(path)) => {
             out.insert(path.clone());
         }
-        Expr::Operand(Operand::Literal(_)) => {}
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => collect_field_paths(expr, out),
+        Expr::Operand(Operand::Literal(_) | Operand::Parameter(_)) => {}
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+            collect_field_paths(expr, out)
+        }
         Expr::Binary { left, right, .. } => {
             collect_field_paths(left, out);
             collect_field_paths(right, out);

@@ -124,6 +124,7 @@ fn project(fields: &[(&[&str], &str)]) -> Vec<QueryField> {
         .map(|(path, alias)| QueryField {
             expr: Box::new(field(path)),
             alias: Some(alias.to_string()),
+            wildcard: None,
         })
         .collect()
 }
@@ -191,6 +192,7 @@ impl Queries {
                     arg: Box::new(FunctionArg::Wildcard),
                 }),
                 alias: Some("n".to_string()),
+                wildcard: None,
             }]),
             top_n: items()
                 .with_order_by(order_by(&[attr::PRICE], SortDirection::Desc))

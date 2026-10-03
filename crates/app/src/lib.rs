@@ -50,7 +50,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use async_trait::async_trait;
-    use semantic_data::value::{Object, Value};
+    use semantic_data::value::{Object, SemanticType, Value};
     use semantic_db_core::catalog::{Catalog, CatalogStorageSnapshot};
     use semantic_db_core::{
         Batch, BatchOperation, BatchOutcome, BatchStats, DbError, EntityRecord,
@@ -123,7 +123,7 @@ mod tests {
             assert_eq!(response.result, RpcResult::Ok(Value::U8(42)));
         }
         #[cfg(feature = "base")]
-        assert_eq!(db.package_count.load(Ordering::Relaxed), 6);
+        assert_eq!(db.package_count.load(Ordering::Relaxed), 7);
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
 
         assert_eq!(select_db_name(response), "default");
         #[cfg(feature = "base")]
-        assert_eq!(package_count.load(Ordering::Relaxed), 5);
+        assert_eq!(package_count.load(Ordering::Relaxed), 6);
     }
 
     #[cfg(feature = "base")]
@@ -493,7 +493,7 @@ mod tests {
             .await;
 
         assert_eq!(select_db_name(response), "mock://default");
-        assert_eq!(package_count.load(Ordering::Relaxed), 5);
+        assert_eq!(package_count.load(Ordering::Relaxed), 6);
     }
 
     #[tokio::test]
@@ -1181,6 +1181,26 @@ mod tests {
             Value::Bool(true),
         )]));
         let object = call_ok_object(&app, "semantic.command.list", payload).await;
+        let Some(Value::Object(definitions)) = object.get("definitions") else {
+            panic!("named definitions")
+        };
+        let decoded = definitions
+            .iter()
+            .map(|(name, definition)| {
+                let definition = facet_json::from_str::<semantic_data::schema::TypeDef>(
+                    definition.as_str().unwrap(),
+                )
+                .unwrap();
+                (name.clone(), definition)
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(decoded, semantic_data::query::semantic::definitions());
+        let interface = semantic_rpc::interface::registry::registry_interface(app.registry());
+        let descriptor = semantic_rpc::interface::registry::registry_descriptor_with_definitions(
+            &interface, &decoded,
+        )
+        .unwrap();
+        assert_eq!(&descriptor, app.command_descriptor());
         assert_eq!(
             object.get("format"),
             Some(&Value::String("facet-json".to_string()))
@@ -1228,6 +1248,22 @@ mod tests {
         let TypeKind::Record(get) = input("semantic.db.get").kind else {
             panic!("db.get input should be a record");
         };
+        let TypeKind::Record(query) = input("semantic.db.query").kind else {
+            panic!("db.query input should be a record");
+        };
+        let TypeKind::Union(argument) = &query.fields["query"].ty.kind else {
+            panic!("query must accept a precise AST or text union");
+        };
+        assert_eq!(
+            argument.variants[0],
+            semantic_data::query::Query::semantic_type()
+        );
+        assert_eq!(argument.variants[1], String::semantic_type());
+        let TypeKind::Record(params) = &query.fields["params"].ty.kind else {
+            panic!("parameter bindings must be a dictionary");
+        };
+        assert!(params.open);
+        assert!(params.additional.is_some());
         assert!(get.fields["id"].required);
         assert!(!get.fields["collection"].required);
         assert!(!get.fields["scope_id"].required);

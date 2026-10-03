@@ -488,6 +488,16 @@ fn canonicalize_expr_with_join_bindings(
     context: &'static str,
 ) -> CanonicalResult<Expr> {
     match expr {
+        Expr::ProjectionRef(expr) => Ok(Expr::ProjectionRef(Box::new(
+            canonicalize_expr_with_join_bindings(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                join_bindings,
+                context,
+            )?,
+        ))),
         Expr::Operand(operand) => canonicalize_operand_with_join_bindings(
             operand,
             catalog,
@@ -922,6 +932,7 @@ fn canonicalize_operand_with_join_bindings(
         )
         .map(Operand::Field),
         Operand::Literal(value) => Ok(Operand::Literal(value.clone())),
+        Operand::Parameter(name) => Ok(Operand::Parameter(name.clone())),
     }
 }
 

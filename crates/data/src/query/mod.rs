@@ -76,6 +76,12 @@ use std::collections::BTreeMap;
 
 use crate::value::{FieldPath, Object, Value};
 
+pub mod ddl;
+pub mod semantic;
+pub use ddl::{DdlBatch, DdlCollectionKind, DdlOperation, DdlQuery, IntegrityMode};
+pub mod binding;
+pub use binding::QueryParameterError;
+
 pub mod text;
 pub use text::{TextAnalyzer, TextMatchMode};
 
@@ -85,6 +91,8 @@ pub use text::{TextAnalyzer, TextMatchMode};
 pub enum Operand {
     Field(FieldPath),
     Literal(Value),
+    /// A named, unbound parameter; its value is supplied separately at execution.
+    Parameter(String),
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -92,6 +100,11 @@ pub enum Operand {
 #[facet(rename_all = "snake_case")]
 pub enum Expr {
     Operand(Operand),
+    /// Resolve a GROUP BY or ORDER BY expression against the SELECT projection,
+    /// including 1-based ordinals and ORDER BY aliases. Valid only as a clause
+    /// root; resolved after parameter binding. Ordinary expressions do not use
+    /// these SQL projection-reference rules.
+    ProjectionRef(Box<Expr>),
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
@@ -183,6 +196,10 @@ impl From<usize> for Expr {
 pub struct QueryField {
     pub expr: Box<Expr>,
     pub alias: Option<String>,
+    /// Expand this field path into the result; an empty path expands the current row.
+    #[facet(default)]
+    #[facet(skip_serializing_if = Option::is_none)]
+    pub wildcard: Option<FieldPath>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -501,6 +518,13 @@ pub enum Query {
     Insert(InsertQuery),
     Update(UpdateQuery),
     Delete(DeleteQuery),
+    Ddl(DdlQuery),
+}
+
+impl From<DdlQuery> for Query {
+    fn from(value: DdlQuery) -> Self {
+        Self::Ddl(value)
+    }
 }
 
 impl From<SelectQuery> for Query {
@@ -534,6 +558,7 @@ impl Query {
             Self::Insert(query) => query.collection.as_deref(),
             Self::Update(query) => query.collection.as_deref(),
             Self::Delete(query) => query.collection.as_deref(),
+            Self::Ddl(_) => None,
         }
     }
 }
@@ -561,6 +586,10 @@ pub enum FieldFormat {
 #[facet(rename_all = "snake_case")]
 pub enum QueryInput {
     Ast(Query),
+    AstWithParams {
+        query: Query,
+        params: BTreeMap<String, Value>,
+    },
     Text {
         format: TextQueryFormat,
         query: String,
@@ -570,6 +599,14 @@ pub enum QueryInput {
 }
 
 impl QueryInput {
+    /// Execute a reusable AST with named parameter values.
+    pub fn ast_with_params(query: impl Into<Query>, params: BTreeMap<String, Value>) -> Self {
+        Self::AstWithParams {
+            query: query.into(),
+            params,
+        }
+    }
+
     pub fn sql_with_params(query: impl Into<String>, params: BTreeMap<String, Value>) -> Self {
         Self::Text {
             format: TextQueryFormat::Sql,
@@ -598,6 +635,12 @@ impl QueryInput {
 impl From<Query> for QueryInput {
     fn from(value: Query) -> Self {
         Self::Ast(value)
+    }
+}
+
+impl From<DdlQuery> for QueryInput {
+    fn from(value: DdlQuery) -> Self {
+        Self::Ast(value.into())
     }
 }
 

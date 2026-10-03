@@ -40,6 +40,13 @@ pub enum SqlQueryError {
     },
 }
 
+pub fn parse_sql_query_unbound(
+    _sql: &str,
+    _dialect: SqlDialectKind,
+) -> Result<semantic_data::query::Query, SqlQueryError> {
+    Err(SqlQueryError::Unsupported(SQL_FEATURE_DISABLED.to_string()))
+}
+
 pub fn parse_sql_query_with_params(
     sql: &str,
     dialect: SqlDialectKind,

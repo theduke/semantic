@@ -22,6 +22,41 @@ automatically. If neither is available, the commit is reported as `unknown`.
 The commit identifies the base revision and does not describe uncommitted edits
 in local Cargo builds.
 
+## Queries
+
+RPC clients normally construct `semantic_data::query::Query` ASTs and send their
+Semantic values as the `query` field of `semantic.db.query`. Named parameters
+remain in the AST; the separate `params` object binds them for each execution.
+SQL and PRQL strings remain accepted, using `format: "sql"` (the default) or
+`format: "prql"`. Omit `format` when supplying an AST.
+
+The CLI accepts ASTs with `semantic api query --format ast --file query.json`.
+AST input uses typed Semantic Value JSON, the same lossless encoding as RPC
+payload values: numeric widths, bytes, UUIDs, and other literal kinds survive.
+Query results retain the CLI's usual JSON output format.
+
+`semantic api parse-sql` is a fallback for existing SQL. It calls
+`semantic.db.query.parse_sql` with `query` and optional `scope_id`, returning the
+unbound AST without executing the statement. Parsing uses the scope's backend
+dialect and supports the same SQL statements as execution. Its typed JSON output
+can be piped directly into AST execution:
+
+```sh
+semantic api query 'SELECT id FROM items WHERE id = :id' --params '{"id":"item-1"}'
+semantic api parse-sql 'SELECT id FROM items WHERE id = :id' > query.json
+semantic api query --format ast --file query.json --params '{"id":"item-2"}'
+semantic api parse-sql 'SELECT id FROM items' | semantic api query --format ast
+```
+
+`--params` accepts a JSON object for both AST and SQL input. These commands also
+accept `--scope`, `--rpc-url`, `--pretty`, file input, and standard input.
+
+Command introspection (`semantic.command.list` with `schema: true`, and
+`semantic.command.get`) includes a shared `definitions` object mapping named
+type references to TypeDef strings encoded as `facet-json`, alongside the input
+and output type strings. Clients resolve recursive query schemas through this
+map rather than expanding references inline.
+
 ## URL imports and plugins
 
 Discover importers, start an import, then inspect its returned job ID:

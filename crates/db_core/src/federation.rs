@@ -265,7 +265,8 @@ impl FederatedBackend {
     ) -> impl std::future::Future<Output = std::result::Result<Query, DbError>> + '_ {
         async move {
             match input {
-                TextQueryInput::Ast(query) => Ok(query),
+                TextQueryInput::Ast(query) => query.into_bound(&BTreeMap::new()),
+                TextQueryInput::AstWithParams { query, params } => query.into_bound(&params),
                 TextQueryInput::Text {
                     format,
                     query,
@@ -1075,7 +1076,7 @@ fn reject_expr_sources(
         Expr::Exists { query, .. } => {
             reject_select_sources(registry, default_source, query, target_source)
         }
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
             reject_expr_sources(registry, default_source, expr, target_source)
         }
         Expr::Binary { left, right, .. } => {

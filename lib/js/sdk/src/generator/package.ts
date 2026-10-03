@@ -59,7 +59,8 @@ type CompoundContext = "union" | "intersection";
 type TypePrecedence = "function" | "union" | "intersection" | "primary";
 
 function typePrecedence(node: TypeNode): TypePrecedence {
-  if (node.kind === "uuid" || node.kind === "json") return "primary";
+  if (node.kind === "uuid") return "union";
+  if (node.kind === "json") return "primary";
   const kind = object(node.kind);
   const attribute = payload(kind, "attribute");
   if (attribute) return typePrecedence(attribute.ty as TypeNode);
@@ -73,23 +74,7 @@ function typePrecedence(node: TypeNode): TypePrecedence {
     "temporal" in kind
   )
     return "union";
-  const number = object(kind.number);
-  if (
-    "number" in kind &&
-    !("float" in number) &&
-    !("decimal" in number) &&
-    !("rational" in number) &&
-    !("complex" in number) &&
-    !(
-      "int" in number &&
-      ["i8", "i16", "i24", "i32"].includes(String(number.int))
-    ) &&
-    !(
-      ("uint" in number || "u_int" in number) &&
-      ["u8", "u16", "u24", "u32"].includes(String(number.uint ?? number.u_int))
-    )
-  )
-    return "union";
+  if ("number" in kind || "bytes" in kind || "ip_addr" in kind) return "union";
   if ("intersection" in kind) return "intersection";
   return "primary";
 }
@@ -114,40 +99,29 @@ function typeScriptType(
 ): string {
   const kind = node.kind as unknown;
   if (kind === "uuid" || kind === "json")
-    return kind === "uuid" ? "string" : "unknown";
+    return kind === "uuid" ? 'string | TaggedScalar<"uuid">' : "unknown";
   const record = object(kind);
   if ("any" in record) return "SemanticValue";
   if ("unknown" in record) return "unknown";
   if ("never" in record) return "never";
   if ("null" in record) return "null";
   if ("bool" in record) return "boolean";
-  if ("char" in record || "string" in record || "ip_addr" in record)
-    return "string";
-  if ("temporal" in record) return "number | bigint | Date";
+  if ("char" in record || "string" in record) return "string";
+  if ("ip_addr" in record) return 'string | TaggedScalar<"ip_addr">';
+  if ("temporal" in record)
+    return 'number | bigint | Date | TaggedScalar<"time" | "date" | "date_time" | "duration">';
   if ("number" in record) {
-    const number = record.number;
-    if (number && typeof number === "object") {
-      if ("int" in number)
-        return ["i8", "i16", "i24", "i32"].includes(String(number.int))
-          ? "number"
-          : "number | bigint";
-      if ("uint" in number || "u_int" in number) {
-        const width = number.uint ?? number.u_int;
-        return ["u8", "u16", "u24", "u32"].includes(String(width))
-          ? "number"
-          : "number | bigint";
-      }
-      if (
-        "float" in number ||
-        "decimal" in number ||
-        "rational" in number ||
-        "complex" in number
-      )
-        return "number";
-    }
-    return "number | bigint";
+    const number = object(record.number);
+    if (
+      "float" in number ||
+      "decimal" in number ||
+      "rational" in number ||
+      "complex" in number
+    )
+      return 'number | TaggedScalar<"f32" | "f64">';
+    return 'number | bigint | TaggedScalar<"i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128">';
   }
-  if ("bytes" in record) return "Uint8Array";
+  if ("bytes" in record) return 'Uint8Array | TaggedScalar<"bytes">';
   const optional = payload(kind, "optional");
   if (optional)
     return `${nestedType(optional.inner as TypeNode, resolveRef, "union")} | null`;
@@ -181,8 +155,26 @@ function typeScriptType(
         return `${JSON.stringify(name)}${field.required ? "" : "?"}: ${typeScriptType(field.ty as TypeNode, resolveRef)}`;
       },
     );
-    if (recordType.open) fields.push(`[key: string]: unknown`);
-    return `{ ${fields.join("; ")} }`;
+    if (recordType.open) {
+      // Index signatures include known field types so heterogeneous open records compile.
+      const additional = recordType.additional
+        ? typeScriptType(recordType.additional as TypeNode, resolveRef)
+        : "SemanticValue";
+      const types = [
+        additional,
+        ...Object.values(recordType.fields ?? {}).map((raw) =>
+          typeScriptType(object(raw).ty as TypeNode, resolveRef),
+        ),
+      ];
+      if (
+        Object.values(recordType.fields ?? {}).some(
+          (raw) => !object(raw).required,
+        )
+      )
+        types.push("undefined");
+      fields.push(`[key: string]: ${[...new Set(types)].join(" | ")}`);
+    }
+    return fields.length ? `{ ${fields.join("; ")} }` : "Record<string, never>";
   }
   const attribute = payload(kind, "attribute");
   if (attribute) return typeScriptType(attribute.ty as TypeNode, resolveRef);
@@ -236,16 +228,32 @@ function typeScriptType(
             );
           else if ("newtype" in casePayload)
             value = typeScriptType(casePayload.newtype as TypeNode, resolveRef);
-          return `{ $variant: ${JSON.stringify(item.name)}; value: ${value} }`;
+          const unit = item.payload === "unit";
+          const name = JSON.stringify(item.name);
+          const tag = variant.tag;
+          if (tag === "externally_tagged")
+            return unit ? name : `{ ${name}: ${value} }`;
+          if (tag === "untagged") return unit ? "null" : value;
+          const internal = object(tag).internally_tagged;
+          if (internal) {
+            const discriminator = `{ ${JSON.stringify(internal.field)}: ${name} }`;
+            return unit ? discriminator : `${discriminator} & (${value})`;
+          }
+          const adjacent = object(tag).adjacently_tagged;
+          if (adjacent)
+            return `{ ${JSON.stringify(adjacent.tag_field)}: ${name}${unit ? "" : `; ${JSON.stringify(adjacent.data_field)}: ${value}`} }`;
+          throw new Error(`unsupported variant tag: ${JSON.stringify(tag)}`);
         })
         .join(" | ") || "never"
     );
-  const ref = payload(kind, "ref");
-  if (ref) {
-    const args = ((ref.args as TypeNode[]) ?? []).map((item) =>
+  // Ref denotes an entity ID. Named denotes a named schema type.
+  if ("ref" in record) return "string";
+  const named = payload(kind, "named");
+  if (named) {
+    const args = ((named.args as TypeNode[]) ?? []).map((item) =>
       typeScriptType(item, resolveRef),
     );
-    const resolved = resolveRef(String(ref.name));
+    const resolved = resolveRef(String(named.name));
     return `${resolved}${args.length && resolved !== "SemanticValue" && resolved !== "string" ? `<${args.join(", ")}>` : ""}`;
   }
   const stream = payload(kind, "stream");
@@ -496,6 +504,8 @@ export function packageModel(pkg: Package): PackageModel {
       }
   }
   const resolveRef = (name: string, scope: string): string => {
+    const exact = unqualifiedNames.get(name);
+    if (exact?.size === 1) return [...exact][0]!;
     const normalized = name.replaceAll("/", "::").replace(/^::/, "");
     if (normalized.includes("::")) {
       const direct = qualifiedNames.get(normalized);

@@ -4,6 +4,13 @@
 //! their own database or RPC client. Result aliases are kept stable so directory
 //! rows can be consumed consistently across native and web clients.
 
+mod ast;
+pub use ast::{
+    directories_query_ast, directory_by_id_query_ast, directory_children_query_ast,
+    directory_links_query_ast, directory_parent_query_ast, directory_tree_items_query_ast,
+    root_directories_named_query_ast,
+};
+
 use semantic_data::{
     attr::{ATTR_CREATED_AT, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE},
     builtin::DEFAULT_COLLECTION,

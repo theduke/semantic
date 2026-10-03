@@ -3030,7 +3030,9 @@ fn expr_contains_relationship(expr: &crate::Expr) -> bool {
         crate::Expr::Binary { left, right, .. } => {
             expr_contains_relationship(left) || expr_contains_relationship(right)
         }
-        crate::Expr::Unary { expr, .. } => expr_contains_relationship(expr),
+        crate::Expr::Unary { expr, .. } | crate::Expr::ProjectionRef(expr) => {
+            expr_contains_relationship(expr)
+        }
         crate::Expr::IfElse {
             cond,
             then_expr,

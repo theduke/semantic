@@ -56,6 +56,10 @@ web-time = "1.1.0"
 tracing = { workspace = true }
 web-sys = { version = "0.3.82", features = ["Blob", "File", "Storage", "Window"] }
 
+[dev-dependencies]
+semantic_db_core = { path = "../db_core" }
+semantic_db_kv = { path = "../db_kv" }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "3.26.0"
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }

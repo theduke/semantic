@@ -1,5 +1,4 @@
 use dioxus::prelude::*;
-use semantic_base::directory_query::sql_ident;
 use semantic_data::{
     attr::ATTR_PARENT,
     value::{Object, Value},
@@ -7,6 +6,7 @@ use semantic_data::{
 
 use crate::{
     EntityComments,
+    query_ast::{all, any, binary, field, order, query_payload, select, wildcard},
     ui_catalog::{EntityTarget, use_ui_catalog},
     use_active_scope_id, use_rpc_client,
 };
@@ -269,16 +269,13 @@ async fn load_page(
     client: semantic_rpc::RpcClient,
     key: &AssociationQueryKey,
 ) -> std::result::Result<Vec<Object>, String> {
-    let query = association_query(key);
-    let mut payload = Object::new();
-    if let Some(scope_id) = &key.scope_id {
-        payload.insert("scope_id", Value::String(scope_id.clone()));
-    }
-    payload.insert("format", Value::String("sql".to_string()));
-    payload.insert("query", Value::String(query));
-    payload.insert("params", Value::Object(association_params(key)));
+    let payload = query_payload(
+        association_query(key),
+        key.scope_id.as_deref(),
+        Some(association_params(key)),
+    );
     let response = client
-        .invoke_value("semantic.db.query", Value::Object(payload))
+        .invoke_value("semantic.db.query", payload)
         .await
         .map_err(|error| error.to_string())?;
     let Value::Object(response) = response else {
@@ -295,20 +292,52 @@ async fn load_page(
         .collect()
 }
 
-fn association_query(key: &AssociationQueryKey) -> String {
+fn association_query(key: &AssociationQueryKey) -> semantic_data::query::SelectQuery {
+    use semantic_data::query::{BinaryOp, Expr, SortDirection};
     let offset = key.page.saturating_mul(PAGE_SIZE);
     let limit = PAGE_SIZE + 1;
     match key.kind {
-        AssociationKind::Children => format!(
-            "SELECT child.* FROM {} AS child WHERE child.{} = :entity_id ORDER BY child.{} ASC, child.id ASC LIMIT {limit} OFFSET {offset} FORMAT qualified",
-            sql_ident(key.target.collection_or_default()),
-            sql_ident(ATTR_PARENT),
-            sql_ident(semantic_data::attr::ATTR_TITLE),
-        ),
-        AssociationKind::Relations => format!(
-            "SELECT edge.* FROM {} AS edge WHERE edge.depth = :direct_depth AND (edge.source = :entity_id OR edge.target = :entity_id) ORDER BY edge.relation ASC, edge.source ASC, edge.target ASC LIMIT {limit} OFFSET {offset} FORMAT qualified",
-            sql_ident(RELATION_EDGES_COLLECTION),
-        ),
+        AssociationKind::Children => select("child")
+            .with_collection(key.target.collection_or_default())
+            .with_projection(vec![wildcard("child")])
+            .with_predicate(binary(
+                BinaryOp::Eq,
+                field(&["child", ATTR_PARENT]),
+                Expr::parameter("entity_id"),
+            ))
+            .with_order_by(vec![
+                order(
+                    &["child", semantic_data::attr::ATTR_TITLE],
+                    SortDirection::Asc,
+                ),
+                order(&["child", "id"], SortDirection::Asc),
+            ])
+            .with_limit(limit)
+            .with_offset(offset),
+        AssociationKind::Relations => select("edge")
+            .with_collection(RELATION_EDGES_COLLECTION)
+            .with_projection(vec![wildcard("edge")])
+            .with_predicate(all([
+                binary(
+                    BinaryOp::Eq,
+                    field(&["edge", "depth"]),
+                    Expr::parameter("direct_depth"),
+                ),
+                any(["source", "target"].map(|name| {
+                    binary(
+                        BinaryOp::Eq,
+                        field(&["edge", name]),
+                        Expr::parameter("entity_id"),
+                    )
+                })),
+            ]))
+            .with_order_by(
+                ["relation", "source", "target"]
+                    .map(|name| order(&["edge", name], SortDirection::Asc))
+                    .to_vec(),
+            )
+            .with_limit(limit)
+            .with_offset(offset),
     }
 }
 
@@ -345,9 +374,20 @@ mod tests {
             page: 2,
         };
         let children = association_query(&key);
-        assert!(children.contains("FROM notes AS child"));
-        assert!(children.contains("child.\"semantic:parent\" = :entity_id"));
-        assert!(children.contains("LIMIT 11 OFFSET 20"));
+        assert_eq!(children.collection.as_deref(), Some("notes"));
+        assert_eq!(
+            children.predicate,
+            Some(binary(
+                semantic_data::query::BinaryOp::Eq,
+                field(&["child", ATTR_PARENT]),
+                semantic_data::query::Expr::parameter("entity_id")
+            ))
+        );
+        assert_eq!(
+            children.limit,
+            Some(semantic_data::query::Expr::from(11usize))
+        );
+        assert_eq!(children.offset, semantic_data::query::Expr::from(20usize));
         assert_eq!(
             association_params(&key).get("entity_id"),
             Some(&Value::String("O'Brien".into()))
@@ -358,9 +398,15 @@ mod tests {
             ..key
         };
         let relations = association_query(&relation_key);
-        assert!(relations.contains("edge.depth = :direct_depth"));
-        assert!(relations.contains("edge.source = :entity_id OR edge.target = :entity_id"));
-        assert!(relations.contains("LIMIT 11 OFFSET 20"));
+        assert_eq!(
+            relations.collection.as_deref(),
+            Some(RELATION_EDGES_COLLECTION)
+        );
+        assert_eq!(
+            relations.limit,
+            Some(semantic_data::query::Expr::from(11usize))
+        );
+        assert_eq!(relations.offset, semantic_data::query::Expr::from(20usize));
         assert_eq!(
             association_params(&relation_key).get("direct_depth"),
             Some(&Value::U64(1))
@@ -368,7 +414,7 @@ mod tests {
     }
 
     fn query_input(key: &AssociationQueryKey) -> QueryInput {
-        QueryInput::sql_with_params(
+        QueryInput::ast_with_params(
             association_query(key),
             association_params(key).into_iter().collect(),
         )

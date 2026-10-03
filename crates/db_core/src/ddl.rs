@@ -13,7 +13,6 @@ use semantic_data::{
         core::{
             entity_ref::{EntityRef, OnDelete},
             meta::Meta,
-            type_def::TypeDef,
             type_kind::TypeKind,
             type_node::Type,
         },
@@ -21,8 +20,6 @@ use semantic_data::{
             any_type::AnyType, bool_type::BoolType, number_type::NumberType,
             string_type::StringType, uint_width::UIntWidth,
         },
-        record::record_type::RecordType,
-        relation::relation_type::RelationType,
     },
 };
 
@@ -31,115 +28,7 @@ use crate::{
     catalog::{Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode},
 };
 
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
-pub struct DdlBatch {
-    pub operations: Vec<DdlOperation>,
-}
-
-impl DdlBatch {
-    pub fn new() -> Self {
-        Self {
-            operations: Vec::new(),
-        }
-    }
-
-    pub fn with_op(mut self, op: DdlOperation) -> Self {
-        self.operations.push(op);
-        self
-    }
-}
-
-impl Default for DdlBatch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum DdlCollectionKind {
-    Untyped,
-    Schema,
-    Polymorphic,
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum DdlOperation {
-    UpsertAttribute {
-        attribute: AttributeType,
-    },
-    DeleteAttribute {
-        id: String,
-    },
-    UpsertTypeDef {
-        type_def: TypeDef,
-    },
-    DeleteTypeDef {
-        name: String,
-    },
-    UpsertRecordType {
-        id: String,
-        name: String,
-        record: RecordType,
-    },
-    DeleteRecordType {
-        id: String,
-    },
-    UpsertClass {
-        class: ClassType,
-    },
-    DeleteClass {
-        id: String,
-    },
-    UpsertCollection {
-        name: String,
-        kind: DdlCollectionKind,
-        integrity_mode: IntegrityMode,
-    },
-    DeleteCollection {
-        name: String,
-    },
-    UpsertIndex {
-        name: String,
-        collection: String,
-        /// The first (for single-column indexes the only) key column.
-        field: String,
-        unique: bool,
-        /// Index kind: equality (the default) or range.
-        #[facet(default = IndexKind::Equality)]
-        #[facet(skip_serializing_if = IndexKind::is_equality)]
-        kind: IndexKind,
-        /// Key columns after `field` of a composite index, in key order.
-        #[facet(default)]
-        #[facet(skip_serializing_if = Vec::is_empty)]
-        extra_fields: Vec<String>,
-        /// Predicate of a partial index; `None` indexes every row.
-        #[facet(default)]
-        #[facet(skip_serializing_if = Option::is_none)]
-        predicate: Option<semantic_data::query::Expr>,
-        /// Tokenization of a full-text index; must be the default for other
-        /// kinds.
-        #[facet(default)]
-        #[facet(skip_serializing_if = semantic_data::query::TextAnalyzer::is_default)]
-        analyzer: semantic_data::query::TextAnalyzer,
-    },
-    DeleteIndex {
-        name: String,
-        collection: String,
-    },
-    UpsertRelationship {
-        relationship: RelationType,
-    },
-    DeleteRelationship {
-        id: String,
-    },
-    SetAutoIndex {
-        enabled: bool,
-    },
-}
+pub use semantic_data::query::{DdlBatch, DdlCollectionKind, DdlOperation};
 
 #[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DdlStats {
@@ -1541,7 +1430,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use semantic_data::schema::{
-        AttributeRef, ClassAttribute, collections::list_type::ListType,
+        AttributeRef, ClassAttribute, RecordType, TypeDef, collections::list_type::ListType,
         core::visibility::Visibility, record::field::Field,
     };
 

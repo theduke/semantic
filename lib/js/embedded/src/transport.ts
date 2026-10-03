@@ -4,6 +4,7 @@ import {
   parseJson,
   stringifyJson,
   type RpcTransport,
+  type InvokeOptions,
   type SemanticValue,
 } from "@semantic/sdk";
 import { RpcRequestEncoder, resolveRpcResponse } from "@semantic/sdk/rpc-wire";
@@ -27,6 +28,7 @@ export class EmbeddedTransport implements RpcTransport {
   async invoke(
     command: string,
     payload: SemanticValue,
+    options: InvokeOptions = {},
   ): Promise<SemanticValue | undefined> {
     if (this.state !== "open")
       throw new EmbeddedError(
@@ -43,7 +45,7 @@ export class EmbeddedTransport implements RpcTransport {
       throw mapNativeError(cause, "EMBEDDED_CLOSED");
     }
     try {
-      return resolveRpcResponse(parseJson(text));
+      return resolveRpcResponse(parseJson(text), options.valueDecoding);
     } catch (cause) {
       if (cause instanceof RpcError || cause instanceof ProtocolError)
         throw cause;

@@ -32,8 +32,8 @@ export type BatchOperation =
   | { upsert: { collection: string; id: string; object: SemanticObject } }
   | { delete_by_id: { collection: string; id: string } }
   | { delete_by_ids: { collection: string; ids: Array<string> } }
-  | { update: { collection: string; query: UpdateQuery } }
-  | { delete: { collection: string; query: DeleteQuery } };
+  | { update: { collection: string; query: query_UpdateQuery } }
+  | { delete: { collection: string; query: query_DeleteQuery } };
 
 /**  Result of a committed batch. */
 export type BatchOutcome = {
@@ -127,7 +127,8 @@ export type JobKindDescriptor = {
 export type ClearCompletedResult = { deleted: number | bigint };
 
 export type QueryInput =
-  | { ast: query_Query }
+  | { ast: Query }
+  | { ast_with_params: { query: Query; params: Record<string, SemanticValue> } }
   | {
       text: {
         format: TextQueryFormat;
@@ -233,6 +234,23 @@ export type DeleteResult = {
   returning: Array<SemanticObject>;
 };
 
+export type query_UpdateQuery = {
+  collection: string | null;
+  predicate: query_Expr | null;
+  assignments: Array<query_Assignment>;
+  limit: query_Expr | null;
+  returning: Array<query_QueryField>;
+  field_format: FieldFormat;
+};
+
+export type query_DeleteQuery = {
+  collection: string | null;
+  predicate: query_Expr | null;
+  limit: query_Expr | null;
+  returning: Array<query_QueryField>;
+  field_format: FieldFormat;
+};
+
 export type BatchStats = {
   upserted: number | bigint;
   deleted: number | bigint;
@@ -287,12 +305,6 @@ export type DateTime = number | bigint;
 
 export type JobListCursor = { created_at: DateTime; id: string };
 
-export type query_Query =
-  | { select: query_SelectQuery }
-  | { insert: query_InsertQuery }
-  | { update: query_UpdateQuery }
-  | { delete: query_DeleteQuery };
-
 export type TextQueryFormat = "sql" | "prql";
 
 export type ContractConstant = {
@@ -326,6 +338,7 @@ export type ClassType = {
   extends: Array<ClassRef>;
   "semantic:class:strict_schema": boolean;
   "semantic:ui:creatable_in_ui": boolean | null;
+  "semantic:ui:include_in_listings"?: boolean;
   attributes: Record<string, ClassAttribute>;
   constraints: Array<ClassConstraint>;
   meta: Meta;
@@ -347,8 +360,8 @@ export type Contract = {
 export type MigrationOperation =
   | { ddl: MigrationDdlOperation }
   | { insert: { collection: string; id: string; object: SemanticObject } }
-  | { update: { query: query_UpdateQuery } }
-  | { delete: { query: query_DeleteQuery } };
+  | { update: { query: UpdateQuery } }
+  | { delete: { query: DeleteQuery } };
 
 export type Deprecation = { note: string | null };
 
@@ -362,6 +375,7 @@ export type JoinQuery = {
 
 export type Expr =
   | { operand: Operand }
+  | { projection_ref: Expr }
   | { unary: { op: UnaryOp; expr: Expr } }
   | { binary: { op: BinaryOp; left: Expr; right: Expr } }
   | { if_else: { cond: Expr; then_expr: Expr; else_expr: Expr } }
@@ -411,7 +425,7 @@ export type Expr =
 export type QueryField = {
   expr: Expr;
   alias: string | null;
-  wildcard: Array<PathSegment> | null;
+  wildcard?: Array<PathSegment>;
 };
 
 export type OrderBy = { expr: Expr; direction: SortDirection };
@@ -432,47 +446,79 @@ export type MutationStats = {
   affected: number | bigint;
 };
 
+export type query_Expr =
+  | { operand: query_Operand }
+  | { projection_ref: query_Expr }
+  | { unary: { op: UnaryOp; expr: query_Expr } }
+  | { binary: { op: BinaryOp; left: query_Expr; right: query_Expr } }
+  | {
+      if_else: {
+        cond: query_Expr;
+        then_expr: query_Expr;
+        else_expr: query_Expr;
+      };
+    }
+  | { coalesce: Array<query_Expr> }
+  | { function: { name: string; args: Array<query_FunctionArg> } }
+  | {
+      aggregate: { op: AggregateOp; distinct: boolean; arg: query_FunctionArg };
+    }
+  | { in_list: { expr: query_Expr; list: Array<query_Expr>; negated: boolean } }
+  | { subquery: query_SelectQuery }
+  | {
+      between: {
+        expr: query_Expr;
+        low: query_Expr;
+        high: query_Expr;
+        negated: boolean;
+      };
+    }
+  | {
+      pattern_match: {
+        kind: PatternMatchKind;
+        expr: query_Expr;
+        pattern: query_Expr;
+        case_insensitive: boolean;
+        negated: boolean;
+      };
+    }
+  | {
+      regex_match: {
+        expr: query_Expr;
+        pattern: query_Expr;
+        case_insensitive: boolean;
+        negated: boolean;
+      };
+    }
+  | {
+      text_match: {
+        exprs: Array<query_Expr>;
+        query: query_Expr;
+        mode: TextMatchMode;
+        analyzer: TextAnalyzer;
+      };
+    }
+  | { is_null: { expr: query_Expr; negated: boolean } }
+  | { exists: { query: query_SelectQuery; negated: boolean } }
+  | {
+      relation_exists: {
+        relation: query_Expr;
+        source: query_Expr;
+        target: query_Expr;
+        transitive: boolean;
+        max_depth: query_Expr | null;
+      };
+    };
+
+export type query_Assignment = { path: Array<PathSegment>; value: query_Expr };
+
+export type query_QueryField = {
+  expr: query_Expr;
+  alias: string | null;
+  wildcard: Array<PathSegment> | null;
+};
+
 export type EntityChangeKind = "upsert" | "delete";
-
-export type query_SelectQuery = {
-  collection: string | null;
-  source_alias: string | null;
-  joins: Array<query_JoinQuery>;
-  predicate: query_Expr | null;
-  projection: Array<query_QueryField>;
-  distinct: boolean;
-  group_by: Array<query_Expr>;
-  having: query_Expr | null;
-  order_by: Array<query_OrderBy>;
-  offset: query_Expr;
-  limit: query_Expr | null;
-  field_format: FieldFormat;
-};
-
-export type query_InsertQuery = {
-  collection: string | null;
-  columns: Array<string>;
-  source: query_InsertSource;
-  returning: Array<query_QueryField>;
-  field_format: FieldFormat;
-};
-
-export type query_UpdateQuery = {
-  collection: string | null;
-  predicate: query_Expr | null;
-  assignments: Array<query_Assignment>;
-  limit: query_Expr | null;
-  returning: Array<query_QueryField>;
-  field_format: FieldFormat;
-};
-
-export type query_DeleteQuery = {
-  collection: string | null;
-  predicate: query_Expr | null;
-  limit: query_Expr | null;
-  returning: Array<query_QueryField>;
-  field_format: FieldFormat;
-};
 
 /**  The main schema type node: shape + constraints + metadata + annotations. */
 export type Type = {
@@ -572,7 +618,7 @@ export type MigrationDdlOperation =
         unique: boolean;
         kind: IndexKind;
         extra_fields: Array<string>;
-        predicate?: query_Expr;
+        predicate?: Expr;
         analyzer: TextAnalyzer;
       };
     }
@@ -591,7 +637,8 @@ export type JoinCondition =
 
 export type Operand =
   | { field: Array<PathSegment> }
-  | { literal: SemanticValue };
+  | { literal: SemanticValue }
+  | { parameter: string };
 
 export type UnaryOp = "not" | "neg";
 
@@ -651,7 +698,7 @@ export type DdlOperation =
         unique: boolean;
         kind: IndexKind;
         extra_fields: Array<string>;
-        predicate?: query_Expr;
+        predicate?: Expr;
         analyzer: TextAnalyzer;
       };
     }
@@ -660,87 +707,27 @@ export type DdlOperation =
   | { delete_relationship: { id: string } }
   | { set_auto_index: { enabled: boolean } };
 
-export type query_JoinQuery = {
-  source: query_JoinSource;
-  alias: string | null;
-  join_type: JoinType;
-  condition: query_JoinCondition;
+export type query_Operand =
+  | { field: Array<PathSegment> }
+  | { literal: SemanticValue }
+  | { parameter: string };
+
+export type query_FunctionArg = { expr: query_Expr } | "wildcard";
+
+export type query_SelectQuery = {
+  collection: string | null;
+  source_alias: string | null;
+  joins: Array<query_JoinQuery>;
   predicate: query_Expr | null;
+  projection: Array<query_QueryField>;
+  distinct: boolean;
+  group_by: Array<query_Expr>;
+  having: query_Expr | null;
+  order_by: Array<query_OrderBy>;
+  offset: query_Expr;
+  limit: query_Expr | null;
+  field_format: FieldFormat;
 };
-
-export type query_Expr =
-  | { operand: query_Operand }
-  | { unary: { op: UnaryOp; expr: query_Expr } }
-  | { binary: { op: BinaryOp; left: query_Expr; right: query_Expr } }
-  | {
-      if_else: {
-        cond: query_Expr;
-        then_expr: query_Expr;
-        else_expr: query_Expr;
-      };
-    }
-  | { coalesce: Array<query_Expr> }
-  | { function: { name: string; args: Array<query_FunctionArg> } }
-  | {
-      aggregate: { op: AggregateOp; distinct: boolean; arg: query_FunctionArg };
-    }
-  | { in_list: { expr: query_Expr; list: Array<query_Expr>; negated: boolean } }
-  | { subquery: query_SelectQuery }
-  | {
-      between: {
-        expr: query_Expr;
-        low: query_Expr;
-        high: query_Expr;
-        negated: boolean;
-      };
-    }
-  | {
-      pattern_match: {
-        kind: PatternMatchKind;
-        expr: query_Expr;
-        pattern: query_Expr;
-        case_insensitive: boolean;
-        negated: boolean;
-      };
-    }
-  | {
-      regex_match: {
-        expr: query_Expr;
-        pattern: query_Expr;
-        case_insensitive: boolean;
-        negated: boolean;
-      };
-    }
-  | {
-      text_match: {
-        exprs: Array<query_Expr>;
-        query: query_Expr;
-        mode: TextMatchMode;
-        analyzer: TextAnalyzer;
-      };
-    }
-  | { is_null: { expr: query_Expr; negated: boolean } }
-  | { exists: { query: query_SelectQuery; negated: boolean } }
-  | {
-      relation_exists: {
-        relation: query_Expr;
-        source: query_Expr;
-        target: query_Expr;
-        transitive: boolean;
-        max_depth: query_Expr | null;
-      };
-    };
-
-export type query_QueryField = { expr: query_Expr; alias: string | null };
-
-export type query_OrderBy = { expr: query_Expr; direction: SortDirection };
-
-export type query_InsertSource =
-  | { objects: Array<SemanticObject> }
-  | { values: Array<Array<query_Expr>> }
-  | { select: query_SelectQuery };
-
-export type query_Assignment = { path: Array<PathSegment>; value: query_Expr };
 
 export type TypeKind =
   | { any: AnyType }
@@ -884,20 +871,15 @@ export type DdlCollectionKind = "untyped" | "schema" | "polymorphic";
 
 export type IntegrityMode = "permissive" | "strict_registered_schema";
 
-export type query_JoinSource = {
-  collection: string | null;
-  class: string | null;
+export type query_JoinQuery = {
+  source: query_JoinSource;
+  alias: string | null;
+  join_type: JoinType;
+  condition: query_JoinCondition;
+  predicate: query_Expr | null;
 };
 
-export type query_JoinCondition =
-  | { on_expr: query_Expr }
-  | { using_fields: { left: Array<PathSegment>; right: Array<PathSegment> } };
-
-export type query_Operand =
-  | { field: Array<PathSegment> }
-  | { literal: SemanticValue };
-
-export type query_FunctionArg = { expr: query_Expr } | "wildcard";
+export type query_OrderBy = { expr: query_Expr; direction: SortDirection };
 
 export type AnyType = Record<string, never>;
 
@@ -1096,6 +1078,15 @@ export type Field = {
 export type RelationMode = { embedded: { attribute: string } } | "external";
 
 export type RelationIndexingMode = "disabled" | "enabled";
+
+export type query_JoinSource = {
+  collection: string | null;
+  class: string | null;
+};
+
+export type query_JoinCondition =
+  | { on_expr: query_Expr }
+  | { using_fields: { left: Array<PathSegment>; right: Array<PathSegment> } };
 
 export type IntWidth =
   | "i8"

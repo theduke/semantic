@@ -22,7 +22,8 @@ pub use context::{
     use_semantic_form_mode, use_semantic_form_root, use_semantic_form_scope,
 };
 pub use defaults::{
-    ref_autocomplete_class_ids, ref_autocomplete_query, register_default_form_renderers,
+    ref_autocomplete_class_ids, ref_autocomplete_query, ref_autocomplete_query_ast,
+    register_default_form_renderers,
 };
 pub use field::{attribute_field_spec, attribute_field_spec_with_storage_name, value_field_spec};
 pub use list::{render_list_value_form, value_list_spec};

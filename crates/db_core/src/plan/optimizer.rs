@@ -464,9 +464,11 @@ fn expression_binding(
         right: &std::collections::HashSet<String>,
     ) -> ExprBinding {
         match expr {
-            Expr::Operand(Operand::Literal(_)) => ExprBinding::None,
+            Expr::Operand(Operand::Literal(_) | Operand::Parameter(_)) => ExprBinding::None,
             Expr::Operand(Operand::Field(path)) => path_binding(path, left, right),
-            Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => recurse(expr, left, right),
+            Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+                recurse(expr, left, right)
+            }
             Expr::Binary {
                 left: a, right: b, ..
             }
@@ -553,8 +555,12 @@ fn strip_direct_binding(expr: &mut Expr, binding: &str) {
     }
     match expr {
         Expr::Operand(Operand::Field(path)) => strip_path(path, binding),
-        Expr::Operand(Operand::Literal(_)) | Expr::Subquery(_) | Expr::Exists { .. } => {}
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => strip_direct_binding(expr, binding),
+        Expr::Operand(Operand::Literal(_) | Operand::Parameter(_))
+        | Expr::Subquery(_)
+        | Expr::Exists { .. } => {}
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+            strip_direct_binding(expr, binding)
+        }
         Expr::Binary { left, right, .. }
         | Expr::PatternMatch {
             expr: left,
@@ -780,7 +786,7 @@ impl<'a> RefPathJoinLifter<'a> {
                     *path = rewritten;
                 }
             }
-            Expr::Unary { expr, .. } => self.rewrite_expr(expr),
+            Expr::Unary { expr, .. } | Expr::ProjectionRef(expr) => self.rewrite_expr(expr),
             Expr::Binary { left, right, .. } => {
                 self.rewrite_expr(left);
                 self.rewrite_expr(right);
@@ -849,7 +855,9 @@ impl<'a> RefPathJoinLifter<'a> {
                     self.rewrite_expr(max_depth);
                 }
             }
-            Expr::Subquery(_) | Expr::Exists { .. } | Expr::Operand(Operand::Literal(_)) => {}
+            Expr::Subquery(_)
+            | Expr::Exists { .. }
+            | Expr::Operand(Operand::Literal(_) | Operand::Parameter(_)) => {}
         }
     }
 

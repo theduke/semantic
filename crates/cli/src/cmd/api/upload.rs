@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use futures::StreamExt as _;
 use semantic_base::directory_query::{
-    DirectoryChildFilter, DirectoryQueryPage, DirectorySort, directories_query,
-    directory_by_id_query, directory_children_query, directory_links_query,
-    root_directories_named_query,
+    DirectoryChildFilter, DirectoryQueryPage, DirectorySort, directories_query_ast,
+    directory_by_id_query_ast, directory_children_query_ast, directory_links_query_ast,
+    root_directories_named_query_ast,
 };
 use semantic_data::attr::{ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE};
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE, DEFAULT_COLLECTION};
@@ -408,11 +408,11 @@ async fn load_directory_choices(
     scope: Option<&String>,
 ) -> std::result::Result<Vec<DirectoryChoice>, CliError> {
     let directories = query_all_pages(client, scope, |offset| {
-        directories_query(DirectoryQueryPage::new(DIRECTORY_QUERY_PAGE_SIZE, offset))
+        directories_query_ast(DirectoryQueryPage::new(DIRECTORY_QUERY_PAGE_SIZE, offset))
     })
     .await?;
     let links = query_all_pages(client, scope, |offset| {
-        directory_links_query(DirectoryQueryPage::new(DIRECTORY_QUERY_PAGE_SIZE, offset))
+        directory_links_query_ast(DirectoryQueryPage::new(DIRECTORY_QUERY_PAGE_SIZE, offset))
     })
     .await?;
     directory_choices(&directories, &links)
@@ -696,7 +696,7 @@ async fn require_directory(
     scope: Option<&String>,
     id: &str,
 ) -> std::result::Result<(), CliError> {
-    let rows = query_rows(client, scope, directory_by_id_query(id)).await?;
+    let rows = query_rows(client, scope, directory_by_id_query_ast(id)).await?;
     match rows.as_slice() {
         [_] => Ok(()),
         [] => Err(CliError::InvalidInput(format!(
@@ -713,7 +713,7 @@ async fn find_root_directory(
     scope: Option<&String>,
     name: &str,
 ) -> std::result::Result<Option<String>, CliError> {
-    let matches = query_rows(client, scope, root_directories_named_query(name, 2))
+    let matches = query_rows(client, scope, root_directories_named_query_ast(name, 2))
         .await?
         .iter()
         .filter_map(|row| object_string(row, &[ATTR_ID]))
@@ -733,7 +733,7 @@ async fn list_directory(
     parent_id: &str,
 ) -> std::result::Result<Vec<RemoteEntry>, CliError> {
     query_all_pages(client, scope, |offset| {
-        directory_children_query(
+        directory_children_query_ast(
             parent_id,
             DirectoryChildFilter::All,
             DirectorySort::Order,
@@ -910,7 +910,7 @@ async fn invoke_batch(
 async fn query_all_pages(
     client: &RpcClient,
     scope: Option<&String>,
-    build_query: impl Fn(usize) -> String,
+    build_query: impl Fn(usize) -> semantic_data::query::SelectQuery,
 ) -> std::result::Result<Vec<Object>, CliError> {
     let mut rows = Vec::new();
     let mut offset = 0;
@@ -928,11 +928,14 @@ async fn query_all_pages(
 async fn query_rows(
     client: &RpcClient,
     scope: Option<&String>,
-    query: String,
+    query: semantic_data::query::SelectQuery,
 ) -> std::result::Result<Vec<Object>, CliError> {
     let mut payload = Object::new();
-    payload.insert("query", Value::String(query));
-    payload.insert("format", Value::String("sql".to_string()));
+    use semantic_data::value::IntoValue;
+    payload.insert(
+        "query",
+        semantic_data::query::Query::Select(query).into_value(),
+    );
     if let Some(scope) = scope {
         payload.insert("scope_id", Value::String(scope.clone()));
     }
@@ -1101,6 +1104,60 @@ fn utf8_file_name(path: &Path) -> std::result::Result<&str, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn directory_lookup_sends_a_scoped_ast_request() {
+        use semantic_data::{query::Query, value::FromValue};
+        use semantic_rpc::{RpcClientDyn, client::RpcClientFuture};
+        use semantic_rpc_core::RpcClientError;
+        use std::sync::{Arc, Mutex};
+
+        struct Capture(Arc<Mutex<Vec<Value>>>);
+        impl RpcClientDyn for Capture {
+            fn invoke_value(
+                &self,
+                command: String,
+                payload: Value,
+            ) -> RpcClientFuture<Result<Value, RpcClientError>> {
+                assert_eq!(command, "semantic.db.query");
+                self.0.lock().unwrap().push(payload);
+                let mut response = Object::new();
+                response.insert("rows", Value::List(Vec::new()));
+                Box::pin(async move { Ok(Value::Object(response)) })
+            }
+        }
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let client = RpcClient::new(Capture(calls.clone()));
+        let scope = "workspace".to_string();
+        let query = |offset| {
+            directory_children_query_ast(
+                "parent'1",
+                DirectoryChildFilter::All,
+                DirectorySort::Order,
+                DirectoryQueryPage::new(DIRECTORY_QUERY_PAGE_SIZE, offset),
+            )
+        };
+        assert!(
+            query_all_pages(&client, Some(&scope), query)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let Value::Object(payload) = &calls[0] else {
+            panic!("object request")
+        };
+        assert!(payload.get("format").is_none());
+        assert_eq!(
+            payload.get("scope_id").and_then(Value::as_str),
+            Some("workspace")
+        );
+        assert_eq!(
+            Query::from_value(payload.get("query").unwrap().clone()).unwrap(),
+            Query::Select(query(0))
+        );
+    }
 
     fn remote_file(hash: Option<&str>) -> RemoteEntry {
         RemoteEntry {

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use semantic_data::schema::TypeDef;
 use semantic_data::value::Value;
 use semantic_rpc_core::command::{CallError, CommandAdapter, CommandDef, DynCommand, RpcCommand};
 use semantic_rpc_core::error::{CommandDefError, RegisterError, RpcError};
@@ -12,6 +13,7 @@ use crate::stream_command::{DynStreamCommand, RpcStreamCommand, StreamCommandAda
 
 pub struct RpcRegistry<Ctx, E> {
     commands: BTreeMap<String, Box<dyn DynCommand<Ctx, E>>>,
+    definitions: BTreeMap<String, TypeDef>,
     /// Streaming handlers; every entry also has a placeholder in `commands`
     /// so introspection sees it.
     streams: BTreeMap<String, Box<dyn DynStreamCommand<Ctx, E>>>,
@@ -49,8 +51,33 @@ impl<Ctx, E> RpcRegistry<Ctx, E> {
     pub fn new() -> Self {
         Self {
             commands: BTreeMap::new(),
+            definitions: BTreeMap::new(),
             streams: BTreeMap::new(),
         }
+    }
+
+    /// Register named types used by command schemas. Identical definitions may
+    /// be shared; a conflicting batch leaves the registry unchanged.
+    pub fn register_definitions(
+        &mut self,
+        definitions: BTreeMap<String, TypeDef>,
+    ) -> Result<(), RegisterError> {
+        for (name, definition) in &definitions {
+            if self
+                .definitions
+                .get(name)
+                .is_some_and(|existing| existing != definition)
+            {
+                return Err(RegisterError::ConflictingTypeDefinition(name.clone()));
+            }
+        }
+        self.definitions.extend(definitions);
+        Ok(())
+    }
+
+    /// Named definitions available to command introspection and fingerprints.
+    pub fn definitions(&self) -> &BTreeMap<String, TypeDef> {
+        &self.definitions
     }
 
     pub fn register<C>(&mut self, command: C) -> Result<(), RegisterError>
@@ -177,6 +204,30 @@ mod tests {
     use super::RpcRegistry;
     use crate::interface::CancellationToken;
     use crate::stream_command::{RpcStreamCommand, RpcStreamCommandSpec, Single, TypedStream};
+
+    #[test]
+    fn named_definition_registration_shares_identical_types_and_rejects_conflicts_atomically() {
+        let definitions = semantic_data::query::semantic::definitions();
+        let mut registry = RpcRegistry::<(), RpcError>::new();
+        registry.register_definitions(definitions.clone()).unwrap();
+        registry.register_definitions(definitions.clone()).unwrap();
+        assert_eq!(registry.definitions(), &definitions);
+        let (name, mut conflicting) = definitions
+            .first_key_value()
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .unwrap();
+        conflicting.ty = String::semantic_type();
+        let mut extra = conflicting.clone();
+        extra.name = "extra".into();
+        let batch = std::collections::BTreeMap::from([
+            ("extra".into(), extra),
+            (name.clone(), conflicting),
+        ]);
+        assert!(
+            matches!(registry.register_definitions(batch), Err(RegisterError::ConflictingTypeDefinition(conflict)) if conflict == name)
+        );
+        assert_eq!(registry.definitions(), &definitions);
+    }
 
     struct EchoCommand;
 

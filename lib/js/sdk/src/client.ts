@@ -1,3 +1,4 @@
+import { commands } from "./generated/commands.js";
 import type {
   BatchOperation,
   BatchOutcome,
@@ -7,6 +8,7 @@ import type {
   CommandDefinition,
   EntityRecord,
   Package,
+  Query,
   QueryResult,
   SemanticObject,
   SemanticValue,
@@ -32,6 +34,12 @@ export interface RequestOptions {
   scopeId?: string;
   signal?: AbortSignal;
 }
+export interface AstQueryOptions extends RequestOptions {
+  params?: Record<string, SemanticValue>;
+}
+export interface TextQueryOptions extends AstQueryOptions {
+  format?: "sql" | "prql";
+}
 export class SemanticClient {
   constructor(readonly transport: RpcTransport) {}
   invoke<P, O>(
@@ -42,22 +50,36 @@ export class SemanticClient {
     return this.transport.invoke(
       definition.name,
       payload as unknown as SemanticValue,
-      options,
+      {
+        ...options,
+        ...(definition.valueDecoding
+          ? { valueDecoding: definition.valueDecoding }
+          : {}),
+      },
     ) as Promise<O>;
   }
-  async query<T extends object = SemanticObject>(
+  query<T extends object = SemanticObject>(
+    query: Query,
+    options?: AstQueryOptions,
+  ): Promise<QueryResult<T>>;
+  query<T extends object = SemanticObject>(
     query: string,
-    options: RequestOptions & {
-      format?: "sql" | "prql";
-      params?: Record<string, SemanticValue>;
-    } = {},
+    options?: TextQueryOptions,
+  ): Promise<QueryResult<T>>;
+  async query<T extends object = SemanticObject>(
+    query: Query | string,
+    options: TextQueryOptions = {},
   ): Promise<QueryResult<T>> {
+    if (typeof query !== "string" && options.format !== undefined)
+      throw new TypeError("format is only supported for text queries");
     return object(
       await this.transport.invoke(
         "semantic.db.query",
         {
-          query,
-          format: options.format ?? "sql",
+          query: query as SemanticValue,
+          ...(typeof query === "string"
+            ? { format: options.format ?? "sql" }
+            : {}),
           ...(options.params
             ? { params: Object.fromEntries(Object.entries(options.params)) }
             : {}),
@@ -66,6 +88,14 @@ export class SemanticClient {
         options,
       ),
     ) as unknown as QueryResult<T>;
+  }
+  /** SQL fallback: returns a reusable AST with unbound parameters and exact literal tags. */
+  async parseSql(query: string, options: RequestOptions = {}): Promise<Query> {
+    return this.invoke(
+      commands.parseSql,
+      { query, ...(options.scopeId ? { scope_id: options.scopeId } : {}) },
+      options,
+    );
   }
   async sql<T extends object = SemanticObject>(
     query: string,

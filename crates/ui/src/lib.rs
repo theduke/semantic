@@ -3,6 +3,7 @@ pub mod app;
 pub mod backend;
 pub mod components;
 mod navigation_guard;
+mod query_ast;
 pub mod views;
 
 #[cfg(feature = "desktop")]

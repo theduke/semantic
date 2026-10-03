@@ -1,5 +1,7 @@
 mod backend;
 pub mod db;
+#[cfg(test)]
+mod query_ast_schema;
 mod registration_proof;
 mod schema_store;
 pub mod storage;

@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use dioxus::prelude::*;
-use semantic_data::value::{Object, Value};
+use semantic_data::value::Value;
 
 use crate::{
     context::{use_active_scope_id, use_rpc_client},
-    form::ref_autocomplete_query,
+    form::ref_autocomplete_query_ast,
+    query_ast::query_payload,
 };
 
 const ENTITY_LABEL_FIELDS: [&str; 6] = [
@@ -65,15 +66,13 @@ pub fn EntityAutocomplete(props: EntityAutocompleteProps) -> Element {
         let excluded_id = excluded_id.clone();
         async move {
             dioxus_sdk_time::sleep(Duration::from_millis(250)).await;
-            let sql = ref_autocomplete_query(&search, &allowed_class_ids, excluded_id.as_deref());
-            let mut payload = Object::new();
-            if let Some(scope_id) = scope_id {
-                payload.insert("scope_id", Value::String(scope_id));
-            }
-            payload.insert("format", Value::String("sql".to_string()));
-            payload.insert("query", Value::String(sql));
+            let query =
+                ref_autocomplete_query_ast(&search, &allowed_class_ids, excluded_id.as_deref());
             client
-                .invoke_value("semantic.db.query", Value::Object(payload))
+                .invoke_value(
+                    "semantic.db.query",
+                    query_payload(query, scope_id.as_deref(), None),
+                )
                 .await
                 .map(entity_options_from_query_response)
                 .unwrap_or_default()

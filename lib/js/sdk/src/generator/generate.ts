@@ -27,7 +27,7 @@ try {
     "core.ts",
     await format(await readFile(coreOutput, "utf8"), { parser: "typescript" }),
   );
-  for (const target of ["base", "filestore"] as const) {
+  for (const target of ["base", "filestore", "query"] as const) {
     const input = join(temporary, `${target}.json`);
     execFileSync(
       "cargo",

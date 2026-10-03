@@ -28,6 +28,10 @@
     "./rpc-wire": {
       "types": "./dist/rpc-wire.d.ts",
       "import": "./dist/rpc-wire.js"
+    },
+    "./query": {
+      "types": "./dist/generated/query.d.ts",
+      "import": "./dist/generated/query.js"
     }
   },
   "files": [

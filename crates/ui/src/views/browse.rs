@@ -2,16 +2,20 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::query_ast::{QueryRequest, combine, order};
 use dioxus::prelude::*;
-use semantic_data::value::{Object, Value};
 use semantic_data::{attr::ATTR_CREATED_AT, builtin::DEFAULT_COLLECTION};
+use semantic_data::{
+    query::{BinaryOp, Expr, SelectQuery, SortDirection},
+    value::{Object, Value},
+};
 use semantic_ui_core::{
     EntityDisplayMode, EntityDisplayRenderer,
     components::{EmptyState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator},
     use_active_scope_id, use_rpc_client, use_ui_catalog_context,
 };
 
-use super::listing::listing_predicate;
+use super::listing::{listing_predicate, listing_sql_predicate};
 use crate::{
     components::{
         DataToolbar, EntityExplorer, EntityResults, PageHeader, Pagination, QueryEditor,
@@ -26,11 +30,11 @@ const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE: usize = 1_000_000;
 const MAX_PORTABLE_SQL_BYTES: usize = 1_500;
 const INLINE_SQL_PREFIX: &str = "inline:";
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct BrowseQueryKey {
     scope_id: Option<String>,
     collection: String,
-    query: std::result::Result<String, String>,
+    query: std::result::Result<QueryRequest, String>,
     page: usize,
     page_size: usize,
     display_mode: EntityDisplayMode,
@@ -106,12 +110,17 @@ pub fn BrowsePage(
             sql.as_deref(),
             (!custom_sql).then_some(&applied_filters),
             &query_fields(),
-            listing_filter.as_deref(),
+            listing_filter.as_ref(),
         ),
     };
     let draft_source = match sql.as_deref() {
         Some(reference) => load_sql_reference(reference).unwrap_or_default(),
-        None => default_query(&collection_name, page_size, page, listing_filter.as_deref()),
+        None => default_query_sql(
+            &collection_name,
+            page_size,
+            page,
+            listing_sql_predicate(&collection_name, catalog_signal.read().as_ref()).as_deref(),
+        ),
     };
     let mut sql_input = use_signal(|| draft_source.clone());
     let mut sql_error = use_signal(|| None::<String>);
@@ -556,16 +565,11 @@ fn browse_route(
 async fn run_query(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
-    query: String,
+    query: QueryRequest,
 ) -> std::result::Result<Vec<Object>, String> {
-    let mut payload = Object::new();
-    if let Some(scope_id) = scope_id {
-        payload.insert("scope_id", Value::String(scope_id));
-    }
-    payload.insert("query", Value::String(query));
-    payload.insert("format", Value::String("sql".to_string()));
+    let payload = query.payload(scope_id.as_deref());
     let response = client
-        .invoke_value("semantic.db.query", Value::Object(payload))
+        .invoke_value("semantic.db.query", payload)
         .await
         .map_err(|err| err.to_string())?;
     let Value::Object(object) = response else {
@@ -590,16 +594,12 @@ fn resolve_applied_query(
     reference: Option<&str>,
     filters: Option<&StructuredQuery>,
     fields: &[crate::components::QueryField],
-    listing_filter: Option<&str>,
-) -> std::result::Result<String, String> {
+    listing_filter: Option<&Expr>,
+) -> std::result::Result<QueryRequest, String> {
     match reference {
         Some(reference) => {
-            let query = load_sql_reference(reference).ok_or_else(|| {
-                format!(
-                    "This SQL link depends on browser-local storage that is unavailable. Edit the query or return to the collection query. Reference: {reference}"
-                )
-            })?;
-            validate_read_only_sql(&query)
+            let query = load_sql_reference(reference).ok_or_else(|| format!("This SQL link depends on browser-local storage that is unavailable. Edit the query or return to the collection query. Reference: {reference}"))?;
+            validate_read_only_sql(&query).map(QueryRequest::Sql)
         }
         None => {
             let predicate = filters
@@ -610,42 +610,24 @@ fn resolve_applied_query(
                 collection,
                 page_size,
                 page,
-                predicate.as_deref(),
+                predicate.as_ref(),
                 listing_filter,
-            ))
+            )
+            .into())
         }
     }
 }
 
-fn default_query(
+// Text is a starting point for the explicit SQL editor, never the generated execution path.
+fn default_query_sql(
     collection: &str,
     page_size: usize,
     page: usize,
     listing_filter: Option<&str>,
 ) -> String {
-    collection_query(collection, page_size, page, None, listing_filter)
-}
-
-fn collection_query(
-    collection: &str,
-    page_size: usize,
-    page: usize,
-    predicate: Option<&str>,
-    listing_filter: Option<&str>,
-) -> String {
-    let mut predicates = Vec::new();
-    if let Some(listing_filter) = listing_filter {
-        predicates.push(listing_filter.to_string());
-    }
-    if let Some(predicate) = predicate {
-        predicates.push(format!("({predicate})"));
-    }
-    let where_clause = if predicates.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", predicates.join(" AND "))
-    };
-
+    let where_clause = listing_filter
+        .map(|predicate| format!(" WHERE {predicate}"))
+        .unwrap_or_default();
     format!(
         "SELECT * FROM {}{} ORDER BY {} DESC, id ASC LIMIT {} OFFSET {}",
         sql_ident(collection),
@@ -654,6 +636,28 @@ fn collection_query(
         clamp_page_size(page_size),
         clamp_page(page).saturating_mul(clamp_page_size(page_size))
     )
+}
+
+fn collection_query(
+    collection: &str,
+    page_size: usize,
+    page: usize,
+    predicate: Option<&Expr>,
+    listing_filter: Option<&Expr>,
+) -> SelectQuery {
+    let mut query = SelectQuery::new()
+        .with_collection(collection)
+        .with_order_by(vec![
+            order(None, ATTR_CREATED_AT, SortDirection::Desc),
+            order(None, "id", SortDirection::Asc),
+        ])
+        .with_limit(clamp_page_size(page_size))
+        .with_offset(clamp_page(page).saturating_mul(clamp_page_size(page_size)));
+    query.predicate = combine(
+        BinaryOp::And,
+        listing_filter.into_iter().chain(predicate).cloned(),
+    );
+    query
 }
 
 fn clamp_page(page: usize) -> usize {
@@ -871,25 +875,147 @@ mod tests {
         FilterGroup, FilterNode, FilterOperator, FilterRule, QueryField, QueryFieldKind,
     };
 
+    #[tokio::test]
+    async fn generated_requests_use_ast_and_explicit_sql_stays_text() {
+        let (client, calls) = crate::query_ast::tests::capture_client();
+        let query = collection_query(
+            "entities",
+            25,
+            0,
+            None,
+            listing_predicate("entities", None).as_ref(),
+        );
+        run_query(client.clone(), Some("scope".into()), query.clone().into())
+            .await
+            .unwrap();
+        let sql = "SELECT * FROM entities LIMIT 10";
+        let reference = store_sql_reference(sql);
+        let raw =
+            resolve_applied_query("entities", 25, 0, Some(&reference), None, &[], None).unwrap();
+        run_query(client, Some("scope".into()), raw).await.unwrap();
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        crate::query_ast::tests::assert_ast_call(&calls[0], &query, Some("scope"));
+        let Value::Object(payload) = &calls[1].1 else {
+            panic!("object")
+        };
+        assert_eq!(payload.get("query").and_then(Value::as_str), Some(sql));
+        assert_eq!(payload.get("format").and_then(Value::as_str), Some("sql"));
+        assert_eq!(
+            payload.get("scope_id").and_then(Value::as_str),
+            Some("scope")
+        );
+    }
+
+    #[tokio::test]
+    async fn listing_constraints_include_untyped_rows_and_apply_before_pagination() {
+        use crate::query_ast::tests::{memory_db, row};
+        let mut fixtures = (0..27)
+            .map(|index| row(&format!("row-{index:02}"), []))
+            .collect::<Vec<_>>();
+        fixtures.extend([
+            row(
+                "0-hidden-id",
+                [("type", Value::String("example:hidden".into()))],
+            ),
+            row("0-hidden-name", [("type", Value::String("hidden".into()))]),
+        ]);
+        let db = memory_db("query_test", fixtures).await;
+        let mut snapshot = db.catalog().await.unwrap().to_storage_snapshot();
+        let mut class = semantic_data::filestore::file_class();
+        class.id = "example:hidden".into();
+        class.name = "hidden".into();
+        class.include_in_ui_listings = Some(false);
+        snapshot
+            .classes
+            .push(semantic_db_core::catalog::StoredClass {
+                lid: 100_000usize.into(),
+                class,
+            });
+        let catalog = semantic_ui_core::UiCatalog::from_snapshot(snapshot);
+        let predicate = listing_predicate("query_test", Some(&catalog));
+        let query = collection_query("query_test", 25, 1, None, predicate.as_ref());
+        let semantic_db_core::QueryResult::Select(rows) = db
+            .query(semantic_data::query::QueryInput::from(query))
+            .await
+            .unwrap()
+        else {
+            panic!("AST rows")
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.get("id").unwrap().as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["row-25", "row-26"]
+        );
+    }
+
+    #[tokio::test]
+    async fn default_relation_constraint_preserves_existing_null_behavior() {
+        use crate::query_ast::tests::{memory_db, row};
+        let db = memory_db(
+            "query_test",
+            [
+                row("untyped", []),
+                row(
+                    "relation",
+                    [(
+                        "type",
+                        Value::String(semantic_data::attr::RELATION_CLASS_ID.into()),
+                    )],
+                ),
+                row(
+                    "visible",
+                    [("type", Value::String("example:article".into()))],
+                ),
+            ],
+        )
+        .await;
+        let predicate = listing_predicate(DEFAULT_COLLECTION, None);
+        let semantic_db_core::QueryResult::Select(rows) = db
+            .query(semantic_data::query::QueryInput::from(collection_query(
+                "query_test",
+                25,
+                0,
+                None,
+                predicate.as_ref(),
+            )))
+            .await
+            .unwrap()
+        else {
+            panic!("AST rows")
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.get("id").unwrap().as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["visible"]
+        );
+    }
+
     #[test]
     fn default_entities_query_excludes_relation_entities() {
+        let predicate = listing_predicate(DEFAULT_COLLECTION, None);
+        let query = collection_query(DEFAULT_COLLECTION, 50, 2, None, predicate.as_ref());
+        assert_eq!(query.predicate, predicate);
+        assert_eq!(query.limit, Some(50usize.into()));
+        assert_eq!(query.offset, 100usize.into());
         assert_eq!(
-            default_query(
-                DEFAULT_COLLECTION,
-                50,
-                2,
-                listing_predicate(DEFAULT_COLLECTION, None).as_deref()
-            ),
-            "SELECT * FROM \"entities\" WHERE type != 'semantic:relation' ORDER BY \"semantic:created_at\" DESC, id ASC LIMIT 50 OFFSET 100"
+            query.order_by,
+            vec![
+                order(None, ATTR_CREATED_AT, SortDirection::Desc),
+                order(None, "id", SortDirection::Asc)
+            ]
         );
     }
 
     #[test]
     fn default_non_entities_query_does_not_add_entity_type_filter() {
-        assert_eq!(
-            default_query("events", 25, 1, None),
-            "SELECT * FROM \"events\" ORDER BY \"semantic:created_at\" DESC, id ASC LIMIT 25 OFFSET 25"
-        );
+        let query = collection_query("events", 25, 1, None, None);
+        assert_eq!(query.collection.as_deref(), Some("events"));
+        assert!(query.predicate.is_none());
+        assert_eq!(query.limit, Some(25usize.into()));
+        assert_eq!(query.offset, 25usize.into());
     }
 
     #[test]
@@ -933,10 +1059,10 @@ mod tests {
                 Some(&reference),
                 None,
                 &[],
-                Some("type NOT IN ('example:hidden')")
+                listing_predicate(DEFAULT_COLLECTION, None).as_ref()
             )
             .unwrap(),
-            query
+            QueryRequest::Sql(query.into())
         );
     }
 
@@ -961,7 +1087,7 @@ mod tests {
             deprecated: false,
             choices: Vec::new(),
         }];
-        let listing_filter = "type != 'semantic:relation' AND type NOT IN ('example:hidden')";
+        let listing_filter = listing_predicate(DEFAULT_COLLECTION, None).unwrap();
         let query = resolve_applied_query(
             DEFAULT_COLLECTION,
             25,
@@ -969,13 +1095,32 @@ mod tests {
             None,
             Some(&filters),
             &fields,
-            Some(listing_filter),
+            Some(&listing_filter),
         )
         .unwrap();
-        assert!(query.contains("type != 'semantic:relation'"));
-        assert!(query.contains("type NOT IN ('example:hidden')"));
-        assert!(query.contains("(\"score\" > 7)"));
-        assert!(query.contains("ORDER BY \"semantic:created_at\" DESC, id ASC"));
-        assert!(query.ends_with("LIMIT 25 OFFSET 50"));
+        let QueryRequest::Ast(query) = query else {
+            panic!("generated AST")
+        };
+        assert_eq!(
+            query.predicate,
+            Some(crate::query_ast::binary(
+                BinaryOp::And,
+                listing_filter,
+                crate::query_ast::binary(
+                    BinaryOp::Gt,
+                    crate::query_ast::field(None, "score"),
+                    crate::query_ast::literal(Value::I64(7))
+                )
+            ))
+        );
+        assert_eq!(query.limit, Some(25usize.into()));
+        assert_eq!(query.offset, 50usize.into());
+        assert_eq!(
+            query.order_by,
+            vec![
+                order(None, ATTR_CREATED_AT, SortDirection::Desc),
+                order(None, "id", SortDirection::Asc)
+            ]
+        );
     }
 }

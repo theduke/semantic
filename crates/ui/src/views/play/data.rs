@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, VecDeque};
 
+use crate::query_ast::QueryRequest;
 use semantic_base::directory_query::{
     DirectoryChildFilter, DirectoryQueryPage, DirectorySort,
-    directory_children_query as build_directory_children_query,
+    directory_children_query_ast as build_directory_children_query,
 };
 use semantic_data::{
     attr::ATTR_TITLE,
@@ -172,7 +173,11 @@ async fn expand_rows(
     Ok(PlaylistLoad { entries, warning })
 }
 
-fn directory_children_query(parent_id: &str, limit: usize, offset: usize) -> String {
+fn directory_children_query(
+    parent_id: &str,
+    limit: usize,
+    offset: usize,
+) -> semantic_data::query::SelectQuery {
     build_directory_children_query(
         parent_id,
         DirectoryChildFilter::All,
@@ -184,16 +189,11 @@ fn directory_children_query(parent_id: &str, limit: usize, offset: usize) -> Str
 async fn run_query(
     client: RpcClient,
     scope_id: Option<String>,
-    query: String,
+    query: impl Into<QueryRequest>,
 ) -> std::result::Result<Vec<Object>, String> {
-    let mut payload = Object::new();
-    if let Some(scope_id) = scope_id {
-        payload.insert("scope_id", Value::String(scope_id));
-    }
-    payload.insert("query", Value::String(query));
-    payload.insert("format", Value::String("sql".to_string()));
+    let payload = query.into().payload(scope_id.as_deref());
     let response = client
-        .invoke_value("semantic.db.query", Value::Object(payload))
+        .invoke_value("semantic.db.query", payload)
         .await
         .map_err(|error| error.to_string())?;
     let Value::Object(response) = response else {
@@ -247,6 +247,34 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test]
+    async fn normal_playlists_use_ast_and_advanced_playlists_stay_text() {
+        let (client, calls) = crate::query_ast::tests::capture_client();
+        let filter = PlaylistFilter::default();
+        load_playlist(client.clone(), Some("scope".into()), filter.clone())
+            .await
+            .unwrap();
+        let QueryRequest::Ast(query) = playlist_query(&filter, 0).unwrap() else {
+            panic!("AST playlist")
+        };
+        let mut raw = filter;
+        raw.advanced_sql = true;
+        load_playlist(client, Some("scope".into()), raw.clone())
+            .await
+            .unwrap();
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        crate::query_ast::tests::assert_ast_call(&calls[0], &query, Some("scope"));
+        let Value::Object(payload) = &calls[1].1 else {
+            panic!("object")
+        };
+        assert_eq!(
+            payload.get("query").and_then(Value::as_str),
+            Some(raw.sql.as_str())
+        );
+        assert_eq!(payload.get("format").and_then(Value::as_str), Some("sql"));
+    }
+
     #[test]
     fn queue_entry_uses_current_qualified_mime_attribute() {
         let mut object = Object::new();
@@ -261,8 +289,23 @@ mod tests {
     #[test]
     fn directory_expansion_query_is_stable_and_paged() {
         let query = directory_children_query("a'b", 500, 1000);
-        assert!(query.contains("ORDER BY child.\"semantic:created_at\" DESC, child.id ASC"));
-        assert!(query.contains("'a''b'"));
-        assert!(query.contains("LIMIT 500 OFFSET 1000"));
+        assert_eq!(
+            query.order_by,
+            vec![
+                crate::query_ast::order(
+                    Some("child"),
+                    semantic_data::attr::ATTR_CREATED_AT,
+                    semantic_data::query::SortDirection::Desc
+                ),
+                crate::query_ast::order(
+                    Some("child"),
+                    "id",
+                    semantic_data::query::SortDirection::Asc
+                )
+            ]
+        );
+        assert!(crate::query_ast::tests::contains_string(&query, "a'b"));
+        assert_eq!(query.limit, Some(500usize.into()));
+        assert_eq!(query.offset, 1000usize.into());
     }
 }

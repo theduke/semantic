@@ -18,13 +18,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "base" => write_package(&mut writer, &semantic_base::package())?,
         "filestore" => write_package(&mut writer, &semantic_data::filestore::package())?,
         "jobs" => write_package(&mut writer, &semantic_data::jobs::package())?,
+        "query" => write_package(&mut writer, &semantic_data::bundles::query::package())?,
         "core" => writer.write_all(generate_core_types().as_bytes())?,
         "--help" | "-h" => {
-            println!("usage: semantic_sdk_export [core|base|filestore|jobs] [output]")
+            println!("usage: semantic_sdk_export [core|base|filestore|jobs|query] [output]")
         }
         other => {
             return Err(format!(
-                "unknown target '{other}' (expected core, base, filestore or jobs)"
+                "unknown target '{other}' (expected core, base, filestore, jobs or query)"
             )
             .into());
         }
@@ -45,7 +46,7 @@ fn write_package(
 fn generate_core_types() -> String {
     let roots = [
         <semantic_data::schema::Package as Facet>::SHAPE,
-        <semantic_db_core::Query as Facet>::SHAPE,
+        <semantic_data::query::Query as Facet>::SHAPE,
         <semantic_db_core::QueryResult as Facet>::SHAPE,
         <semantic_db_core::Entity as Facet>::SHAPE,
         <semantic_db_core::BatchOperation as Facet>::SHAPE,
@@ -449,6 +450,29 @@ mod tests {
         assert!(output.contains("attributes"));
         assert!(output.contains("classes"));
         assert!(output.contains("strict_schema"));
+    }
+
+    #[test]
+    fn exports_complete_canonical_query_schema_package() {
+        let package = semantic_data::bundles::query::package();
+        let mut output = Vec::new();
+        write_package(&mut output, &package).expect("query package should serialize");
+        let json = String::from_utf8(output).expect("query package should be utf-8");
+        let decoded: semantic_data::schema::Package =
+            facet_json::from_str(&json).expect("query package should roundtrip");
+        assert_eq!(decoded, package);
+        assert!(decoded.root.types.contains_key("semantic:query:Query"));
+        assert!(
+            decoded
+                .root
+                .types
+                .contains_key("semantic:query:DdlOperation")
+        );
+        assert!(decoded.root.types.contains_key("semantic:schema:Type"));
+        assert!(decoded.root.types.contains_key("semantic:expr:Expr"));
+        assert!(json.contains("\"named\""));
+        assert!(json.contains("\"parameter\""));
+        assert!(json.contains("\"projection_ref\""));
     }
 
     #[test]

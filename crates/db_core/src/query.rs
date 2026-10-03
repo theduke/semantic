@@ -23,6 +23,10 @@ pub enum TextQueryFormat {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextQueryInput {
     Ast(Query),
+    AstWithParams {
+        query: Query,
+        params: BTreeMap<String, Value>,
+    },
     Text {
         format: TextQueryFormat,
         query: String,
@@ -31,6 +35,13 @@ pub enum TextQueryInput {
 }
 
 impl TextQueryInput {
+    pub fn ast_with_params(query: impl Into<Query>, params: BTreeMap<String, Value>) -> Self {
+        Self::AstWithParams {
+            query: query.into(),
+            params,
+        }
+    }
+
     pub fn sql_with_params(query: impl Into<String>, params: BTreeMap<String, Value>) -> Self {
         Self::Text {
             format: TextQueryFormat::Sql,
@@ -126,6 +137,10 @@ impl From<public_query::QueryInput> for TextQueryInput {
     fn from(value: public_query::QueryInput) -> Self {
         match value {
             public_query::QueryInput::Ast(query) => Self::Ast(query.into()),
+            public_query::QueryInput::AstWithParams { query, params } => Self::AstWithParams {
+                query: query.into(),
+                params,
+            },
             public_query::QueryInput::Text {
                 format,
                 query,
@@ -140,6 +155,11 @@ impl From<public_query::QueryInput> for TextQueryInput {
 }
 
 pub type QueryInput = TextQueryInput;
+
+#[path = "query/binding.rs"]
+mod binding;
+#[path = "query/semantics.rs"]
+mod semantics;
 
 pub use prql::*;
 pub use sql::*;
@@ -224,6 +244,7 @@ impl ObjectAccess for BTreeMap<String, Value> {
 pub enum Operand {
     Field(FieldPath),
     Literal(Value),
+    Parameter(String),
 }
 
 pub type FunctionArg = semantic_data::query::FunctionArg<Expr>;
@@ -233,6 +254,11 @@ pub type FunctionArg = semantic_data::query::FunctionArg<Expr>;
 #[facet(rename_all = "snake_case")]
 pub enum Expr {
     Operand(Operand),
+    /// Resolve a GROUP BY or ORDER BY expression against the SELECT projection,
+    /// including 1-based ordinals and ORDER BY aliases. Valid only as a clause
+    /// root; resolved after parameter binding. Ordinary expressions do not use
+    /// these SQL projection-reference rules.
+    ProjectionRef(Box<Expr>),
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
@@ -435,11 +461,24 @@ impl From<DdlQuery> for Query {
     }
 }
 
+impl From<public_query::DdlQuery> for DdlQuery {
+    fn from(value: public_query::DdlQuery) -> Self {
+        Self { batch: value.batch }
+    }
+}
+
+impl From<DdlQuery> for public_query::DdlQuery {
+    fn from(value: DdlQuery) -> Self {
+        Self { batch: value.batch }
+    }
+}
+
 impl From<public_query::Operand> for Operand {
     fn from(value: public_query::Operand) -> Self {
         match value {
             public_query::Operand::Field(path) => Self::Field(path),
             public_query::Operand::Literal(value) => Self::Literal(value),
+            public_query::Operand::Parameter(name) => Self::Parameter(name),
         }
     }
 }
@@ -448,6 +487,9 @@ impl From<public_query::Expr> for Expr {
     fn from(value: public_query::Expr) -> Self {
         match value {
             public_query::Expr::Operand(operand) => Self::Operand(operand.into()),
+            public_query::Expr::ProjectionRef(expr) => {
+                Self::ProjectionRef(Box::new((*expr).into()))
+            }
             public_query::Expr::Unary { op, expr } => Self::Unary {
                 op,
                 expr: Box::new((*expr).into()),
@@ -573,7 +615,7 @@ impl From<public_query::QueryField> for QueryField {
         Self {
             expr: Box::new((*value.expr).into()),
             alias: value.alias,
-            wildcard: None,
+            wildcard: value.wildcard,
         }
     }
 }
@@ -699,6 +741,278 @@ impl From<public_query::Query> for Query {
             public_query::Query::Insert(query) => Self::Insert(query.into()),
             public_query::Query::Update(query) => Self::Update(query.into()),
             public_query::Query::Delete(query) => Self::Delete(query.into()),
+            public_query::Query::Ddl(query) => Self::Ddl(query.into()),
+        }
+    }
+}
+
+impl From<Operand> for public_query::Operand {
+    fn from(value: Operand) -> Self {
+        match value {
+            Operand::Field(path) => Self::Field(path),
+            Operand::Literal(value) => Self::Literal(value),
+            Operand::Parameter(name) => Self::Parameter(name),
+        }
+    }
+}
+
+impl From<Expr> for public_query::Expr {
+    fn from(value: Expr) -> Self {
+        match value {
+            Expr::Operand(operand) => Self::Operand(operand.into()),
+            Expr::ProjectionRef(expr) => Self::ProjectionRef(Box::new((*expr).into())),
+            Expr::Unary { op, expr } => Self::Unary {
+                op,
+                expr: Box::new((*expr).into()),
+            },
+            Expr::Binary { op, left, right } => Self::Binary {
+                op,
+                left: Box::new((*left).into()),
+                right: Box::new((*right).into()),
+            },
+            Expr::IfElse {
+                cond,
+                then_expr,
+                else_expr,
+            } => Self::IfElse {
+                cond: Box::new((*cond).into()),
+                then_expr: Box::new((*then_expr).into()),
+                else_expr: Box::new((*else_expr).into()),
+            },
+            Expr::Coalesce(items) => Self::Coalesce(items.into_iter().map(Into::into).collect()),
+            Expr::Function { name, args } => Self::Function {
+                name,
+                args: args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        public_query::FunctionArg::Expr(expr) => {
+                            public_query::FunctionArg::Expr(expr.into())
+                        }
+                        public_query::FunctionArg::Wildcard => public_query::FunctionArg::Wildcard,
+                    })
+                    .collect(),
+            },
+            Expr::Aggregate { op, distinct, arg } => Self::Aggregate {
+                op,
+                distinct,
+                arg: Box::new(match *arg {
+                    public_query::FunctionArg::Expr(expr) => {
+                        public_query::FunctionArg::Expr(expr.into())
+                    }
+                    public_query::FunctionArg::Wildcard => public_query::FunctionArg::Wildcard,
+                }),
+            },
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => Self::InList {
+                expr: Box::new((*expr).into()),
+                list: list.into_iter().map(Into::into).collect(),
+                negated,
+            },
+            Expr::Subquery(query) => Self::Subquery(Box::new((*query).into())),
+            Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Self::Between {
+                expr: Box::new((*expr).into()),
+                low: Box::new((*low).into()),
+                high: Box::new((*high).into()),
+                negated,
+            },
+            Expr::PatternMatch {
+                kind,
+                expr,
+                pattern,
+                case_insensitive,
+                negated,
+            } => Self::PatternMatch {
+                kind,
+                expr: Box::new((*expr).into()),
+                pattern: Box::new((*pattern).into()),
+                case_insensitive,
+                negated,
+            },
+            Expr::RegexMatch {
+                expr,
+                pattern,
+                case_insensitive,
+                negated,
+            } => Self::RegexMatch {
+                expr: Box::new((*expr).into()),
+                pattern: Box::new((*pattern).into()),
+                case_insensitive,
+                negated,
+            },
+            Expr::TextMatch {
+                exprs,
+                query,
+                mode,
+                analyzer,
+            } => Self::TextMatch {
+                exprs: exprs.into_iter().map(Into::into).collect(),
+                query: Box::new((*query).into()),
+                mode,
+                analyzer,
+            },
+            Expr::IsNull { expr, negated } => Self::IsNull {
+                expr: Box::new((*expr).into()),
+                negated,
+            },
+            Expr::Exists { query, negated } => Self::Exists {
+                query: Box::new((*query).into()),
+                negated,
+            },
+            Expr::RelationExists {
+                relation,
+                source,
+                target,
+                transitive,
+                max_depth,
+            } => Self::RelationExists {
+                relation: Box::new((*relation).into()),
+                source: Box::new((*source).into()),
+                target: Box::new((*target).into()),
+                transitive,
+                max_depth: max_depth.map(|value| Box::new((*value).into())),
+            },
+        }
+    }
+}
+
+impl From<QueryField> for public_query::QueryField {
+    fn from(value: QueryField) -> Self {
+        Self {
+            expr: Box::new((*value.expr).into()),
+            alias: value.alias,
+            wildcard: value.wildcard,
+        }
+    }
+}
+
+impl From<OrderBy> for public_query::OrderBy {
+    fn from(value: OrderBy) -> Self {
+        Self {
+            expr: value.expr.into(),
+            direction: value.direction,
+        }
+    }
+}
+
+impl From<JoinCondition> for public_query::JoinCondition {
+    fn from(value: JoinCondition) -> Self {
+        match value {
+            JoinCondition::OnExpr(expr) => Self::OnExpr(expr.into()),
+            JoinCondition::UsingFields { left, right } => Self::UsingFields { left, right },
+        }
+    }
+}
+
+impl From<JoinQuery> for public_query::JoinQuery {
+    fn from(value: JoinQuery) -> Self {
+        Self {
+            source: public_query::JoinSource {
+                collection: value.source.collection,
+                class: value.source.class,
+            },
+            alias: value.alias,
+            join_type: value.join_type,
+            condition: value.condition.into(),
+            predicate: value.predicate.map(Into::into),
+        }
+    }
+}
+
+impl From<SelectQuery> for public_query::SelectQuery {
+    fn from(value: SelectQuery) -> Self {
+        Self {
+            collection: value.collection,
+            source_alias: value.source_alias,
+            joins: value.joins.into_iter().map(Into::into).collect(),
+            predicate: value.predicate.map(Into::into),
+            projection: value.projection.into_iter().map(Into::into).collect(),
+            distinct: value.distinct,
+            group_by: value.group_by.into_iter().map(Into::into).collect(),
+            having: value.having.map(Into::into),
+            order_by: value.order_by.into_iter().map(Into::into).collect(),
+            offset: value.offset.into(),
+            limit: value.limit.map(Into::into),
+            field_format: value.field_format.into(),
+        }
+    }
+}
+
+impl From<Assignment> for public_query::Assignment {
+    fn from(value: Assignment) -> Self {
+        Self {
+            path: value.path,
+            value: value.value.into(),
+        }
+    }
+}
+
+impl From<InsertSource> for public_query::InsertSource {
+    fn from(value: InsertSource) -> Self {
+        match value {
+            InsertSource::Objects(objects) => Self::Objects(objects),
+            InsertSource::Values(rows) => Self::Values(
+                rows.into_iter()
+                    .map(|row| row.into_iter().map(Into::into).collect())
+                    .collect(),
+            ),
+            InsertSource::Select(query) => Self::Select(query.into()),
+        }
+    }
+}
+
+impl From<InsertQuery> for public_query::InsertQuery {
+    fn from(value: InsertQuery) -> Self {
+        Self {
+            collection: value.collection,
+            columns: value.columns,
+            source: value.source.into(),
+            returning: value.returning.into_iter().map(Into::into).collect(),
+            field_format: value.field_format.into(),
+        }
+    }
+}
+
+impl From<UpdateQuery> for public_query::UpdateQuery {
+    fn from(value: UpdateQuery) -> Self {
+        Self {
+            collection: value.collection,
+            predicate: value.predicate.map(Into::into),
+            assignments: value.assignments.into_iter().map(Into::into).collect(),
+            limit: value.limit.map(Into::into),
+            returning: value.returning.into_iter().map(Into::into).collect(),
+            field_format: value.field_format.into(),
+        }
+    }
+}
+
+impl From<DeleteQuery> for public_query::DeleteQuery {
+    fn from(value: DeleteQuery) -> Self {
+        Self {
+            collection: value.collection,
+            predicate: value.predicate.map(Into::into),
+            limit: value.limit.map(Into::into),
+            returning: value.returning.into_iter().map(Into::into).collect(),
+            field_format: value.field_format.into(),
+        }
+    }
+}
+
+impl From<Query> for public_query::Query {
+    fn from(value: Query) -> Self {
+        match value {
+            Query::Select(query) => Self::Select(query.into()),
+            Query::Insert(query) => Self::Insert(query.into()),
+            Query::Update(query) => Self::Update(query.into()),
+            Query::Delete(query) => Self::Delete(query.into()),
+            Query::Ddl(query) => Self::Ddl(query.into()),
         }
     }
 }
@@ -1583,6 +1897,7 @@ fn apply_delete_plan(query: &DeleteQuery, entities: Vec<Entity>) -> DeletePlanRe
 pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option<Value> {
     match expr {
         Expr::Operand(operand) => resolve_operand(value, operand).map(|v| v.into_owned()),
+        Expr::ProjectionRef(_) => None,
         Expr::Unary { op, expr } => {
             let value = evaluate_expr(value, expr)?;
             match op {
@@ -1972,6 +2287,7 @@ fn resolve_operand<'a, T: ObjectAccess + ?Sized>(
     match operand {
         Operand::Field(path) => value.value_at_path_ref(path),
         Operand::Literal(value) => Some(ValueRef::Ref(value)),
+        Operand::Parameter(_) => None,
     }
 }
 

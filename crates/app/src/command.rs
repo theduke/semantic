@@ -317,6 +317,8 @@ impl SemanticAppBuilder {
     }
 
     pub fn register_builtin_commands(mut self) -> std::result::Result<Self, AppError> {
+        self.registry
+            .register_definitions(semantic_data::query::semantic::definitions())?;
         self.registry.register(ScopeOpenCommand)?;
         self.registry.register(ScopeUseCommand)?;
         self.registry.register(ScopeCurrentCommand)?;
@@ -324,6 +326,7 @@ impl SemanticAppBuilder {
         self.registry.register(DbCatalogCommand)?;
         self.registry.register(DbPackageUpsertCommand)?;
         self.registry.register(DbQueryCommand)?;
+        self.registry.register(DbParseSqlCommand)?;
         self.registry.register(DbGetCommand)?;
         self.registry.register(DbInsertCommand)?;
         self.registry.register(DbDeleteCommand)?;
@@ -381,6 +384,7 @@ impl SemanticAppBuilder {
         }
         self.packages.push(semantic_data::filestore::package());
         self.packages.push(import_package);
+        self.packages.push(semantic_data::bundles::query::package());
         self.packages.extend(packages);
         let scopes = ScopeManager::with_packages(self.providers, self.idle_ttl, self.packages);
         let object_stores = ObjectStoreManager::new(Vec::new());
@@ -405,8 +409,11 @@ impl SemanticAppBuilder {
         let command_interface =
             semantic_rpc::interface::registry::registry_interface(&self.registry);
         let command_descriptor =
-            semantic_rpc::interface::registry::registry_descriptor(&command_interface)
-                .map_err(crate::plugins::error)?;
+            semantic_rpc::interface::registry::registry_descriptor_with_definitions(
+                &command_interface,
+                self.registry.definitions(),
+            )
+            .map_err(crate::plugins::error)?;
         Ok(SemanticApp {
             inner: Arc::new(SemanticAppInner {
                 registry: Arc::new(self.registry),
@@ -430,6 +437,7 @@ struct ScopeListCommand;
 struct DbCatalogCommand;
 struct DbPackageUpsertCommand;
 struct DbQueryCommand;
+struct DbParseSqlCommand;
 struct DbGetCommand;
 struct DbInsertCommand;
 struct DbDeleteCommand;
@@ -461,6 +469,7 @@ command_spec!(
     PackageUpsertPayload => PackageUpsertOutput
 );
 command_spec!(DbQueryCommand, "semantic.db.query", QueryPayload => QueryOutput);
+command_spec!(DbParseSqlCommand, "semantic.db.query.parse_sql", ParseSqlPayload => semantic_data::query::Query);
 command_spec!(DbGetCommand, "semantic.db.get", EntityPayload => Option<EntityOutput>);
 command_spec!(DbInsertCommand, "semantic.db.insert", InsertPayload => ());
 command_spec!(DbDeleteCommand, "semantic.db.delete", EntityPayload => ());
@@ -624,11 +633,88 @@ enum QueryFormat {
 #[derive(SemanticType, IntoValue, FromValue)]
 struct QueryPayload {
     scope_id: Option<String>,
-    query: String,
-    /// Defaults to `sql`.
+    /// Construct an AST directly, or supply query text as a fallback.
+    query: QueryArgument,
+    /// Text language; defaults to `sql`. Must be omitted for ASTs.
     format: Option<QueryFormat>,
     #[semantic(default)]
-    params: BTreeMap<String, Value>,
+    params: CommandDictionary<Value>,
+}
+
+/// Open, typed command dictionaries. Keep this correction local until the
+/// generic BTreeMap schema can change independently of existing contracts.
+pub(crate) struct CommandDictionary<T>(pub BTreeMap<String, T>);
+
+impl<T> Default for CommandDictionary<T> {
+    fn default() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl<T: SemanticType> SemanticType for CommandDictionary<T> {
+    fn semantic_type() -> Type {
+        let mut ty = BTreeMap::<String, T>::semantic_type();
+        if let TypeKind::Record(record) = &mut ty.kind {
+            record.open = true;
+        }
+        ty
+    }
+}
+
+impl<T: IntoValue> IntoValue for CommandDictionary<T> {
+    fn into_value(self) -> Value {
+        self.0.into_value()
+    }
+}
+
+impl<T: FromValue> FromValue for CommandDictionary<T> {
+    fn from_value(value: Value) -> Result<Self, FromValueError> {
+        BTreeMap::<String, T>::from_value(value).map(Self)
+    }
+}
+
+/// An untagged query AST or the existing query text input.
+enum QueryArgument {
+    Ast(semantic_data::query::Query),
+    Text(String),
+}
+
+impl SemanticType for QueryArgument {
+    fn semantic_type() -> Type {
+        Type::new(TypeKind::Union(UnionType {
+            variants: vec![
+                semantic_data::query::Query::semantic_type(),
+                String::semantic_type(),
+            ],
+        }))
+    }
+}
+
+impl IntoValue for QueryArgument {
+    fn into_value(self) -> Value {
+        match self {
+            Self::Ast(query) => query.into_value(),
+            Self::Text(query) => query.into_value(),
+        }
+    }
+}
+
+impl FromValue for QueryArgument {
+    fn from_value(value: Value) -> Result<Self, FromValueError> {
+        match value {
+            Value::String(query) => Ok(Self::Text(query)),
+            value @ Value::Object(_) => {
+                semantic_data::query::Query::from_value(value).map(Self::Ast)
+            }
+            other => Err(FromValueError::expected("query AST or query text", &other)),
+        }
+    }
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ParseSqlPayload {
+    scope_id: Option<String>,
+    query: String,
 }
 
 #[derive(SemanticType, IntoValue, FromValue)]
@@ -1142,19 +1228,47 @@ impl RpcCommand<AppRequestContext> for DbQueryCommand {
         payload: QueryPayload,
     ) -> CommandFuture<'a, QueryOutput> {
         Box::pin(async move {
-            let format = match payload.format.unwrap_or_default() {
-                QueryFormat::Sql => TextQueryFormat::Sql,
-                QueryFormat::Prql => TextQueryFormat::Prql,
-            };
+            if matches!(payload.query, QueryArgument::Ast(_)) && payload.format.is_some() {
+                return Err(AppError::InvalidRequest(
+                    "format must be omitted for query ASTs".into(),
+                ));
+            }
             let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
-            let result = db
-                .query(TextQueryInput::Text {
-                    format,
-                    query: payload.query,
-                    params: payload.params,
-                })
-                .await?;
+            let result = match payload.query {
+                QueryArgument::Ast(query) => {
+                    db.query_data(semantic_data::query::QueryInput::ast_with_params(
+                        query,
+                        payload.params.0,
+                    ))
+                    .await?
+                }
+                QueryArgument::Text(query) => {
+                    let format = match payload.format.unwrap_or_default() {
+                        QueryFormat::Sql => TextQueryFormat::Sql,
+                        QueryFormat::Prql => TextQueryFormat::Prql,
+                    };
+                    db.query(TextQueryInput::Text {
+                        format,
+                        query,
+                        params: payload.params.0,
+                    })
+                    .await?
+                }
+            };
             Ok(result.into())
+        })
+    }
+}
+
+impl RpcCommand<AppRequestContext> for DbParseSqlCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: ParseSqlPayload,
+    ) -> CommandFuture<'a, semantic_data::query::Query> {
+        Box::pin(async move {
+            let db = ctx.resolve_db(payload.scope_id.map(DbScopeId::new)).await?;
+            Ok(db.parse_sql(payload.query).await?)
         })
     }
 }

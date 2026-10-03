@@ -28,8 +28,11 @@ pub enum SubCmd {
     Plugin(plugin::Args),
     /// Inspect, cancel, and clear scope jobs.
     Jobs(jobs::Args),
-    /// Execute a SQL or PRQL query and print the API result as JSON.
+    /// Execute a query AST, SQL, or PRQL and print the API result as JSON.
     Query(query::Args),
+
+    /// Parse SQL without executing it; emit reusable typed Semantic AST JSON.
+    ParseSql(query::ParseSqlArgs),
 
     /// Fetch one record by ID from a collection.
     Get(get::Args),
@@ -66,6 +69,7 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
         SubCmd::Plugin(args) => plugin::run(args).await,
         SubCmd::Jobs(args) => jobs::run(args).await,
         SubCmd::Query(args) => query::run(args).await,
+        SubCmd::ParseSql(args) => query::parse_sql(args).await,
         SubCmd::Get(args) => get::run(args).await,
         SubCmd::Delete(args) => delete::run(args).await,
         SubCmd::Catalog(args) => catalog::run(args).await,

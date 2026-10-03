@@ -99,13 +99,7 @@ pub enum CollectionKind {
     Polymorphic,
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum IntegrityMode {
-    Permissive,
-    StrictRegisteredSchema,
-}
+pub use semantic_data::query::IntegrityMode;
 
 #[derive(Debug, Clone)]
 pub struct CollectionSchema {

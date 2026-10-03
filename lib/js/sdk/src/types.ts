@@ -34,7 +34,7 @@ export type SchemaExpression = import("./generated/core.js").expression_Expr;
 /** Exact reflected multi-field and attribute class constraints. */
 export type ClassConstraint = import("./generated/core.js").ClassConstraint;
 /** Exact reflected DDL batch accepted by an RPC DDL query. */
-export type DdlBatch = import("./generated/core.js").DdlBatch;
+export type DdlBatch = import("./generated/query.js").semantic_query_DdlBatch;
 /** Exact reflected DDL operation accepted by a package migration. */
 export type MigrationDdlOperation =
   import("./generated/core.js").MigrationDdlOperation;
@@ -79,152 +79,72 @@ export type TaggedValue =
   | { object: Record<string, TaggedValue> }
   | { variant: { type?: string; variant: string; value: TaggedValue } };
 
-export type PathSegment = { field: string } | { index: number };
-export type FieldPath = PathSegment[];
+/** Exact scalar wrappers returned by RPC, also accepted when constructing ASTs. */
+export type TaggedScalar<K extends keyof ScalarPayloads> = {
+  readonly $tagged: ScalarPayloads[K];
+};
+type ScalarPayloads = {
+  [T in Exclude<TaggedValue, string> as keyof T]: T;
+};
+
+export type PathSegment =
+  import("./generated/query.js").semantic_value_PathSegment;
+export type FieldPath = import("./generated/query.js").semantic_value_FieldPath;
 export type ValidationError = import("./generated/core.js").ValidationError;
 export type ValidationViolation =
   import("./generated/core.js").ValidationViolation;
-export type BinaryOp =
-  | "add"
-  | "sub"
-  | "mul"
-  | "div"
-  | "mod"
-  | "concat"
-  | "and"
-  | "or"
-  | "eq"
-  | "not_eq"
-  | "lt"
-  | "lte"
-  | "gt"
-  | "gte"
-  | "in";
-export type UnaryOp = "not" | "neg";
-export type AggregateOp = "count" | "sum" | "avg" | "min" | "max";
-export type FunctionArg<T> = { expr: T } | "wildcard";
-export type Operand = { field: FieldPath } | { literal: SemanticValue };
-export type Expr =
-  | { operand: Operand }
-  | { unary: { op: UnaryOp; expr: Expr } }
-  | { binary: { op: BinaryOp; left: Expr; right: Expr } }
-  | { if_else: { cond: Expr; then_expr: Expr; else_expr: Expr } }
-  | { coalesce: Expr[] }
-  | { function: { name: string; args: FunctionArg<Expr>[] } }
-  | {
-      aggregate: { op: AggregateOp; distinct: boolean; arg: FunctionArg<Expr> };
-    }
-  | { in_list: { expr: Expr; list: Expr[]; negated: boolean } }
-  | { subquery: SelectQuery }
-  | { between: { expr: Expr; low: Expr; high: Expr; negated: boolean } }
-  | {
-      pattern_match: {
-        kind: "like" | "similar_to";
-        expr: Expr;
-        pattern: Expr;
-        case_insensitive: boolean;
-        negated: boolean;
-      };
-    }
-  | {
-      regex_match: {
-        expr: Expr;
-        pattern: Expr;
-        case_insensitive: boolean;
-        negated: boolean;
-      };
-    }
-  | { is_null: { expr: Expr; negated: boolean } }
-  | { exists: { query: SelectQuery; negated: boolean } }
-  | {
-      relation_exists: {
-        relation: Expr;
-        source: Expr;
-        target: Expr;
-        transitive: boolean;
-        max_depth: Expr | null;
-      };
-    };
-export type FieldFormat = "plain" | "qualified" | "underscore";
-export interface QueryField {
-  expr: Expr;
-  alias: string | null;
-  wildcard: FieldPath | null;
-}
-export interface OrderBy {
-  expr: Expr;
-  direction: "asc" | "desc";
-}
-export interface JoinSource {
-  collection: string | null;
-  class: string | null;
-}
+// Canonical AST aliases generated from the Semantic query schema.
+export type BinaryOp = import("./generated/query.js").semantic_query_BinaryOp;
+export type UnaryOp = import("./generated/query.js").semantic_query_UnaryOp;
+export type AggregateOp =
+  import("./generated/query.js").semantic_query_AggregateOp;
+/** Generic convenience; FunctionArg<Expr> matches the generated canonical specialization. */
+export type FunctionArg<T = Expr> = { expr: T } | "wildcard";
+export type Operand = import("./generated/query.js").semantic_query_Operand;
+export type Expr = import("./generated/query.js").semantic_query_Expr;
+export type FieldFormat =
+  import("./generated/query.js").semantic_query_FieldFormat;
+export type QueryField =
+  import("./generated/query.js").semantic_query_QueryField;
+export type OrderBy = import("./generated/query.js").semantic_query_OrderBy;
+export type JoinSource =
+  import("./generated/query.js").semantic_query_JoinSource;
 export type JoinCondition =
-  | { on_expr: Expr }
-  | { using_fields: { left: FieldPath; right: FieldPath } };
-export interface JoinQuery {
-  source: JoinSource;
-  alias: string | null;
-  join_type: "inner" | "left" | "right" | "full";
-  condition: JoinCondition;
-  predicate: Expr | null;
-}
-export interface SelectQuery {
-  collection: string | null;
-  source_alias: string | null;
-  joins: JoinQuery[];
-  predicate: Expr | null;
-  projection: QueryField[];
-  distinct: boolean;
-  group_by: Expr[];
-  having: Expr | null;
-  order_by: OrderBy[];
-  offset: Expr;
-  limit: Expr | null;
-  field_format: FieldFormat;
-}
+  import("./generated/query.js").semantic_query_JoinCondition;
+export type JoinQuery = import("./generated/query.js").semantic_query_JoinQuery;
+export type JoinType = import("./generated/query.js").semantic_query_JoinType;
+export type SortDirection =
+  import("./generated/query.js").semantic_query_SortDirection;
+export type PatternMatchKind =
+  import("./generated/query.js").semantic_query_PatternMatchKind;
+export type TextAnalyzer =
+  import("./generated/query.js").semantic_query_TextAnalyzer;
+export type TextMatchMode =
+  import("./generated/query.js").semantic_query_TextMatchMode;
+export type SelectQuery =
+  import("./generated/query.js").semantic_query_SelectQuery;
 export type InsertSource =
-  | { objects: SemanticObject[] }
-  | { values: Expr[][] }
-  | { select: SelectQuery };
-export interface InsertQuery {
-  collection: string | null;
-  columns: string[];
-  source: InsertSource;
-  returning: QueryField[];
-  field_format: FieldFormat;
-}
-export interface Assignment {
-  path: FieldPath;
-  value: Expr;
-}
-export interface UpdateQuery {
-  collection: string | null;
-  predicate: Expr | null;
-  assignments: Assignment[];
-  limit: Expr | null;
-  returning: QueryField[];
-  field_format: FieldFormat;
-}
-export interface DeleteQuery {
-  collection: string | null;
-  predicate: Expr | null;
-  limit: Expr | null;
-  returning: QueryField[];
-  field_format: FieldFormat;
-}
-export interface DdlQuery {
-  batch: DdlBatch;
-}
-export type Query =
-  | { select: SelectQuery }
-  | { insert: InsertQuery }
-  | { update: UpdateQuery }
-  | { delete: DeleteQuery }
-  | { ddl: DdlQuery };
+  import("./generated/query.js").semantic_query_InsertSource;
+export type InsertQuery =
+  import("./generated/query.js").semantic_query_InsertQuery;
+export type Assignment =
+  import("./generated/query.js").semantic_query_Assignment;
+export type UpdateQuery =
+  import("./generated/query.js").semantic_query_UpdateQuery;
+export type DeleteQuery =
+  import("./generated/query.js").semantic_query_DeleteQuery;
+export type DdlQuery = import("./generated/query.js").semantic_query_DdlQuery;
+export type DdlOperation =
+  import("./generated/query.js").semantic_query_DdlOperation;
+export type DdlCollectionKind =
+  import("./generated/query.js").semantic_query_DdlCollectionKind;
+export type IntegrityMode =
+  import("./generated/query.js").semantic_query_IntegrityMode;
+export type Query = import("./generated/query.js").semantic_query_Query;
 export type QueryInput =
-  | { ast: Query }
-  | { text: { format: "sql" | "prql"; query: string } };
+  import("./generated/query.js").semantic_query_QueryInput;
+export type TextQueryFormat =
+  import("./generated/query.js").semantic_query_TextQueryFormat;
 
 export interface Deprecation {
   note: string | null;
@@ -455,7 +375,14 @@ export type TypeKind =
   | { stream: StreamType }
   | { opaque: OpaqueType }
   | { extension: ExtensionType }
-  | { ref: TypeRef };
+  | { named: TypeRef }
+  | {
+      ref: {
+        name?: string | null;
+        args?: TypeNode[];
+        on_delete?: "restrict" | "cascade";
+      };
+    };
 export type AnnotationValue =
   | { bool: boolean }
   | { number: string }
@@ -725,8 +652,11 @@ export interface FileAnalysisOutcome {
   object: SemanticObject;
 }
 
+export type ValueDecoding = "convenient" | "exact";
+
 export interface CommandDefinition<P = SemanticObject, O = SemanticValue> {
   readonly name: string;
+  readonly valueDecoding?: ValueDecoding;
   readonly _payload?: P;
   readonly _output?: O;
 }

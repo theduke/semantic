@@ -198,7 +198,9 @@ pub fn index_range_fallback_stream<S: AsyncPhysicalDataSource + ?Sized>(
 fn expr_contains_relation_exists(expr: &Expr) -> bool {
     match expr {
         Expr::RelationExists { .. } => true,
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => expr_contains_relation_exists(expr),
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+            expr_contains_relation_exists(expr)
+        }
         Expr::Binary { left, right, .. }
         | Expr::PatternMatch {
             expr: left,
@@ -1462,7 +1464,7 @@ impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
 fn expr_contains_subquery(expr: &Expr) -> bool {
     match expr {
         Expr::Operand(_) => false,
-        Expr::Unary { expr, .. } => expr_contains_subquery(expr),
+        Expr::Unary { expr, .. } | Expr::ProjectionRef(expr) => expr_contains_subquery(expr),
         Expr::Binary { left, right, .. } => {
             expr_contains_subquery(left) || expr_contains_subquery(right)
         }
@@ -1587,6 +1589,7 @@ fn resolve_expr_subqueries_async<'a>(
     async move {
         match expr {
             Expr::Operand(_) => Ok(expr.clone()),
+            Expr::ProjectionRef(_) => Err(CoreError::new("unresolved projection reference")),
             Expr::Unary { op, expr }
                 if *op == semantic_data::query::UnaryOp::Not
                     && matches!(

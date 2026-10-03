@@ -410,7 +410,8 @@ impl Backend for PostgresBackend {
 
     async fn query(&self, input: TextQueryInput) -> Result<QueryResult, DbError> {
         let query = match input {
-            TextQueryInput::Ast(q) => q,
+            TextQueryInput::Ast(q) => q.into_bound(&std::collections::BTreeMap::new())?,
+            TextQueryInput::AstWithParams { query, params } => query.into_bound(&params)?,
             TextQueryInput::Text {
                 format,
                 query,
@@ -457,7 +458,8 @@ impl Backend for PostgresBackend {
 
     async fn explain(&self, query: TextQueryInput) -> Result<QueryExplain, DbError> {
         let query = match query {
-            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Ast(query) => query.into_bound(&std::collections::BTreeMap::new())?,
+            TextQueryInput::AstWithParams { query, params } => query.into_bound(&params)?,
             TextQueryInput::Text {
                 format,
                 query,
@@ -490,7 +492,8 @@ impl Backend for PostgresBackend {
 
     async fn plan(&self, query: TextQueryInput) -> Result<QueryPlan, DbError> {
         let query = match query {
-            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Ast(query) => query.into_bound(&std::collections::BTreeMap::new())?,
+            TextQueryInput::AstWithParams { query, params } => query.into_bound(&params)?,
             TextQueryInput::Text {
                 format,
                 query,

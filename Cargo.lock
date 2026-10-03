@@ -9270,6 +9270,7 @@ dependencies = [
  "semantic_base",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_kv",
  "semantic_db_redb",
  "semantic_rpc",
  "semantic_rpc_core",

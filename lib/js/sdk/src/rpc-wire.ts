@@ -1,6 +1,6 @@
 import { ProtocolError, RpcError } from "./errors.js";
-import type { SemanticValue, TaggedValue } from "./types.js";
-import { decodeTagged, encodeTagged } from "./values.js";
+import type { SemanticValue, TaggedValue, ValueDecoding } from "./types.js";
+import { decodeTagged, decodeTaggedExact, encodeTagged } from "./values.js";
 
 export interface RpcEnvelope {
   id: bigint;
@@ -29,7 +29,10 @@ export class RpcRequestEncoder {
 }
 
 /** Decode an RPC response and preserve structured application errors. */
-export function resolveRpcResponse(raw: unknown): SemanticValue | undefined {
+export function resolveRpcResponse(
+  raw: unknown,
+  valueDecoding: ValueDecoding = "convenient",
+): SemanticValue | undefined {
   if (!raw || typeof raw !== "object" || !("result" in raw))
     throw new ProtocolError("invalid RPC response envelope");
   const response = raw as RpcResponseEnvelope;
@@ -45,5 +48,7 @@ export function resolveRpcResponse(raw: unknown): SemanticValue | undefined {
   }
   if (!("ok" in response.result))
     throw new ProtocolError("RPC response has neither ok nor err result");
-  return decodeTagged(response.result.ok);
+  return valueDecoding === "exact"
+    ? decodeTaggedExact(response.result.ok, true)
+    : decodeTagged(response.result.ok);
 }

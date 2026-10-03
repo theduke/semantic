@@ -11,7 +11,7 @@ use semantic_data::bundles::directory::{
 };
 use semantic_data::value::{DateTime, Object, Value};
 
-use crate::ui_catalog::UiCatalog;
+use crate::{query_ast::query_payload, ui_catalog::UiCatalog};
 
 use super::{
     queries::{
@@ -1435,16 +1435,11 @@ async fn load_entity(
 async fn run_select_query(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
-    query: String,
+    query: semantic_data::query::SelectQuery,
 ) -> std::result::Result<Vec<Object>, String> {
-    let mut payload = Object::new();
-    if let Some(scope_id) = scope_id {
-        payload.insert("scope_id", Value::String(scope_id));
-    }
-    payload.insert("query", Value::String(query));
-    payload.insert("format", Value::String("sql".to_string()));
+    let payload = query_payload(query, scope_id.as_deref(), None);
     let response = client
-        .invoke_value("semantic.db.query", Value::Object(payload))
+        .invoke_value("semantic.db.query", payload)
         .await
         .map_err(|err| err.to_string())?;
     let Value::Object(object) = response else {

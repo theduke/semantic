@@ -11,7 +11,8 @@ use semantic_rpc::RpcClient;
 
 use crate::{
     context::{use_active_scope_id, use_rpc_client},
-    form::ref_autocomplete_query,
+    form::ref_autocomplete_query_ast,
+    query_ast::{binary, field, query_payload, string},
     ui_catalog::{EntityOpenHandler, EntityTarget, use_ui_catalog},
 };
 
@@ -35,7 +36,7 @@ impl EntityLinkProvider for SemanticEntityLinkProvider {
         let provider = self.clone();
         Box::pin(async move {
             provider
-                .query(ref_autocomplete_query(&query, &[], None))
+                .query(ref_autocomplete_query_ast(&query, &[], None))
                 .await
                 .map(entity_candidates)
                 .unwrap_or_default()
@@ -45,9 +46,9 @@ impl EntityLinkProvider for SemanticEntityLinkProvider {
     fn preview(&self, entity_id: String) -> LocalBoxFuture<'static, Option<EntityLinkPreview>> {
         let provider = self.clone();
         Box::pin(async move {
-            let sql = preview_query(&entity_id);
+            let query = preview_query(&entity_id);
             provider
-                .query(sql)
+                .query(query)
                 .await
                 .and_then(first_row)
                 .map(entity_preview)
@@ -61,24 +62,21 @@ impl EntityLinkProvider for SemanticEntityLinkProvider {
     }
 }
 
-fn preview_query(entity_id: &str) -> String {
-    format!(
-        "SELECT * FROM {} WHERE \"id\" = '{}' LIMIT 1",
-        semantic_data::builtin::DEFAULT_COLLECTION,
-        entity_id.replace('\'', "''")
-    )
+fn preview_query(entity_id: &str) -> semantic_data::query::SelectQuery {
+    use semantic_data::query::{BinaryOp, SelectQuery};
+    SelectQuery::new()
+        .with_collection(semantic_data::builtin::DEFAULT_COLLECTION)
+        .with_predicate(binary(BinaryOp::Eq, field(&["id"]), string(entity_id)))
+        .with_limit(1usize)
 }
 
 impl SemanticEntityLinkProvider {
-    async fn query(&self, sql: String) -> Option<Value> {
-        let mut payload = Object::new();
-        if let Some(scope_id) = self.scope_id.clone() {
-            payload.insert("scope_id", Value::String(scope_id));
-        }
-        payload.insert("format", Value::String("sql".to_string()));
-        payload.insert("query", Value::String(sql));
+    async fn query(&self, query: semantic_data::query::SelectQuery) -> Option<Value> {
         self.client
-            .invoke_value("semantic.db.query", Value::Object(payload))
+            .invoke_value(
+                "semantic.db.query",
+                query_payload(query, self.scope_id.as_deref(), None),
+            )
             .await
             .ok()
     }
@@ -259,10 +257,14 @@ mod tests {
     }
 
     #[test]
-    fn preview_query_escapes_entity_ids() {
+    fn preview_query_preserves_entity_ids() {
         assert_eq!(
-            preview_query("person' OR 1=1 --"),
-            "SELECT * FROM entities WHERE \"id\" = 'person'' OR 1=1 --' LIMIT 1"
+            preview_query("person' OR 1=1 --").predicate,
+            Some(binary(
+                semantic_data::query::BinaryOp::Eq,
+                field(&["id"]),
+                string("person' OR 1=1 --")
+            ))
         );
     }
 
@@ -290,11 +292,22 @@ mod tests {
             command == "semantic.db.query"
                 && matches!(payload, Value::Object(value) if value.get("scope_id").and_then(Value::as_str) == Some("scope-1"))
         }));
-        assert!(
-            matches!(&calls[0].1, Value::Object(value) if value.get("query").and_then(Value::as_str).is_some_and(|query| query.contains("ILIKE '%Ada%'")))
+        use semantic_data::{query::Query, value::FromValue};
+        let queries = calls
+            .iter()
+            .map(|(_, payload)| {
+                let Value::Object(payload) = payload else {
+                    panic!("query payload must be an object")
+                };
+                assert!(payload.get("format").is_none());
+                Query::from_value(payload.get("query").unwrap().clone())
+                    .expect("query must be a direct AST")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            queries[0],
+            ref_autocomplete_query_ast("Ada", &[], None).into()
         );
-        assert!(
-            matches!(&calls[1].1, Value::Object(value) if value.get("query").and_then(Value::as_str).is_some_and(|query| query.contains("WHERE \"id\" = 'person-1'")))
-        );
+        assert_eq!(queries[1], preview_query("person-1").into());
     }
 }

@@ -6,7 +6,11 @@ import type {
   SemanticValue,
   SemanticVariant,
   TaggedValue,
+  TaggedScalar,
 } from "./types.js";
+
+// Decoded objects may use the same field names as explicit wire wrappers.
+const exactObjects = new WeakSet<object>();
 
 const safe = (n: bigint): number | bigint =>
   n <= BigInt(Number.MAX_SAFE_INTEGER) && n >= BigInt(Number.MIN_SAFE_INTEGER)
@@ -37,7 +41,9 @@ const checkedInteger = (tag: IntegerTag, value: number | bigint): bigint => {
   return integer;
 };
 
-const explicit = (tagged: TaggedValue): EncodedTaggedValue => ({
+const explicit = <T extends TaggedValue>(
+  tagged: T,
+): { readonly $tagged: T } => ({
   $tagged: tagged,
 });
 const one = (value: TaggedValue): [string, unknown] => {
@@ -151,12 +157,20 @@ export function decodeTagged(value: TaggedValue): SemanticValue | undefined {
   throw new TypeError(`unknown Semantic value tag '${tag}'`);
 }
 
-/** Decode containers while retaining every scalar's original wire tag for exact round-trips. */
-export function decodeTaggedExact(value: TaggedValue): SemanticValue {
+/** Decode containers retaining scalar tags. primitiveScalars unwraps losslessly representable
+ * null/bool/string values for typed RPC records; other scalar tags remain exact. */
+export function decodeTaggedExact(
+  value: TaggedValue,
+  primitiveScalars = false,
+): SemanticValue {
   const [tag, raw] = one(value);
+  if (primitiveScalars && ["null", "bool", "string"].includes(tag))
+    return decodeTagged(value);
   if (tag === "list") {
     if (!Array.isArray(raw)) throw new TypeError("list requires an array");
-    return (raw as TaggedValue[]).map(decodeTaggedExact);
+    return (raw as TaggedValue[]).map((entry) =>
+      decodeTaggedExact(entry, primitiveScalars),
+    );
   }
   if (tag === "map") {
     if (!Array.isArray(raw)) throw new TypeError("map requires an array");
@@ -164,7 +178,10 @@ export function decodeTaggedExact(value: TaggedValue): SemanticValue {
       (raw as [TaggedValue, TaggedValue][]).map((entry) => {
         if (!Array.isArray(entry) || entry.length !== 2)
           throw new TypeError("map entries must be pairs");
-        return [decodeTaggedExact(entry[0]), decodeTaggedExact(entry[1])];
+        return [
+          decodeTaggedExact(entry[0], primitiveScalars),
+          decodeTaggedExact(entry[1], primitiveScalars),
+        ];
       }),
     );
   }
@@ -176,11 +193,12 @@ export function decodeTaggedExact(value: TaggedValue): SemanticValue {
       raw as Record<string, TaggedValue>,
     ))
       Object.defineProperty(out, key, {
-        value: decodeTaggedExact(item),
+        value: decodeTaggedExact(item, primitiveScalars),
         enumerable: true,
         configurable: true,
         writable: true,
       });
+    exactObjects.add(out);
     return out;
   }
   if (tag === "variant") {
@@ -199,7 +217,7 @@ export function decodeTaggedExact(value: TaggedValue): SemanticValue {
       throw new TypeError("invalid variant value");
     return {
       $variant: variant.variant,
-      value: decodeTaggedExact(variant.value),
+      value: decodeTaggedExact(variant.value, primitiveScalars),
       ...(variant.type === undefined ? {} : { type: variant.type }),
     };
   }
@@ -238,8 +256,9 @@ export function encodeTagged(
         encodeTagged(item, integerTag),
       ]),
     };
-  if ("$tagged" in value) return (value as EncodedTaggedValue).$tagged;
-  if ("$variant" in value) {
+  if ("$tagged" in value && !exactObjects.has(value))
+    return (value as EncodedTaggedValue).$tagged;
+  if ("$variant" in value && !exactObjects.has(value)) {
     const v = value as SemanticVariant;
     return {
       variant: {
@@ -265,20 +284,22 @@ export function encodeTagged(
 export const value = {
   void: (): EncodedTaggedValue => explicit("void"),
   null: (): EncodedTaggedValue => explicit("null"),
-  int: (tag: IntegerTag, n: number | bigint): EncodedTaggedValue =>
-    explicit({ [tag]: checkedInteger(tag, n) } as TaggedValue),
-  uuid: (v: string): EncodedTaggedValue => explicit({ uuid: v }),
-  ipAddr: (v: string): EncodedTaggedValue => explicit({ ip_addr: v }),
-  durationMs: (v: number | bigint): EncodedTaggedValue =>
+  int: <T extends IntegerTag>(tag: T, n: number | bigint): TaggedScalar<T> =>
+    explicit({
+      [tag]: checkedInteger(tag, n),
+    } as TaggedValue) as TaggedScalar<T>,
+  uuid: (v: string): TaggedScalar<"uuid"> => explicit({ uuid: v }),
+  ipAddr: (v: string): TaggedScalar<"ip_addr"> => explicit({ ip_addr: v }),
+  durationMs: (v: number | bigint): TaggedScalar<"duration"> =>
     explicit({ duration: checkedInteger("i64", v) }),
-  timeNanos: (v: number | bigint): EncodedTaggedValue =>
+  timeNanos: (v: number | bigint): TaggedScalar<"time"> =>
     explicit({ time: checkedInteger("i64", v) }),
-  dateJulianDay: (v: number): EncodedTaggedValue => {
+  dateJulianDay: (v: number): TaggedScalar<"date"> => {
     if (!Number.isInteger(v) || v < -2147483648 || v > 2147483647)
       throw new RangeError("date requires an i32 Julian day");
     return explicit({ date: v });
   },
-  dateTimeNanos: (v: number | bigint): EncodedTaggedValue =>
+  dateTimeNanos: (v: number | bigint): TaggedScalar<"date_time"> =>
     explicit({ date_time: checkedInteger("i128", v) }),
   variant: (
     variant: string,

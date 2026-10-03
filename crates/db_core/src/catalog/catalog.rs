@@ -99,6 +99,12 @@ fn canonicalize_index_predicate(
                 }
             }
             Expr::Operand(Operand::Literal(_)) => {}
+            Expr::Operand(Operand::Parameter(_)) => {
+                return Err("unbound parameters are not allowed in index predicates");
+            }
+            Expr::ProjectionRef(_) => {
+                return Err("projection references are not allowed in index predicates");
+            }
             Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => children.push(expr),
             Expr::Binary { left, right, .. } => children.extend([&mut **left, &mut **right]),
             Expr::IfElse {

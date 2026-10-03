@@ -71,6 +71,8 @@ impl From<&str> for RpcError {
 pub enum RegisterError {
     #[error("duplicate RPC command '{0}'")]
     DuplicateCommand(String),
+    #[error("conflicting RPC type definition '{0}'")]
+    ConflictingTypeDefinition(String),
     #[error(transparent)]
     InvalidDefinition(#[from] CommandDefError),
 }

@@ -62,12 +62,14 @@ impl GroupExprInfo {
                     self.calls.push(call);
                 }
             }
-            Expr::Operand(Operand::Literal(_)) => {}
+            Expr::Operand(Operand::Literal(_) | Operand::Parameter(_)) => {}
             Expr::Operand(Operand::Field(_))
             | Expr::Subquery(_)
             | Expr::Exists { .. }
             | Expr::RelationExists { .. } => self.needs_first_row = true,
-            Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => self.visit(expr),
+            Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+                self.visit(expr)
+            }
             Expr::Binary { left, right, .. }
             | Expr::PatternMatch {
                 expr: left,
@@ -406,6 +408,7 @@ pub(super) fn evaluate_group_predicate<G: GroupRows + ?Sized>(group: &G, predica
 pub(super) fn evaluate_group_expr<G: GroupRows + ?Sized>(group: &G, expr: &Expr) -> Option<Value> {
     match expr {
         Expr::Aggregate { op, distinct, arg } => group.aggregate(*op, *distinct, arg),
+        Expr::ProjectionRef(_) | Expr::Operand(Operand::Parameter(_)) => None,
         Expr::Unary { op, expr } => {
             let value = evaluate_group_expr(group, expr)?;
             if value.is_nullish() {

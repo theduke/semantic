@@ -289,7 +289,7 @@ fn projection_has_aggregate(query: &SelectQuery) -> bool {
 fn expr_has_aggregate(expr: &Expr) -> bool {
     match expr {
         Expr::Aggregate { .. } => true,
-        Expr::Unary { expr, .. } => expr_has_aggregate(expr),
+        Expr::Unary { expr, .. } | Expr::ProjectionRef(expr) => expr_has_aggregate(expr),
         Expr::Binary { left, right, .. } => expr_has_aggregate(left) || expr_has_aggregate(right),
         Expr::IfElse {
             cond,

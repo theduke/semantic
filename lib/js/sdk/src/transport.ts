@@ -90,6 +90,7 @@ export class HttpTransport implements RpcTransport {
       try {
         return resolveRpcResponse(
           parseJson(await abortable(response.text(), signal)),
+          options.valueDecoding,
         );
       } catch (cause) {
         if (

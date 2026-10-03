@@ -110,3 +110,59 @@ test("file input is snapshotted and buffered limits are enforced", async () => {
   );
   await embedded.close();
 });
+
+test("parseSql and typed parse commands retain exact AST literals through the embedded transport", async () => {
+  const { query, expr, projection, value, commands } = await import(
+    "@semantic/sdk"
+  );
+  const ast = query.select("items", {
+    projection: [
+      projection.field(expr.literal(value.int("u8", 7)), "small"),
+      projection.field(
+        expr.literal(value.int("u64", 18446744073709551615n)),
+        "wide",
+      ),
+      projection.field(
+        expr.literal({ present_void: value.void(), present_null: null }),
+        "object",
+      ),
+      projection.field(expr.parameter("id"), "parameter"),
+    ],
+  });
+  const taggedAst = encodeTagged(ast);
+  let executions = 0;
+  install(
+    mockNative({
+      async invokeJson(request) {
+        const { id, command, payload } = parseJson(request) as {
+          id: bigint;
+          command: string;
+          payload: { object: Record<string, unknown> };
+        };
+        if (command === "semantic.db.query.parse_sql")
+          return stringifyJson({ id, result: { ok: taggedAst } });
+        assert.equal(command, "semantic.db.query");
+        assert.equal(
+          stringifyJson(payload.object.query),
+          stringifyJson(taggedAst),
+        );
+        assert.equal(Object.hasOwn(payload.object, "format"), false);
+        executions++;
+        return stringifyJson({
+          id,
+          result: { ok: encodeTagged({ kind: "select", rows: [] }) },
+        });
+      },
+    }),
+  );
+  const embedded = await openEmbedded({ dataDir: "." });
+  const parsed = await embedded.client.parseSql("SELECT :id FROM items");
+  assert.equal("select" in parsed && parsed.select.collection, "items");
+  await embedded.client.query(parsed, { params: { id: "a" } });
+  const invoked = await embedded.client.invoke(commands.parseSql, {
+    query: "SELECT :id FROM items",
+  });
+  await embedded.client.query(invoked, { params: { id: "b" } });
+  assert.equal(executions, 2);
+  await embedded.close();
+});

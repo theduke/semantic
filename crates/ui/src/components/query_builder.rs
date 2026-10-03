@@ -1,9 +1,14 @@
 use std::rc::Rc;
 
+use crate::query_ast::{binary, combine, field as query_field, literal};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dioxus::prelude::*;
 use regex::RegexBuilder;
-use semantic_data::schema::{NumberType, Type, TypeKind};
+use semantic_data::{
+    query::{BinaryOp, Expr, UnaryOp},
+    schema::{NumberType, Type, TypeKind},
+    value::Value,
+};
 use semantic_ui_core::UiCatalog;
 use serde::{Deserialize, Serialize};
 
@@ -290,11 +295,8 @@ pub fn fields_for_collection(catalog: &UiCatalog, collection: &str) -> Rc<[Query
 }
 
 fn classify_type(ty: &Type) -> QueryFieldKind {
-    // SQL text is parsed into semantic_data::Value before comparison. Expose
-    // value operators only when that parser produces the same Value variant as
-    // the dynamic form: String, Bool, I64, or F64. Unsigned, temporal,
-    // UUID/IP, ref, enum, decimal, and richer values are deliberately
-    // presence-only until the query boundary supports typed literals.
+    // Match the value kinds produced by the dynamic form; richer fields retain
+    // presence checks until the filter editor supports their value inputs.
     match &ty.kind {
         TypeKind::Optional(optional) => classify_type(&optional.inner),
         TypeKind::Attribute(attribute) => classify_type(&attribute.ty),
@@ -409,7 +411,7 @@ pub fn compile_structured_predicate(
     fields: &[QueryField],
     alias: Option<&str>,
     search_fields: &[&str],
-) -> std::result::Result<Option<String>, String> {
+) -> std::result::Result<Option<Expr>, String> {
     validate_complexity(&query.root, 0)?;
     let mut parts = Vec::new();
     let search = query.search.trim();
@@ -421,11 +423,12 @@ pub fn compile_structured_predicate(
         let mut predicates = Vec::new();
         for requested in search_fields {
             if let Some(field) = resolve_search_field(fields, requested) {
-                let predicate = format!(
-                    "{} ~* {}",
-                    qualified_ident(alias, &field.name),
-                    sql_string(&pattern)
-                );
+                let predicate = Expr::RegexMatch {
+                    expr: Box::new(query_field(alias, &field.name)),
+                    pattern: Box::new(literal(Value::String(pattern.clone()))),
+                    case_insensitive: true,
+                    negated: false,
+                };
                 if !predicates.contains(&predicate) {
                     predicates.push(predicate);
                 }
@@ -434,12 +437,12 @@ pub fn compile_structured_predicate(
         if predicates.is_empty() {
             return Err("The selected collection has no searchable title field.".to_string());
         }
-        parts.push(format!("({})", predicates.join(" OR ")));
+        parts.push(combine(BinaryOp::Or, predicates).expect("nonempty search fields"));
     }
     if let Some(group) = compile_group(&query.root, fields, alias, true)? {
         parts.push(group);
     }
-    Ok((!parts.is_empty()).then(|| parts.join(" AND ")))
+    Ok(combine(BinaryOp::And, parts))
 }
 
 fn resolve_search_field<'a>(fields: &'a [QueryField], requested: &str) -> Option<&'a QueryField> {
@@ -476,7 +479,7 @@ fn compile_group(
     fields: &[QueryField],
     alias: Option<&str>,
     root: bool,
-) -> std::result::Result<Option<String>, String> {
+) -> std::result::Result<Option<Expr>, String> {
     if group.children.is_empty() {
         return if root {
             Ok(None)
@@ -492,13 +495,16 @@ fn compile_group(
                 .expect("non-root empty groups are rejected"),
         });
     }
-    let joiner = match group.combinator {
-        GroupCombinator::All => " AND ",
-        GroupCombinator::Any => " OR ",
+    let op = match group.combinator {
+        GroupCombinator::All => BinaryOp::And,
+        GroupCombinator::Any => BinaryOp::Or,
     };
-    let expression = format!("({})", children.join(joiner));
+    let expression = combine(op, children).expect("nonempty group");
     Ok(Some(if group.negated {
-        format!("NOT {expression}")
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(expression),
+        }
     } else {
         expression
     }))
@@ -508,7 +514,7 @@ fn compile_rule(
     rule: &FilterRule,
     fields: &[QueryField],
     alias: Option<&str>,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<Expr, String> {
     let field = fields
         .iter()
         .find(|field| field.name == rule.field)
@@ -528,11 +534,14 @@ fn compile_rule(
     if rule.values.len() < rule.operator.value_count() {
         return Err(format!("{} needs a value.", field.label));
     }
-    let ident = qualified_ident(alias, &field.name);
+    let ident = query_field(alias, &field.name);
+    let value = |value: &str| compile_value(value, field.kind, &field.label).map(literal);
     use FilterOperator::*;
     match rule.operator {
-        IsNull => Ok(format!("{ident} IS NULL")),
-        IsNotNull => Ok(format!("{ident} IS NOT NULL")),
+        IsNull | IsNotNull => Ok(Expr::IsNull {
+            expr: Box::new(ident),
+            negated: rule.operator == IsNotNull,
+        }),
         In => {
             if rule.values.is_empty() {
                 return Err(format!("{} needs at least one value.", field.label));
@@ -543,18 +552,22 @@ fn compile_rule(
                     field.label
                 ));
             }
-            let values = rule
-                .values
-                .iter()
-                .map(|value| compile_value(value, field.kind, &field.label))
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(format!("{ident} IN ({})", values.join(", ")))
+            Ok(Expr::InList {
+                expr: Box::new(ident),
+                list: rule
+                    .values
+                    .iter()
+                    .map(|raw| value(raw))
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+                negated: false,
+            })
         }
-        Between => {
-            let low = compile_value(&rule.values[0], field.kind, &field.label)?;
-            let high = compile_value(&rule.values[1], field.kind, &field.label)?;
-            Ok(format!("{ident} BETWEEN {low} AND {high}"))
-        }
+        Between => Ok(Expr::Between {
+            expr: Box::new(ident),
+            low: Box::new(value(&rule.values[0])?),
+            high: Box::new(value(&rule.values[1])?),
+            negated: false,
+        }),
         Contains | NotContains | StartsWith | EndsWith | Regex | NotRegex => {
             let raw = checked_text(&rule.values[0], &field.label)?;
             let pattern = match rule.operator {
@@ -567,25 +580,23 @@ fn compile_rule(
                         .map_err(|error| format!("Invalid regular expression: {error}"))?;
                     raw.to_string()
                 }
-                _ => return Err(format!("Unsupported pattern operator for {}.", field.label)),
+                _ => unreachable!(),
             };
-            let operator = match rule.operator {
-                Regex => "~",
-                NotRegex => "!~",
-                NotContains => "!~*",
-                _ => "~*",
-            };
-            Ok(format!("{ident} {operator} {}", sql_string(&pattern)))
+            Ok(Expr::RegexMatch {
+                expr: Box::new(ident),
+                pattern: Box::new(literal(Value::String(pattern))),
+                case_insensitive: !matches!(rule.operator, Regex | NotRegex),
+                negated: matches!(rule.operator, NotContains | NotRegex),
+            })
         }
         operator => {
-            let value = compile_value(&rule.values[0], field.kind, &field.label)?;
-            let operator = match operator {
-                Equals => "=",
-                NotEquals => "!=",
-                Greater => ">",
-                GreaterOrEqual => ">=",
-                Less => "<",
-                LessOrEqual => "<=",
+            let op = match operator {
+                Equals => BinaryOp::Eq,
+                NotEquals => BinaryOp::NotEq,
+                Greater => BinaryOp::Gt,
+                GreaterOrEqual => BinaryOp::Gte,
+                Less => BinaryOp::Lt,
+                LessOrEqual => BinaryOp::Lte,
                 _ => {
                     return Err(format!(
                         "Unsupported comparison operator for {}.",
@@ -593,7 +604,7 @@ fn compile_rule(
                     ));
                 }
             };
-            Ok(format!("{ident} {operator} {value}"))
+            Ok(binary(op, ident, value(&rule.values[0])?))
         }
     }
 }
@@ -602,15 +613,13 @@ fn compile_value(
     value: &str,
     kind: QueryFieldKind,
     label: &str,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<Value, String> {
     let value = checked_text(value, label)?;
     match kind {
-        QueryFieldKind::SignedInteger => {
-            let parsed = value
-                .parse::<i64>()
-                .map_err(|_| format!("{label} must be a valid signed integer."))?;
-            Ok(parsed.to_string())
-        }
+        QueryFieldKind::SignedInteger => value
+            .parse::<i64>()
+            .map(Value::I64)
+            .map_err(|_| format!("{label} must be a valid signed integer.")),
         QueryFieldKind::Float => {
             let parsed = value
                 .parse::<f64>()
@@ -618,22 +627,15 @@ fn compile_value(
             if !parsed.is_finite() {
                 return Err(format!("{label} must be a finite number."));
             }
-            // Integral-looking SQL tokens become Value::I64. Force an
-            // unmistakably floating token so equality and ordering operate on
-            // the Value::F64 produced by the dynamic form.
-            let mut sql = parsed.to_string();
-            if !sql.contains(['.', 'e', 'E']) {
-                sql.push_str(".0");
-            }
-            Ok(sql)
+            Ok(Value::F64(parsed.into()))
         }
         QueryFieldKind::Bool => match value {
-            "true" => Ok("TRUE".to_string()),
-            "false" => Ok("FALSE".to_string()),
+            "true" => Ok(Value::Bool(true)),
+            "false" => Ok(Value::Bool(false)),
             _ => Err(format!("{label} must be true or false.")),
         },
         QueryFieldKind::PresenceOnly => Err(format!("{label} only supports presence checks.")),
-        QueryFieldKind::Text => Ok(sql_string(value)),
+        QueryFieldKind::Text => Ok(Value::String(value.into())),
     }
 }
 
@@ -654,13 +656,6 @@ pub fn sql_ident(value: &str) -> String {
 
 pub fn sql_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
-}
-
-fn qualified_ident(alias: Option<&str>, field: &str) -> String {
-    match alias {
-        Some(alias) => format!("{}.{}", sql_ident(alias), sql_ident(field)),
-        None => sql_ident(field),
-    }
 }
 
 #[component]
@@ -1372,6 +1367,207 @@ mod tests {
         ]
     }
 
+    #[tokio::test]
+    async fn nested_typed_filters_execute_with_literal_search_and_exact_numeric_values() {
+        use crate::query_ast::tests::{memory_db, row};
+        use semantic_data::query::{SelectQuery, SortDirection};
+        let db = memory_db(
+            "query_test",
+            [
+                row(
+                    "a",
+                    [
+                        ("semantic:title", Value::String("Ada.*'s".into())),
+                        ("score", Value::I64(2)),
+                        ("weight", Value::F64(1.0.into())),
+                    ],
+                ),
+                row(
+                    "b",
+                    [
+                        ("semantic:title", Value::String("Ada.*'s".into())),
+                        ("score", Value::I64(12)),
+                        ("weight", Value::F64(1.0.into())),
+                    ],
+                ),
+                row(
+                    "c",
+                    [
+                        ("semantic:title", Value::String("AdaX's".into())),
+                        ("score", Value::I64(2)),
+                        ("weight", Value::F64(1.0.into())),
+                    ],
+                ),
+                row(
+                    "d",
+                    [
+                        ("semantic:title", Value::String("Ada.*'s".into())),
+                        ("score", Value::I64(2)),
+                        ("weight", Value::I64(1)),
+                    ],
+                ),
+            ],
+        )
+        .await;
+        let mut available = fields();
+        available.push(QueryField {
+            name: "weight".into(),
+            label: "Weight".into(),
+            kind: QueryFieldKind::Float,
+            description: None,
+            deprecated: false,
+            choices: vec![],
+        });
+        let query = StructuredQuery {
+            search: "Ada.*'s".into(),
+            root: FilterGroup {
+                children: vec![
+                    FilterNode::Group(FilterGroup {
+                        negated: true,
+                        combinator: GroupCombinator::Any,
+                        children: vec![
+                            FilterNode::Rule(FilterRule {
+                                field: "score".into(),
+                                operator: FilterOperator::Greater,
+                                values: vec!["10".into()],
+                            }),
+                            FilterNode::Rule(FilterRule {
+                                field: "semantic:title".into(),
+                                operator: FilterOperator::Regex,
+                                values: vec!["^B".into()],
+                            }),
+                        ],
+                    }),
+                    FilterNode::Rule(FilterRule {
+                        field: "weight".into(),
+                        operator: FilterOperator::Equals,
+                        values: vec!["1".into()],
+                    }),
+                ],
+                ..Default::default()
+            },
+        };
+        let predicate = compile_structured_predicate(&query, &available, None, &["title"])
+            .unwrap()
+            .unwrap();
+        let semantic_db_core::QueryResult::Select(rows) = db
+            .query(semantic_data::query::QueryInput::from(
+                SelectQuery::new()
+                    .with_collection("query_test")
+                    .with_predicate(predicate)
+                    .with_order_by(vec![crate::query_ast::order(
+                        None,
+                        "id",
+                        SortDirection::Asc,
+                    )]),
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("AST rows")
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.get("id").unwrap().as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+    }
+
+    #[test]
+    fn pattern_presence_and_range_operators_preserve_ast_semantics() {
+        let compile = |field: &str, operator, values: Vec<&str>| {
+            compile_rule(
+                &FilterRule {
+                    field: field.into(),
+                    operator,
+                    values: values.into_iter().map(str::to_string).collect(),
+                },
+                &fields(),
+                Some("e"),
+            )
+        };
+        assert_eq!(
+            compile("semantic:title", FilterOperator::NotContains, vec!["a.*'b"]).unwrap(),
+            Expr::RegexMatch {
+                expr: Box::new(query_field(Some("e"), "semantic:title")),
+                pattern: Box::new(literal(Value::String("a\\.\\*'b".into()))),
+                case_insensitive: true,
+                negated: true
+            }
+        );
+        assert!(compile("semantic:title", FilterOperator::Regex, vec!["["]).is_err());
+        assert_eq!(
+            compile("score", FilterOperator::IsNotNull, vec![]).unwrap(),
+            Expr::IsNull {
+                expr: Box::new(query_field(Some("e"), "score")),
+                negated: true
+            }
+        );
+        assert_eq!(
+            compile("score", FilterOperator::Between, vec!["-1", "2"]).unwrap(),
+            Expr::Between {
+                expr: Box::new(query_field(Some("e"), "score")),
+                low: Box::new(literal(Value::I64(-1))),
+                high: Box::new(literal(Value::I64(2))),
+                negated: false
+            }
+        );
+    }
+
+    #[test]
+    fn compiler_rejects_over_budget_groups_lists_and_values() {
+        let rule = FilterRule {
+            field: "score".into(),
+            operator: FilterOperator::Equals,
+            values: vec!["1".into()],
+        };
+        let query = StructuredQuery {
+            root: FilterGroup {
+                children: vec![FilterNode::Rule(rule.clone()); MAX_NODES + 1],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(compile_structured_predicate(&query, &fields(), None, &[]).is_err());
+        let mut group = FilterGroup {
+            children: vec![FilterNode::Rule(rule.clone())],
+            ..Default::default()
+        };
+        for _ in 0..=MAX_DEPTH {
+            group = FilterGroup {
+                children: vec![FilterNode::Group(group)],
+                ..Default::default()
+            };
+        }
+        assert!(
+            compile_structured_predicate(
+                &StructuredQuery {
+                    root: group,
+                    ..Default::default()
+                },
+                &fields(),
+                None,
+                &[]
+            )
+            .is_err()
+        );
+        let too_many = FilterRule {
+            operator: FilterOperator::In,
+            values: vec!["1".into(); MAX_LIST_VALUES + 1],
+            ..rule
+        };
+        assert!(compile_rule(&too_many, &fields(), None).is_err());
+        assert!(
+            compile_value(
+                &"x".repeat(MAX_VALUE_BYTES + 1),
+                QueryFieldKind::Text,
+                "Title"
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn nested_groups_compile_with_precedence_and_not() {
         let query = StructuredQuery {
@@ -1396,8 +1592,30 @@ mod tests {
         let sql = compile_structured_predicate(&query, &fields(), Some("e"), &["title"])
             .unwrap()
             .unwrap();
-        assert!(sql.contains("\"e\".\"semantic:title\" ~* 'Ada''s %'"));
-        assert!(sql.contains("NOT (\"e\".\"score\" > 10 OR \"e\".\"semantic:title\" ~ '^A')"));
+        let search = Expr::RegexMatch {
+            expr: Box::new(query_field(Some("e"), "semantic:title")),
+            pattern: Box::new(literal(Value::String("Ada's %".into()))),
+            case_insensitive: true,
+            negated: false,
+        };
+        let group = Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(binary(
+                BinaryOp::Or,
+                binary(
+                    BinaryOp::Gt,
+                    query_field(Some("e"), "score"),
+                    literal(Value::I64(10)),
+                ),
+                Expr::RegexMatch {
+                    expr: Box::new(query_field(Some("e"), "semantic:title")),
+                    pattern: Box::new(literal(Value::String("^A".into()))),
+                    case_insensitive: false,
+                    negated: false,
+                },
+            )),
+        };
+        assert_eq!(sql, binary(BinaryOp::And, search, group));
     }
 
     #[test]
@@ -1420,7 +1638,7 @@ mod tests {
     }
 
     #[test]
-    fn classification_only_exposes_exact_sql_literal_representations() {
+    fn classification_matches_supported_dynamic_form_value_inputs() {
         let kind = |kind| classify_type(&Type::new(kind));
 
         assert_eq!(
@@ -1498,8 +1716,22 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(signed, "(\"signed\" = -7)");
-        assert_eq!(float, "(\"float\" = 1.0)");
+        assert_eq!(
+            signed,
+            binary(
+                BinaryOp::Eq,
+                query_field(None, "signed"),
+                literal(Value::I64(-7))
+            )
+        );
+        assert_eq!(
+            float,
+            binary(
+                BinaryOp::Eq,
+                query_field(None, "float"),
+                literal(Value::F64(1.0.into()))
+            )
+        );
     }
 
     #[test]
@@ -1568,7 +1800,17 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(sql, "(\"score\" IN (1, 2, -3))");
+        assert_eq!(
+            sql,
+            Expr::InList {
+                expr: Box::new(query_field(None, "score")),
+                list: [1, 2, -3]
+                    .into_iter()
+                    .map(|value| literal(Value::I64(value)))
+                    .collect(),
+                negated: false
+            }
+        );
         assert!(compile_structured_predicate(&query(Vec::new()), &fields(), None, &[]).is_err());
     }
 

@@ -1,3 +1,4 @@
+use crate::query::semantics::*;
 /// SQL parser/printer bridge for `db_core::Query`.
 ///
 /// TODO(sql-support): Gradually remove the unsupported operation list below by
@@ -142,7 +143,7 @@ pub enum SqlQueryError {
 }
 
 struct Bindings<'a> {
-    values: &'a BTreeMap<String, Value>,
+    values: Option<&'a BTreeMap<String, Value>>,
     used_names: BTreeSet<String>,
     placeholder_names: BTreeSet<String>,
 }
@@ -166,9 +167,9 @@ impl<'a> Bindings<'a> {
     fn new(
         sql: &str,
         dialect: &dyn Dialect,
-        values: &'a BTreeMap<String, Value>,
+        values: Option<&'a BTreeMap<String, Value>>,
     ) -> Result<Self, SqlQueryError> {
-        for name in values.keys() {
+        for name in values.into_iter().flat_map(BTreeMap::keys) {
             if !valid_parameter_name(name) {
                 return Err(parameter_error("invalid_name", Some(name.clone())));
             }
@@ -210,7 +211,7 @@ impl<'a> Bindings<'a> {
         })
     }
 
-    fn resolve(&mut self, placeholder: &str) -> Result<Value, SqlQueryError> {
+    fn resolve(&mut self, placeholder: &str) -> Result<Operand, SqlQueryError> {
         let Some(name) = placeholder
             .strip_prefix(':')
             .filter(|name| valid_parameter_name(name))
@@ -220,12 +221,17 @@ impl<'a> Bindings<'a> {
                 Some(placeholder.to_string()),
             ));
         };
-        let value = self
-            .values
-            .get(name)
-            .ok_or_else(|| parameter_error("missing", Some(name.to_string())))?;
+        let operand = match self.values {
+            Some(values) => Operand::Literal(
+                values
+                    .get(name)
+                    .ok_or_else(|| parameter_error("missing", Some(name.to_string())))?
+                    .clone(),
+            ),
+            None => Operand::Parameter(name.to_string()),
+        };
         self.used_names.insert(name.to_string());
-        Ok(value.clone())
+        Ok(operand)
     }
 
     fn finish(&self) -> Result<(), SqlQueryError> {
@@ -234,7 +240,8 @@ impl<'a> Bindings<'a> {
         }
         if let Some(name) = self
             .values
-            .keys()
+            .into_iter()
+            .flat_map(BTreeMap::keys)
             .find(|name| !self.used_names.contains(*name))
         {
             return Err(parameter_error("unused", Some(name.clone())));
@@ -281,12 +288,44 @@ pub fn parse_sql_query(
     parse_sql_query_with_params(sql, dialect, &BTreeMap::new())
 }
 
+/// Parse SQL into the canonical public AST without binding parameter values.
+/// SQL projection references are preserved explicitly for resolution after binding.
+pub fn parse_sql_query_unbound(
+    sql: &str,
+    dialect: SqlDialectKind,
+) -> Result<semantic_data::query::Query, SqlQueryError> {
+    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), None)?;
+    let parsed = parse_sql_query_raw_with_bindings(sql, dialect, &mut bindings)?;
+    bindings.finish()?;
+    if matches!(&parsed.query, Query::Select(select) if select.collection.is_none()) {
+        return Err(SqlQueryError::Invalid(
+            "SELECT requires a FROM source outside collection-scoped parsing".to_string(),
+        ));
+    }
+    Ok(parsed.query.into())
+}
+
+fn contains_parameter(expr: &Expr) -> bool {
+    let mut expr: semantic_data::query::Expr = expr.clone().into();
+    let mut found = false;
+    let _: Result<(), std::convert::Infallible> = expr.visit_mut(&mut |expr| {
+        found |= matches!(
+            expr,
+            semantic_data::query::Expr::Operand(semantic_data::query::Operand::Parameter(_))
+        );
+        Ok(())
+    });
+    found
+}
+
+/// Parse and bind SQL, retaining its existing parameter-sensitive lowering and
+/// validation order (for example, projection ordinals and mutation limits).
 pub fn parse_sql_query_with_params(
     sql: &str,
     dialect: SqlDialectKind,
     params: &BTreeMap<String, Value>,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
-    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), params)?;
+    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), Some(params))?;
     let parsed = parse_sql_query_raw_with_bindings(sql, dialect, &mut bindings)?;
     bindings.finish()?;
     if matches!(&parsed.query, Query::Select(select) if select.collection.is_none()) {
@@ -302,7 +341,7 @@ fn parse_sql_query_raw(
     dialect: SqlDialectKind,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
     let params = BTreeMap::new();
-    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), &params)?;
+    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), Some(&params))?;
     let parsed = parse_sql_query_raw_with_bindings(sql, dialect, &mut bindings)?;
     bindings.finish()?;
     Ok(parsed)
@@ -727,8 +766,10 @@ fn select_has_scope_path(
 fn expr_has_scope_path(expr: &Expr, path_matches: &impl Fn(&FieldPath) -> bool) -> bool {
     match expr {
         Expr::Operand(Operand::Field(path)) => path_matches(path),
-        Expr::Operand(Operand::Literal(_)) | Expr::Subquery(_) | Expr::Exists { .. } => false,
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
+        Expr::Operand(Operand::Literal(_) | Operand::Parameter(_))
+        | Expr::Subquery(_)
+        | Expr::Exists { .. } => false,
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
             expr_has_scope_path(expr, path_matches)
         }
         Expr::Binary { left, right, .. }
@@ -862,17 +903,29 @@ fn parse_select(
         source_alias.as_deref(),
         joins.is_empty(),
     );
-    let order_by = validate_and_resolve_select_semantics(
-        &projection,
-        predicate.as_ref(),
-        &joins,
-        &group_by,
-        having.as_ref(),
-        limit.as_ref(),
-        &offset,
-        &group_bindings,
-        parse_order_by(bindings, order_by)?,
-    )?;
+    let parsed_order = parse_order_by(bindings, order_by)?;
+    let order_by =
+        if bindings.values.is_none() && (!group_by.is_empty() || !parsed_order.is_empty()) {
+            parsed_order
+                .into_iter()
+                .map(|mut order| {
+                    order.expr = Expr::ProjectionRef(Box::new(order.expr));
+                    order
+                })
+                .collect()
+        } else {
+            validate_and_resolve_select_semantics(
+                &projection,
+                predicate.as_ref(),
+                &joins,
+                &group_by,
+                having.as_ref(),
+                limit.as_ref(),
+                &offset,
+                &group_bindings,
+                parsed_order,
+            )?
+        };
 
     Ok(ParsedSqlQuery {
         query: Query::Select(SelectQuery {
@@ -914,57 +967,19 @@ fn parse_group_by(
     match group_by {
         sqlparser::ast::GroupByExpr::Expressions(exprs, modifiers) if modifiers.is_empty() => exprs
             .into_iter()
-            .map(|value| parse_expr(bindings, value))
-            .map(|expr| expr.and_then(|expr| resolve_group_by_expr(expr, projection)))
+            .map(|value| {
+                let expr = parse_expr(bindings, value)?;
+                if bindings.values.is_none() {
+                    Ok(Expr::ProjectionRef(Box::new(expr)))
+                } else {
+                    resolve_group_by_expr(expr, projection)
+                }
+            })
             .collect(),
         other => Err(SqlQueryError::Unsupported(format!(
             "GROUP BY form '{other:?}' is not supported"
         ))),
     }
-}
-
-fn resolve_group_by_expr(expr: Expr, projection: &[QueryField]) -> Result<Expr, SqlQueryError> {
-    let target = if let Some(index) = order_ordinal(&expr) {
-        let index = index.checked_sub(1).ok_or_else(|| {
-            SqlQueryError::Invalid("GROUP BY ordinal must be at least 1".to_string())
-        })?;
-        Some(projection.get(index).ok_or_else(|| {
-            SqlQueryError::Invalid(format!(
-                "GROUP BY ordinal {} exceeds projection length {}",
-                index + 1,
-                projection.len()
-            ))
-        })?)
-    } else if let Some(alias) = single_field_name(&expr) {
-        if let Some(field) = projection
-            .iter()
-            .find(|field| field.alias.as_deref() == Some(alias))
-        {
-            if field_expr_final_name(&field.expr) == Some(alias) {
-                return Ok(expr);
-            }
-            return Err(SqlQueryError::Invalid(format!(
-                "GROUP BY identifier {alias:?} is ambiguous with a projection alias; use its ordinal or repeat the source expression"
-            )));
-        }
-        None
-    } else {
-        None
-    };
-    let Some(target) = target else {
-        return Ok(expr);
-    };
-    if target.wildcard.is_some() {
-        return Err(SqlQueryError::Unsupported(
-            "GROUP BY cannot reference a wildcard projection".to_string(),
-        ));
-    }
-    if expr_contains_aggregate(&target.expr) {
-        return Err(SqlQueryError::Invalid(
-            "GROUP BY cannot reference an aggregate projection".to_string(),
-        ));
-    }
-    Ok((*target.expr).clone())
 }
 
 fn parse_insert_stmt(
@@ -1449,575 +1464,6 @@ fn parse_order_item(
     })
 }
 
-fn validate_and_resolve_select_semantics(
-    projection: &[QueryField],
-    predicate: Option<&Expr>,
-    joins: &[JoinQuery],
-    group_by: &[Expr],
-    having: Option<&Expr>,
-    limit: Option<&Expr>,
-    offset: &Expr,
-    group_bindings: &[String],
-    order_by: Vec<DbOrderBy>,
-) -> Result<Vec<DbOrderBy>, SqlQueryError> {
-    validate_unique_projection_keys(projection)?;
-
-    if predicate.is_some_and(expr_contains_aggregate) {
-        return Err(SqlQueryError::Invalid(
-            "aggregate expressions are not allowed in WHERE".to_string(),
-        ));
-    }
-    for join in joins {
-        let condition_has_aggregate = match &join.condition {
-            JoinCondition::OnExpr(expr) => expr_contains_aggregate(expr),
-            JoinCondition::UsingFields { .. } => false,
-        };
-        if condition_has_aggregate || join.predicate.as_ref().is_some_and(expr_contains_aggregate) {
-            return Err(SqlQueryError::Invalid(
-                "aggregate expressions are not allowed in JOIN conditions".to_string(),
-            ));
-        }
-    }
-    if group_by.iter().any(expr_contains_aggregate) {
-        return Err(SqlQueryError::Invalid(
-            "aggregate expressions are not allowed in GROUP BY".to_string(),
-        ));
-    }
-    if limit.is_some_and(expr_contains_aggregate) || expr_contains_aggregate(offset) {
-        return Err(SqlQueryError::Invalid(
-            "aggregate expressions are not allowed in LIMIT or OFFSET".to_string(),
-        ));
-    }
-
-    for expr in projection
-        .iter()
-        .map(|field| field.expr.as_ref())
-        .chain(having)
-        .chain(order_by.iter().map(|order| &order.expr))
-    {
-        if expr_contains_nested_aggregate(expr) {
-            return Err(SqlQueryError::Invalid(
-                "nested aggregate expressions are not supported".to_string(),
-            ));
-        }
-    }
-
-    let aggregate_query = !group_by.is_empty()
-        || having.is_some()
-        || projection
-            .iter()
-            .any(|field| expr_contains_aggregate(&field.expr))
-        || order_by
-            .iter()
-            .any(|order| expr_contains_aggregate(&order.expr));
-
-    if !aggregate_query {
-        return order_by
-            .into_iter()
-            .map(|order| resolve_nonaggregate_order(order, projection))
-            .collect();
-    }
-
-    if projection.is_empty() || projection.iter().any(|field| field.wildcard.is_some()) {
-        return Err(SqlQueryError::Invalid(
-            "wildcard projections are not allowed in aggregate queries".to_string(),
-        ));
-    }
-    for field in projection {
-        validate_grouped_expr(&field.expr, group_by, group_bindings, "SELECT projection")?;
-    }
-    if let Some(having) = having {
-        validate_grouped_expr(having, group_by, group_bindings, "HAVING")?;
-    }
-
-    order_by
-        .into_iter()
-        .map(|order| resolve_aggregate_order(order, projection, group_by, group_bindings))
-        .collect()
-}
-
-fn validate_unique_projection_keys(projection: &[QueryField]) -> Result<(), SqlQueryError> {
-    let mut keys = std::collections::HashSet::new();
-    for field in projection {
-        let Some(key) = projection_output_key(field) else {
-            continue;
-        };
-        if !keys.insert(key.clone()) {
-            return Err(SqlQueryError::Invalid(format!(
-                "duplicate SQL projection output key '{key}'; use distinct aliases"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn base_group_bindings(
-    collection: Option<&str>,
-    source_alias: Option<&str>,
-    no_joins: bool,
-) -> Vec<String> {
-    if !no_joins {
-        return Vec::new();
-    }
-    if let Some(alias) = source_alias {
-        return vec![alias.to_string()];
-    }
-    let Some(collection) = collection else {
-        return Vec::new();
-    };
-    let mut bindings = vec![collection.to_string()];
-    if let Some(tail) = collection.rsplit('.').next()
-        && tail != collection
-    {
-        bindings.push(tail.to_string());
-    }
-    bindings
-}
-
-fn projection_output_key(field: &QueryField) -> Option<String> {
-    if field.wildcard.is_some() {
-        return None;
-    }
-    if let Some(alias) = &field.alias {
-        return Some(alias.clone());
-    }
-    if let Some(name) = field_expr_final_name(&field.expr) {
-        return Some(name.to_string());
-    }
-    Some("value".to_string())
-}
-
-fn field_expr_final_name(expr: &Expr) -> Option<&str> {
-    let Expr::Operand(Operand::Field(path)) = expr else {
-        return None;
-    };
-    path.segments()
-        .iter()
-        .rev()
-        .find_map(|segment| match segment {
-            PathSegment::Field(name) => Some(name.as_str()),
-            _ => None,
-        })
-}
-
-fn resolve_nonaggregate_order(
-    mut order: DbOrderBy,
-    projection: &[QueryField],
-) -> Result<DbOrderBy, SqlQueryError> {
-    if let Some(index) = order_ordinal(&order.expr) {
-        if projection.iter().any(|field| field.wildcard.is_some()) {
-            return Err(SqlQueryError::Unsupported(
-                "ORDER BY ordinals are not supported with wildcard projections".to_string(),
-            ));
-        }
-        let field = projection
-            .get(index.checked_sub(1).ok_or_else(|| {
-                SqlQueryError::Invalid("ORDER BY ordinal must be at least 1".to_string())
-            })?)
-            .ok_or_else(|| {
-                SqlQueryError::Invalid(format!(
-                    "ORDER BY ordinal {index} exceeds projection length {}",
-                    projection.len()
-                ))
-            })?;
-        order.expr = (*field.expr).clone();
-        return Ok(order);
-    }
-    if let Some(alias) = single_field_name(&order.expr)
-        && let Some(field) = projection
-            .iter()
-            .find(|field| field.alias.as_deref() == Some(alias))
-    {
-        order.expr = (*field.expr).clone();
-    }
-    Ok(order)
-}
-
-fn resolve_aggregate_order(
-    mut order: DbOrderBy,
-    projection: &[QueryField],
-    group_by: &[Expr],
-    group_bindings: &[String],
-) -> Result<DbOrderBy, SqlQueryError> {
-    let projection_index = if let Some(index) = order_ordinal(&order.expr) {
-        Some(index.checked_sub(1).ok_or_else(|| {
-            SqlQueryError::Invalid("ORDER BY ordinal must be at least 1".to_string())
-        })?)
-    } else if let Some(name) = single_field_name(&order.expr) {
-        projection
-            .iter()
-            .position(|field| field.alias.as_deref() == Some(name))
-            .or_else(|| {
-                projection
-                    .iter()
-                    .position(|field| field.expr.as_ref() == &order.expr)
-            })
-            .or_else(|| {
-                projection.iter().position(|field| {
-                    field.alias.is_none() && field_expr_final_name(&field.expr) == Some(name)
-                })
-            })
-    } else {
-        projection
-            .iter()
-            .position(|field| field.expr.as_ref() == &order.expr)
-    };
-    let Some(index) = projection_index else {
-        return Err(SqlQueryError::Invalid(
-            "aggregate ORDER BY expressions must reference a projected expression, alias, or ordinal"
-                .to_string(),
-        ));
-    };
-    let field = projection.get(index).ok_or_else(|| {
-        SqlQueryError::Invalid(format!(
-            "ORDER BY ordinal {} exceeds projection length {}",
-            index + 1,
-            projection.len()
-        ))
-    })?;
-    validate_grouped_expr(&field.expr, group_by, group_bindings, "ORDER BY")?;
-    let key = projection_output_key(field).ok_or_else(|| {
-        SqlQueryError::Unsupported(
-            "aggregate ORDER BY cannot reference a wildcard projection".to_string(),
-        )
-    })?;
-    order.expr = Expr::Operand(Operand::Field(FieldPath::from_fields([key])));
-    Ok(order)
-}
-
-fn order_ordinal(expr: &Expr) -> Option<usize> {
-    let Expr::Operand(Operand::Literal(value)) = expr else {
-        return None;
-    };
-    match value {
-        Value::I8(value) => usize::try_from(*value).ok(),
-        Value::I16(value) => usize::try_from(*value).ok(),
-        Value::I32(value) => usize::try_from(*value).ok(),
-        Value::I64(value) => usize::try_from(*value).ok(),
-        Value::I128(value) => usize::try_from(*value).ok(),
-        Value::U8(value) => Some(*value as usize),
-        Value::U16(value) => Some(*value as usize),
-        Value::U32(value) => usize::try_from(*value).ok(),
-        Value::U64(value) => usize::try_from(*value).ok(),
-        Value::U128(value) => usize::try_from(*value).ok(),
-        _ => None,
-    }
-}
-
-fn single_field_name(expr: &Expr) -> Option<&str> {
-    let Expr::Operand(Operand::Field(path)) = expr else {
-        return None;
-    };
-    let [PathSegment::Field(name)] = path.segments() else {
-        return None;
-    };
-    Some(name)
-}
-
-fn expr_contains_nested_aggregate(expr: &Expr) -> bool {
-    match expr {
-        Expr::Aggregate { arg, .. } => match arg.as_ref() {
-            FunctionArg::Expr(expr) => expr_contains_aggregate(expr),
-            FunctionArg::Wildcard => false,
-        },
-        Expr::Operand(_) | Expr::Subquery(_) | Expr::Exists { .. } => false,
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
-            expr_contains_nested_aggregate(expr)
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::PatternMatch {
-            expr: left,
-            pattern: right,
-            ..
-        }
-        | Expr::RegexMatch {
-            expr: left,
-            pattern: right,
-            ..
-        } => expr_contains_nested_aggregate(left) || expr_contains_nested_aggregate(right),
-        Expr::TextMatch { exprs, query, .. } => {
-            exprs.iter().any(expr_contains_nested_aggregate)
-                || expr_contains_nested_aggregate(query)
-        }
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_nested_aggregate(cond)
-                || expr_contains_nested_aggregate(then_expr)
-                || expr_contains_nested_aggregate(else_expr)
-        }
-        Expr::Coalesce(items) => items.iter().any(expr_contains_nested_aggregate),
-        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
-            FunctionArg::Expr(expr) => expr_contains_nested_aggregate(expr),
-            FunctionArg::Wildcard => false,
-        }),
-        Expr::InList { expr, list, .. } => {
-            expr_contains_nested_aggregate(expr) || list.iter().any(expr_contains_nested_aggregate)
-        }
-        Expr::Between {
-            expr, low, high, ..
-        } => {
-            expr_contains_nested_aggregate(expr)
-                || expr_contains_nested_aggregate(low)
-                || expr_contains_nested_aggregate(high)
-        }
-        Expr::RelationExists {
-            relation,
-            source,
-            target,
-            max_depth,
-            ..
-        } => {
-            expr_contains_nested_aggregate(relation)
-                || expr_contains_nested_aggregate(source)
-                || expr_contains_nested_aggregate(target)
-                || max_depth
-                    .as_deref()
-                    .is_some_and(expr_contains_nested_aggregate)
-        }
-    }
-}
-
-fn group_expr_equivalent(left: &Expr, right: &Expr, bindings: &[String]) -> bool {
-    if left == right {
-        return true;
-    }
-    normalize_group_expr(left, bindings) == normalize_group_expr(right, bindings)
-}
-
-fn normalize_group_expr(expr: &Expr, bindings: &[String]) -> Expr {
-    let normalize = |expr: &Expr| normalize_group_expr(expr, bindings);
-    match expr {
-        Expr::Operand(Operand::Field(path)) => {
-            Expr::Operand(Operand::Field(normalize_group_path(path, bindings)))
-        }
-        Expr::Operand(Operand::Literal(value)) => Expr::Operand(Operand::Literal(value.clone())),
-        Expr::Unary { op, expr } => Expr::Unary {
-            op: *op,
-            expr: Box::new(normalize(expr)),
-        },
-        Expr::Binary { op, left, right } => Expr::Binary {
-            op: *op,
-            left: Box::new(normalize(left)),
-            right: Box::new(normalize(right)),
-        },
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => Expr::IfElse {
-            cond: Box::new(normalize(cond)),
-            then_expr: Box::new(normalize(then_expr)),
-            else_expr: Box::new(normalize(else_expr)),
-        },
-        Expr::Coalesce(items) => Expr::Coalesce(items.iter().map(normalize).collect()),
-        Expr::TextMatch {
-            exprs,
-            query,
-            mode,
-            analyzer,
-        } => Expr::TextMatch {
-            exprs: exprs.iter().map(normalize).collect(),
-            query: Box::new(normalize(query)),
-            mode: *mode,
-            analyzer: *analyzer,
-        },
-        Expr::Function { name, args } => Expr::Function {
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|arg| match arg {
-                    FunctionArg::Expr(expr) => FunctionArg::Expr(normalize(expr)),
-                    FunctionArg::Wildcard => FunctionArg::Wildcard,
-                })
-                .collect(),
-        },
-        Expr::Aggregate { op, distinct, arg } => Expr::Aggregate {
-            op: *op,
-            distinct: *distinct,
-            arg: Box::new(match arg.as_ref() {
-                FunctionArg::Expr(expr) => FunctionArg::Expr(normalize(expr)),
-                FunctionArg::Wildcard => FunctionArg::Wildcard,
-            }),
-        },
-        Expr::InList {
-            expr,
-            list,
-            negated,
-        } => Expr::InList {
-            expr: Box::new(normalize(expr)),
-            list: list.iter().map(normalize).collect(),
-            negated: *negated,
-        },
-        Expr::Subquery(query) => Expr::Subquery(query.clone()),
-        Expr::Between {
-            expr,
-            low,
-            high,
-            negated,
-        } => Expr::Between {
-            expr: Box::new(normalize(expr)),
-            low: Box::new(normalize(low)),
-            high: Box::new(normalize(high)),
-            negated: *negated,
-        },
-        Expr::PatternMatch {
-            kind,
-            expr,
-            pattern,
-            case_insensitive,
-            negated,
-        } => Expr::PatternMatch {
-            kind: *kind,
-            expr: Box::new(normalize(expr)),
-            pattern: Box::new(normalize(pattern)),
-            case_insensitive: *case_insensitive,
-            negated: *negated,
-        },
-        Expr::RegexMatch {
-            expr,
-            pattern,
-            case_insensitive,
-            negated,
-        } => Expr::RegexMatch {
-            expr: Box::new(normalize(expr)),
-            pattern: Box::new(normalize(pattern)),
-            case_insensitive: *case_insensitive,
-            negated: *negated,
-        },
-        Expr::IsNull { expr, negated } => Expr::IsNull {
-            expr: Box::new(normalize(expr)),
-            negated: *negated,
-        },
-        Expr::Exists { query, negated } => Expr::Exists {
-            query: query.clone(),
-            negated: *negated,
-        },
-        Expr::RelationExists {
-            relation,
-            source,
-            target,
-            transitive,
-            max_depth,
-        } => Expr::RelationExists {
-            relation: Box::new(normalize(relation)),
-            source: Box::new(normalize(source)),
-            target: Box::new(normalize(target)),
-            transitive: *transitive,
-            max_depth: max_depth.as_deref().map(normalize).map(Box::new),
-        },
-    }
-}
-
-fn normalize_group_path(path: &FieldPath, bindings: &[String]) -> FieldPath {
-    for binding in bindings {
-        let parts = binding.split('.').collect::<Vec<_>>();
-        if path.segments().len() <= parts.len() {
-            continue;
-        }
-        let matches =
-            path.segments().iter().zip(parts.iter()).all(
-                |(segment, part)| matches!(segment, PathSegment::Field(field) if field == part),
-            );
-        if matches {
-            return FieldPath::from(path.segments()[parts.len()..].to_vec());
-        }
-    }
-    path.clone()
-}
-
-fn validate_grouped_expr(
-    expr: &Expr,
-    group_by: &[Expr],
-    group_bindings: &[String],
-    clause: &str,
-) -> Result<(), SqlQueryError> {
-    if group_by
-        .iter()
-        .any(|group| group_expr_equivalent(group, expr, group_bindings))
-    {
-        return Ok(());
-    }
-    match expr {
-        Expr::Operand(Operand::Literal(_)) | Expr::Subquery(_) | Expr::Exists { .. } => Ok(()),
-        Expr::Operand(Operand::Field(path)) => Err(SqlQueryError::Invalid(format!(
-            "field '{}' in {clause} must appear in GROUP BY or be inside an aggregate",
-            path_to_sql(path).unwrap_or_else(|_| format!("{path:?}"))
-        ))),
-        Expr::Aggregate { .. } => Ok(()),
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
-            validate_grouped_expr(expr, group_by, group_bindings, clause)
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::PatternMatch {
-            expr: left,
-            pattern: right,
-            ..
-        }
-        | Expr::RegexMatch {
-            expr: left,
-            pattern: right,
-            ..
-        } => {
-            validate_grouped_expr(left, group_by, group_bindings, clause)?;
-            validate_grouped_expr(right, group_by, group_bindings, clause)
-        }
-        Expr::TextMatch { exprs, query, .. } => {
-            for expr in exprs {
-                validate_grouped_expr(expr, group_by, group_bindings, clause)?;
-            }
-            validate_grouped_expr(query, group_by, group_bindings, clause)
-        }
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            validate_grouped_expr(cond, group_by, group_bindings, clause)?;
-            validate_grouped_expr(then_expr, group_by, group_bindings, clause)?;
-            validate_grouped_expr(else_expr, group_by, group_bindings, clause)
-        }
-        Expr::Coalesce(items) => items
-            .iter()
-            .try_for_each(|expr| validate_grouped_expr(expr, group_by, group_bindings, clause)),
-        Expr::Function { args, .. } => args.iter().try_for_each(|arg| match arg {
-            FunctionArg::Expr(expr) => {
-                validate_grouped_expr(expr, group_by, group_bindings, clause)
-            }
-            FunctionArg::Wildcard => Ok(()),
-        }),
-        Expr::InList { expr, list, .. } => {
-            validate_grouped_expr(expr, group_by, group_bindings, clause)?;
-            list.iter()
-                .try_for_each(|expr| validate_grouped_expr(expr, group_by, group_bindings, clause))
-        }
-        Expr::Between {
-            expr, low, high, ..
-        } => {
-            validate_grouped_expr(expr, group_by, group_bindings, clause)?;
-            validate_grouped_expr(low, group_by, group_bindings, clause)?;
-            validate_grouped_expr(high, group_by, group_bindings, clause)
-        }
-        Expr::RelationExists {
-            relation,
-            source,
-            target,
-            max_depth,
-            ..
-        } => {
-            validate_grouped_expr(relation, group_by, group_bindings, clause)?;
-            validate_grouped_expr(source, group_by, group_bindings, clause)?;
-            validate_grouped_expr(target, group_by, group_bindings, clause)?;
-            if let Some(max_depth) = max_depth {
-                validate_grouped_expr(max_depth, group_by, group_bindings, clause)?;
-            }
-            Ok(())
-        }
-    }
-}
-
 fn parse_limit_clause(
     bindings: &mut Bindings<'_>,
     limit_clause: Option<LimitClause>,
@@ -2062,10 +1508,10 @@ fn parse_dml_limit(
     let limit = limit
         .map(|value| parse_dml_expr(bindings, value))
         .transpose()?;
-    if limit
-        .as_ref()
-        .is_some_and(|expr| evaluate_usize_expr(expr).is_none())
-    {
+    if limit.as_ref().is_some_and(|expr| {
+        evaluate_usize_expr(expr).is_none()
+            && !(bindings.values.is_none() && contains_parameter(expr))
+    }) {
         return Err(SqlQueryError::Invalid(
             "DML LIMIT must be a non-negative constant integer".to_string(),
         ));
@@ -2112,7 +1558,9 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
     match expr {
         Expr::Subquery(_) | Expr::Exists { .. } => true,
         Expr::Operand(_) => false,
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => expr_contains_subquery(expr),
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::ProjectionRef(expr) => {
+            expr_contains_subquery(expr)
+        }
         Expr::Binary { left, right, .. }
         | Expr::PatternMatch {
             expr: left,
@@ -2170,64 +1618,6 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
     }
 }
 
-fn expr_contains_aggregate(expr: &Expr) -> bool {
-    match expr {
-        Expr::Aggregate { .. } => true,
-        Expr::Operand(_) | Expr::Subquery(_) | Expr::Exists { .. } => false,
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => expr_contains_aggregate(expr),
-        Expr::Binary { left, right, .. }
-        | Expr::PatternMatch {
-            expr: left,
-            pattern: right,
-            ..
-        }
-        | Expr::RegexMatch {
-            expr: left,
-            pattern: right,
-            ..
-        } => expr_contains_aggregate(left) || expr_contains_aggregate(right),
-        Expr::TextMatch { exprs, query, .. } => {
-            exprs.iter().any(expr_contains_aggregate) || expr_contains_aggregate(query)
-        }
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_aggregate(cond)
-                || expr_contains_aggregate(then_expr)
-                || expr_contains_aggregate(else_expr)
-        }
-        Expr::Coalesce(items) => items.iter().any(expr_contains_aggregate),
-        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
-            FunctionArg::Expr(expr) => expr_contains_aggregate(expr),
-            FunctionArg::Wildcard => false,
-        }),
-        Expr::InList { expr, list, .. } => {
-            expr_contains_aggregate(expr) || list.iter().any(expr_contains_aggregate)
-        }
-        Expr::Between {
-            expr, low, high, ..
-        } => {
-            expr_contains_aggregate(expr)
-                || expr_contains_aggregate(low)
-                || expr_contains_aggregate(high)
-        }
-        Expr::RelationExists {
-            relation,
-            source,
-            target,
-            max_depth,
-            ..
-        } => {
-            expr_contains_aggregate(relation)
-                || expr_contains_aggregate(source)
-                || expr_contains_aggregate(target)
-                || max_depth.as_deref().is_some_and(expr_contains_aggregate)
-        }
-    }
-}
-
 fn parse_assignment(
     bindings: &mut Bindings<'_>,
     assign: Assignment,
@@ -2254,9 +1644,10 @@ fn parse_expr(bindings: &mut Bindings<'_>, expr: SqlExpr) -> Result<Expr, SqlQue
         SqlExpr::CompoundIdentifier(idents) => {
             Ok(Expr::Operand(Operand::Field(idents_to_path(&idents)?)))
         }
-        SqlExpr::Value(value) => Ok(Expr::Operand(Operand::Literal(parse_literal(
-            bindings, value,
-        )?))),
+        SqlExpr::Value(value) => match &value.value {
+            sqlparser::ast::Value::Placeholder(name) => Ok(Expr::Operand(bindings.resolve(name)?)),
+            _ => Ok(Expr::Operand(Operand::Literal(parse_literal(value)?))),
+        },
         SqlExpr::Nested(expr) => parse_expr(bindings, *expr),
         SqlExpr::UnaryOp { op, expr } => Ok(Expr::Unary {
             op: match op {
@@ -2771,13 +2162,10 @@ fn parse_field_format_clause(clause: &str) -> Result<FieldFormat, SqlQueryError>
     }
 }
 
-fn parse_literal(
-    bindings: &mut Bindings<'_>,
-    value: ValueWithSpan,
-) -> Result<Value, SqlQueryError> {
+fn parse_literal(value: ValueWithSpan) -> Result<Value, SqlQueryError> {
     use sqlparser::ast::Value as SqlValue;
     match value.value {
-        SqlValue::Placeholder(name) => bindings.resolve(&name),
+        SqlValue::Placeholder(name) => Err(parameter_error("invalid_position", Some(name))),
         SqlValue::Null => Ok(Value::Null),
         SqlValue::Boolean(v) => Ok(Value::Bool(v)),
         SqlValue::Number(num, _) => {
@@ -3244,6 +2632,7 @@ fn wildcard_to_sql(path: &FieldPath, expr: &Expr) -> Result<String, SqlQueryErro
 fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
     match expr {
         Expr::Operand(operand) => operand_to_sql(operand),
+        Expr::ProjectionRef(expr) => expr_to_sql(expr),
         Expr::Unary { op, expr } => Ok(match op {
             UnaryOp::Not => format!("NOT ({})", expr_to_sql(expr)?),
             UnaryOp::Neg => format!("-({})", expr_to_sql(expr)?),
@@ -3453,32 +2842,14 @@ fn operand_to_sql(operand: &Operand) -> Result<String, SqlQueryError> {
     match operand {
         Operand::Field(path) => path_to_sql(path),
         Operand::Literal(value) => value_to_sql(value),
-    }
-}
-
-fn path_to_sql(path: &FieldPath) -> Result<String, SqlQueryError> {
-    if path.segments().is_empty() {
-        return Err(SqlQueryError::Invalid("empty field path".to_string()));
-    }
-    let mut out = String::new();
-    let mut first = true;
-    for seg in path.segments() {
-        match seg {
-            PathSegment::Field(name) => {
-                if !first {
-                    out.push('.');
-                }
-                first = false;
-                out.push_str(name);
-            }
-            PathSegment::Index(_) => {
-                return Err(SqlQueryError::Unsupported(
-                    "indexed field paths are not supported in SQL printer".to_string(),
-                ));
+        Operand::Parameter(name) => {
+            if valid_parameter_name(name) {
+                Ok(format!(":{name}"))
+            } else {
+                Err(parameter_error("invalid_name", Some(name.clone())))
             }
         }
     }
-    Ok(out)
 }
 
 fn value_to_sql(value: &Value) -> Result<String, SqlQueryError> {
@@ -3535,6 +2906,116 @@ fn dialect_impl(dialect: SqlDialectKind) -> Box<dyn Dialect> {
 
 #[cfg(test)]
 mod tests {
+    fn contains_operand(value: &Value, kind: &str, expected: &Value) -> bool {
+        match value {
+            Value::Object(fields) => {
+                fields.get(kind) == Some(expected)
+                    || fields
+                        .values()
+                        .any(|value| contains_operand(value, kind, expected))
+            }
+            Value::List(values) => values
+                .iter()
+                .any(|value| contains_operand(value, kind, expected)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn unbound_sql_preserves_parameters_and_supports_rebinding_across_query_kinds() {
+        for sql in [
+            "SELECT :value AS value FROM items WHERE score > :value LIMIT :limit OFFSET :offset",
+            "SELECT id FROM items WHERE EXISTS (SELECT n.id FROM nested AS n WHERE n.score = :value) LIMIT :limit OFFSET :offset",
+            "SELECT :value AS value, COUNT(*) AS total FROM items GROUP BY :ordinal ORDER BY :ordinal LIMIT :limit OFFSET :offset",
+            "SELECT score AS value, COUNT(*) AS total FROM items GROUP BY :ordinal ORDER BY :order LIMIT :limit OFFSET :offset",
+            "INSERT INTO items (value) VALUES (:value) RETURNING :value AS bound",
+            "INSERT INTO items (value) SELECT :value FROM nested ORDER BY :ordinal LIMIT :limit",
+            "UPDATE items SET value = :value WHERE score > :value RETURNING :value AS bound LIMIT :limit",
+            "DELETE FROM items WHERE score > :value RETURNING :value AS bound LIMIT :limit",
+        ] {
+            let ast = parse_sql_query_unbound(sql, SqlDialectKind::Generic).unwrap();
+            for value in [Value::I64(3), Value::I64(7)] {
+                let params = [
+                    ("value", value.clone()),
+                    ("limit", Value::U64(2)),
+                    ("offset", Value::U64(1)),
+                    ("ordinal", Value::U64(1)),
+                    ("order", Value::U64(2)),
+                ]
+                .into_iter()
+                .filter(|(name, _)| sql.contains(&format!(":{name}")))
+                .map(|(name, value)| (name.to_string(), value))
+                .collect();
+                let actual = Query::from(ast.clone()).bind_parameters(&params).unwrap();
+                use semantic_data::value::IntoValue;
+                let actual = semantic_data::query::Query::from(actual).into_value();
+                if params.contains_key("value") {
+                    assert!(contains_operand(&actual, "literal", &value), "{sql}");
+                }
+                let unbound = ast.clone().into_value();
+                for name in params.keys() {
+                    let parameter = Value::String(name.clone());
+                    assert!(!contains_operand(&actual, "parameter", &parameter), "{sql}");
+                    assert!(contains_operand(&unbound, "parameter", &parameter), "{sql}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unbound_sql_validates_projection_references_at_binding() {
+        for sql in [
+            "SELECT score, COUNT(*) AS total FROM items GROUP BY :ordinal ORDER BY :ordinal",
+            "SELECT score AS value FROM items ORDER BY :ordinal",
+            "SELECT * FROM items ORDER BY :ordinal",
+        ] {
+            let ast = parse_sql_query_unbound(sql, SqlDialectKind::Generic).unwrap();
+            for ordinal in [Value::U64(0), Value::U64(9)] {
+                let params = BTreeMap::from([("ordinal".into(), ordinal)]);
+                let actual = Query::from(ast.clone())
+                    .bind_parameters(&params)
+                    .unwrap_err();
+                assert!(actual.to_string().contains("ordinal"), "{sql}: {actual}");
+            }
+        }
+    }
+
+    #[test]
+    fn unbound_sql_rejects_invalid_placeholder_positions_without_binding_values() {
+        for sql in [
+            "SELECT id FROM :table",
+            "SELECT id AS :alias FROM items",
+            "CREATE ATTRIBUTE :attribute TYPE string",
+        ] {
+            assert!(
+                matches!(parse_sql_query_unbound(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Parameter { reason, .. }) if reason == "invalid_position"),
+                "{sql}"
+            );
+        }
+        assert!(
+            matches!(parse_sql_query_unbound("SELECT :naïve FROM items", SqlDialectKind::Generic),
+            Err(SqlQueryError::Parameter { reason, .. }) if reason == "invalid_name")
+        );
+    }
+
+    #[test]
+    fn public_ast_preserves_wildcards_and_ddl_during_bidirectional_conversion() {
+        for sql in [
+            "SELECT *, child.*, id AS name FROM items",
+            "CREATE ATTRIBUTE \"test:value\" TYPE string",
+        ] {
+            let public = parse_sql_query_unbound(sql, SqlDialectKind::Generic).unwrap();
+            let internal = Query::from(public.clone());
+            assert_eq!(semantic_data::query::Query::from(internal), public);
+        }
+        let internal = Query::Ddl(DdlQuery {
+            batch: crate::core_catalog_schema_batch(),
+        });
+        let public: semantic_data::query::Query = internal.clone().into();
+        assert_eq!(Query::from(public), internal);
+    }
+
     #[test]
     fn named_parameters_reach_mutations_joins_and_nested_queries() {
         let params = BTreeMap::from([("value".into(), Value::I64(3))]);

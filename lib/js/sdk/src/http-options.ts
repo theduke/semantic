@@ -1,3 +1,5 @@
+import type { ValueDecoding } from "./types.js";
+
 /** Shared connection settings. Request-specific protocol headers take precedence. */
 export interface HttpOptions {
   fetch?: typeof fetch;
@@ -8,6 +10,8 @@ export interface HttpOptions {
 }
 
 export interface InvokeOptions {
+  /** Exact mode retains scalar tags for values that will be sent back to the server. */
+  valueDecoding?: ValueDecoding;
   signal?: AbortSignal;
 }
 

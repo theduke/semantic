@@ -737,3 +737,21 @@ pub mod __private {
         }
     }
 }
+
+impl<T: SemanticType> SemanticType for Box<T> {
+    fn semantic_type() -> Type {
+        T::semantic_type()
+    }
+}
+
+impl<T: IntoValue> IntoValue for Box<T> {
+    fn into_value(self) -> Value {
+        (*self).into_value()
+    }
+}
+
+impl<T: FromValue> FromValue for Box<T> {
+    fn from_value(value: Value) -> Result<Self, FromValueError> {
+        T::from_value(value).map(Box::new)
+    }
+}

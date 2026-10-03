@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 
-use semantic_base::directory_query::{
-    DirectoryChildFilter, DirectoryQueryPage, DirectorySort as QuerySort, directories_query,
-    directory_children_query, directory_links_query, directory_parent_query,
-    directory_tree_items_query,
+use super::types::DirectorySort;
+use crate::query_ast::{
+    all, any, binary, field, ilike, order, projection, select, string, wildcard,
 };
-pub(super) use semantic_base::directory_query::{sql_ident, sql_string};
+use semantic_base::directory_query::{
+    DirectoryChildFilter, DirectoryQueryPage, DirectorySort as QuerySort, directories_query_ast,
+    directory_children_query_ast, directory_links_query_ast, directory_parent_query_ast,
+    directory_tree_items_query_ast,
+};
 use semantic_data::attr::{
     ATTR_CREATED_AT, ATTR_PARENT, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE,
     ATTR_UPDATED_AT,
@@ -14,144 +17,192 @@ use semantic_data::bundles::directory::{
     ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
     DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
-
-use super::types::DirectorySort;
+use semantic_data::query::{
+    AggregateOp, BinaryOp, Expr, FunctionArg, JoinCondition, JoinQuery, JoinSource, JoinType,
+    SelectQuery, SortDirection, UnaryOp,
+};
 
 pub(super) const ENTITIES_COLLECTION: &str = semantic_data::builtin::DEFAULT_COLLECTION;
 
-pub(super) fn root_query() -> String {
-    directories_query(DirectoryQueryPage::All)
+pub(super) fn root_query() -> SelectQuery {
+    directories_query_ast(DirectoryQueryPage::All)
+}
+pub(super) fn directory_nodes_query() -> SelectQuery {
+    directory_links_query_ast(DirectoryQueryPage::All)
+}
+pub(super) fn file_tree_items_query() -> SelectQuery {
+    directory_tree_items_query_ast(DirectoryQueryPage::All)
 }
 
-pub(super) fn directory_nodes_query() -> String {
-    directory_links_query(DirectoryQueryPage::All)
+fn eq(alias: &str, name: &str, value: &str) -> Expr {
+    binary(BinaryOp::Eq, field(&[alias, name]), string(value))
 }
-
-pub(super) fn file_tree_items_query() -> String {
-    directory_tree_items_query(DirectoryQueryPage::All)
+fn node_relation() -> Expr {
+    eq("n", ATTR_RELATION_RELATION, DIRECTORY_NODE_RELATION_ID)
 }
-
-pub(super) fn child_links_query(parent_id: &str, child_ids: &[String]) -> String {
-    if child_ids.is_empty() {
-        return qualified_query(format!(
-            "SELECT n.id AS id, n.{relation_to} AS directory_to FROM {entities} AS n WHERE 1 = 0",
-            entities = sql_ident(ENTITIES_COLLECTION),
-            relation_to = sql_ident(ATTR_RELATION_TO),
-        ));
+fn node_orders() -> Vec<semantic_data::query::OrderBy> {
+    vec![
+        order(&["n", ATTR_DIRECTORY_NODE_ORDER], SortDirection::Asc),
+        order(&["n", "id"], SortDirection::Asc),
+    ]
+}
+fn node_projection() -> Vec<semantic_data::query::QueryField> {
+    vec![
+        projection(field(&["n", "id"]), "id"),
+        projection(field(&["n", ATTR_RELATION_TO]), "directory_to"),
+        projection(field(&["n", ATTR_DIRECTORY_NODE_ORDER]), "directory_order"),
+    ]
+}
+fn in_list(expr: Expr, values: impl IntoIterator<Item = impl AsRef<str>>, negated: bool) -> Expr {
+    Expr::InList {
+        expr: Box::new(expr),
+        list: values
+            .into_iter()
+            .map(|value| string(value.as_ref()))
+            .collect(),
+        negated,
     }
-    qualified_query(format!(
-        "SELECT n.id AS id, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND n.{relation_to} IN ({child_ids}) ORDER BY n.{node_order} ASC, n.id ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        parent_id = sql_string(parent_id),
-        child_ids = sql_string_list(child_ids),
-    ))
 }
-
-#[allow(dead_code)]
-pub(super) fn child_ids_query(parent_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT n.{relation_to} AS directory_to FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} ORDER BY n.{node_order} ASC, n.id ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        parent_id = sql_string(parent_id),
-    ))
-}
-
-pub(super) fn parent_links_query(child_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id} ORDER BY n.{node_order} ASC, n.id ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        child_id = sql_string(child_id),
-    ))
-}
-
-pub(super) fn parent_count_query(child_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT COUNT(*) AS parent_count FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        child_id = sql_string(child_id),
-    ))
-}
-
-pub(super) fn directory_outgoing_links_query(directory_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT n.id AS id, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {directory_id} ORDER BY n.{node_order} ASC, n.id ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        directory_id = sql_string(directory_id),
-    ))
-}
-
-pub(super) fn max_child_order_query(parent_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT MAX(n.{node_order}) AS max_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        parent_id = sql_string(parent_id),
-    ))
-}
-
-pub(super) fn addable_entities_query(parent_id: &str, search: &str, limit: usize) -> String {
-    let excluded = format!(
-        "SELECT n.{relation_to} FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        parent_id = sql_string(parent_id),
-    );
-    let predicates = search_predicate(search);
-    qualified_query(format!(
-        "SELECT e.* FROM {entities} AS e WHERE e.type != {node_class} AND e.id != {parent_id} AND e.id NOT IN ({excluded}) AND ({predicates}) ORDER BY e.title ASC, e.id ASC LIMIT {limit}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
-        parent_id = sql_string(parent_id),
-        excluded = excluded,
-        predicates = predicates,
-        limit = limit,
-    ))
-}
-
-#[allow(dead_code)]
-pub(super) fn entity_autocomplete_query(search: &str, excluded_ids: &BTreeSet<String>) -> String {
-    let predicates = search_predicate(search);
-    let exclusion = if excluded_ids.is_empty() {
-        String::new()
+fn in_query(expr: Expr, query: SelectQuery, negated: bool) -> Expr {
+    let expr = binary(BinaryOp::In, expr, Expr::Subquery(Box::new(query)));
+    if negated {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(expr),
+        }
     } else {
-        format!(" AND e.id NOT IN ({})", sql_string_set(excluded_ids))
-    };
-    qualified_query(format!(
-        "SELECT e.* FROM {entities} AS e WHERE e.type != {node_class}{exclusion} AND ({predicates}) ORDER BY e.title ASC, e.id ASC LIMIT 50",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
-        exclusion = exclusion,
-        predicates = predicates,
-    ))
+        expr
+    }
+}
+
+pub(super) fn child_links_query(parent_id: &str, child_ids: &[String]) -> SelectQuery {
+    select("n")
+        .with_projection(node_projection())
+        .with_predicate(all([
+            node_relation(),
+            eq("n", ATTR_DIRECTORY_NODE_FROM, parent_id),
+            in_list(field(&["n", ATTR_RELATION_TO]), child_ids, false),
+        ]))
+        .with_order_by(node_orders())
+}
+
+#[allow(dead_code)]
+pub(super) fn child_ids_query(parent_id: &str) -> SelectQuery {
+    select("n")
+        .with_projection(vec![projection(
+            field(&["n", ATTR_RELATION_TO]),
+            "directory_to",
+        )])
+        .with_predicate(all([
+            node_relation(),
+            eq("n", ATTR_DIRECTORY_NODE_FROM, parent_id),
+        ]))
+        .with_order_by(node_orders())
+}
+
+pub(super) fn parent_links_query(child_id: &str) -> SelectQuery {
+    select("n")
+        .with_projection(vec![
+            projection(field(&["n", "id"]), "id"),
+            projection(field(&["n", ATTR_DIRECTORY_NODE_FROM]), "directory_from"),
+            projection(field(&["n", ATTR_DIRECTORY_NODE_ORDER]), "directory_order"),
+        ])
+        .with_predicate(all([node_relation(), eq("n", ATTR_RELATION_TO, child_id)]))
+        .with_order_by(node_orders())
+}
+
+pub(super) fn parent_count_query(child_id: &str) -> SelectQuery {
+    select("n")
+        .with_projection(vec![projection(
+            Expr::Aggregate {
+                op: AggregateOp::Count,
+                distinct: false,
+                arg: Box::new(FunctionArg::Wildcard),
+            },
+            "parent_count",
+        )])
+        .with_predicate(all([node_relation(), eq("n", ATTR_RELATION_TO, child_id)]))
+}
+
+pub(super) fn directory_outgoing_links_query(directory_id: &str) -> SelectQuery {
+    select("n")
+        .with_projection(node_projection())
+        .with_predicate(all([
+            node_relation(),
+            eq("n", ATTR_DIRECTORY_NODE_FROM, directory_id),
+        ]))
+        .with_order_by(node_orders())
+}
+
+pub(super) fn max_child_order_query(parent_id: &str) -> SelectQuery {
+    select("n")
+        .with_projection(vec![projection(
+            Expr::Aggregate {
+                op: AggregateOp::Max,
+                distinct: false,
+                arg: Box::new(FunctionArg::Expr(field(&["n", ATTR_DIRECTORY_NODE_ORDER]))),
+            },
+            "max_order",
+        )])
+        .with_predicate(all([
+            node_relation(),
+            eq("n", ATTR_DIRECTORY_NODE_FROM, parent_id),
+        ]))
+}
+
+pub(super) fn addable_entities_query(parent_id: &str, search: &str, limit: usize) -> SelectQuery {
+    let excluded = select("n")
+        .with_projection(vec![projection(
+            field(&["n", ATTR_RELATION_TO]),
+            ATTR_RELATION_TO,
+        )])
+        .with_predicate(all([
+            node_relation(),
+            eq("n", ATTR_DIRECTORY_NODE_FROM, parent_id),
+        ]));
+    select("e")
+        .with_projection(vec![wildcard("e")])
+        .with_predicate(all([
+            binary(
+                BinaryOp::NotEq,
+                field(&["e", "type"]),
+                string(DIRECTORY_NODE_CLASS_ID),
+            ),
+            binary(BinaryOp::NotEq, field(&["e", "id"]), string(parent_id)),
+            in_query(field(&["e", "id"]), excluded, true),
+            search_predicate(search),
+        ]))
+        .with_order_by(vec![
+            order(&["e", "title"], SortDirection::Asc),
+            order(&["e", "id"], SortDirection::Asc),
+        ])
+        .with_limit(limit)
+}
+
+#[allow(dead_code)]
+pub(super) fn entity_autocomplete_query(
+    search: &str,
+    excluded_ids: &BTreeSet<String>,
+) -> SelectQuery {
+    let mut predicates = vec![
+        binary(
+            BinaryOp::NotEq,
+            field(&["e", "type"]),
+            string(DIRECTORY_NODE_CLASS_ID),
+        ),
+        search_predicate(search),
+    ];
+    if !excluded_ids.is_empty() {
+        predicates.push(in_list(field(&["e", "id"]), excluded_ids, true));
+    }
+    select("e")
+        .with_projection(vec![wildcard("e")])
+        .with_predicate(all(predicates))
+        .with_order_by(vec![
+            order(&["e", "title"], SortDirection::Asc),
+            order(&["e", "id"], SortDirection::Asc),
+        ])
+        .with_limit(50usize)
 }
 
 pub(super) fn child_query(
@@ -159,43 +210,45 @@ pub(super) fn child_query(
     sort: DirectorySort,
     limit: usize,
     offset: usize,
-) -> String {
-    directory_children_query(
+) -> SelectQuery {
+    directory_children_query_ast(
         parent_id,
         DirectoryChildFilter::All,
         query_sort(sort),
         DirectoryQueryPage::new(limit, offset),
     )
 }
-
-pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
-    directory_children_query(
+pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> SelectQuery {
+    directory_children_query_ast(
         parent_id,
         DirectoryChildFilter::Directories,
         QuerySort::Order,
         DirectoryQueryPage::new(limit, offset),
     )
 }
-
-pub(super) fn parent_query(child_id: &str) -> String {
-    directory_parent_query(child_id)
+pub(super) fn parent_query(child_id: &str) -> SelectQuery {
+    directory_parent_query_ast(child_id)
 }
 
-/// Returns every existing entity referenced as a canonical semantic parent.
-///
-/// Pagination happens in SQL and the uncorrelated `IN` subquery both deduplicates
-/// high fan-out parents and excludes dangling parent IDs.
+/// Every existing entity referenced as a canonical semantic parent.
+/// The uncorrelated subquery deduplicates parents and excludes dangling IDs before pagination.
 pub(super) fn semantic_parent_roots_query(
     sort: DirectorySort,
     limit: usize,
     offset: usize,
-) -> String {
-    qualified_query(format!(
-        "SELECT parent.* FROM {entities} AS parent WHERE parent.id IN (SELECT DISTINCT child.{parent_attr} FROM {entities} AS child) ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        parent_attr = sql_ident(ATTR_PARENT),
-        order_by = semantic_order_by(sort, "parent"),
-    ))
+) -> SelectQuery {
+    let parents = select("child")
+        .with_projection(vec![projection(
+            field(&["child", ATTR_PARENT]),
+            ATTR_PARENT,
+        )])
+        .with_distinct(true);
+    select("parent")
+        .with_projection(vec![wildcard("parent")])
+        .with_predicate(in_query(field(&["parent", "id"]), parents, false))
+        .with_order_by(semantic_order_by(sort, "parent"))
+        .with_limit(limit)
+        .with_offset(offset)
 }
 
 pub(super) fn semantic_children_query(
@@ -203,63 +256,71 @@ pub(super) fn semantic_children_query(
     sort: DirectorySort,
     limit: usize,
     offset: usize,
-) -> String {
-    qualified_query(format!(
-        "SELECT child.* FROM {entities} AS child WHERE child.{parent_attr} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        parent_attr = sql_ident(ATTR_PARENT),
-        parent_id = sql_string(parent_id),
-        order_by = semantic_order_by(sort, "child"),
-    ))
+) -> SelectQuery {
+    select("child")
+        .with_projection(vec![wildcard("child")])
+        .with_predicate(eq("child", ATTR_PARENT, parent_id))
+        .with_order_by(semantic_order_by(sort, "child"))
+        .with_limit(limit)
+        .with_offset(offset)
 }
 
-/// Returns semantic children that can be navigated further in the tree.
-///
-/// The parent-ID lookup is intentionally uncorrelated so filtering happens
-/// before pagination without relying on correlated subquery support.
+/// Filter navigable children before pagination using an uncorrelated parent-ID lookup.
 pub(super) fn semantic_navigable_children_query(
     parent_id: &str,
     sort: DirectorySort,
     limit: usize,
     offset: usize,
-) -> String {
-    qualified_query(format!(
-        "SELECT child.* FROM {entities} AS child WHERE child.{parent_attr} = {parent_id} AND (child.type = {directory_class} OR child.id IN (SELECT DISTINCT descendant.{parent_attr} FROM {entities} AS descendant)) ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        parent_attr = sql_ident(ATTR_PARENT),
-        parent_id = sql_string(parent_id),
-        directory_class = sql_string(DIRECTORY_CLASS_ID),
-        order_by = semantic_order_by(sort, "child"),
-    ))
+) -> SelectQuery {
+    let parents = select("descendant")
+        .with_projection(vec![projection(
+            field(&["descendant", ATTR_PARENT]),
+            ATTR_PARENT,
+        )])
+        .with_distinct(true);
+    semantic_children_query(parent_id, sort, limit, offset).with_predicate(all([
+        eq("child", ATTR_PARENT, parent_id),
+        any([
+            eq("child", "type", DIRECTORY_CLASS_ID),
+            in_query(field(&["child", "id"]), parents, false),
+        ]),
+    ]))
 }
 
-pub(super) fn semantic_parent_query(child_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT parent.* FROM {entities} AS child INNER JOIN {entities}._ AS parent ON child.{parent_attr} = parent.id WHERE child.id = {child_id} LIMIT 1",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        parent_attr = sql_ident(ATTR_PARENT),
-        child_id = sql_string(child_id),
-    ))
+pub(super) fn semantic_parent_query(child_id: &str) -> SelectQuery {
+    select("child")
+        .with_projection(vec![wildcard("parent")])
+        .with_joins(vec![JoinQuery {
+            source: JoinSource {
+                collection: Some(ENTITIES_COLLECTION.into()),
+                class: None,
+            },
+            alias: Some("parent".into()),
+            join_type: JoinType::Inner,
+            condition: JoinCondition::OnExpr(binary(
+                BinaryOp::Eq,
+                field(&["child", ATTR_PARENT]),
+                field(&["parent", "id"]),
+            )),
+            predicate: None,
+        }])
+        .with_predicate(eq("child", "id", child_id))
+        .with_limit(1usize)
 }
 
-pub(super) fn semantic_parent_ids_for_candidates_query(candidate_ids: &[String]) -> String {
-    if candidate_ids.is_empty() {
-        return qualified_query(format!(
-            "SELECT child.{parent_attr} AS semantic_parent FROM {entities} AS child WHERE 1 = 0",
-            entities = sql_ident(ENTITIES_COLLECTION),
-            parent_attr = sql_ident(ATTR_PARENT),
-        ));
-    }
-    qualified_query(format!(
-        "SELECT DISTINCT child.{parent_attr} AS semantic_parent FROM {entities} AS child WHERE child.{parent_attr} IN ({candidate_ids}) ORDER BY semantic_parent ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        parent_attr = sql_ident(ATTR_PARENT),
-        candidate_ids = sql_string_list(candidate_ids),
-    ))
-}
-
-fn qualified_query(query: String) -> String {
-    format!("{query} FORMAT qualified")
+pub(super) fn semantic_parent_ids_for_candidates_query(candidate_ids: &[String]) -> SelectQuery {
+    select("child")
+        .with_projection(vec![projection(
+            field(&["child", ATTR_PARENT]),
+            "semantic_parent",
+        )])
+        .with_distinct(true)
+        .with_predicate(in_list(
+            field(&["child", ATTR_PARENT]),
+            candidate_ids,
+            false,
+        ))
+        .with_order_by(vec![order(&["child", ATTR_PARENT], SortDirection::Asc)])
 }
 
 fn query_sort(sort: DirectorySort) -> QuerySort {
@@ -273,51 +334,38 @@ fn query_sort(sort: DirectorySort) -> QuerySort {
         DirectorySort::IdAsc => QuerySort::IdAsc,
     }
 }
-
-fn semantic_order_by(sort: DirectorySort, alias: &str) -> String {
+fn semantic_order_by(sort: DirectorySort, alias: &str) -> Vec<semantic_data::query::OrderBy> {
+    use SortDirection::{Asc, Desc};
     match sort {
         DirectorySort::Order | DirectorySort::TitleAsc => {
-            format!("{alias}.title ASC, {alias}.id ASC")
+            vec![order(&[alias, "title"], Asc), order(&[alias, "id"], Asc)]
         }
-        DirectorySort::TitleDesc => format!("{alias}.title DESC, {alias}.id ASC"),
-        DirectorySort::TypeAsc => {
-            format!("{alias}.type ASC, {alias}.title ASC, {alias}.id ASC")
+        DirectorySort::TitleDesc => {
+            vec![order(&[alias, "title"], Desc), order(&[alias, "id"], Asc)]
         }
-        DirectorySort::CreatedAtDesc => format!(
-            "{alias}.{created_at} DESC, {alias}.title ASC, {alias}.id ASC",
-            created_at = sql_ident(ATTR_CREATED_AT),
-        ),
-        DirectorySort::UpdatedAtDesc => format!(
-            "{alias}.{updated_at} DESC, {alias}.title ASC, {alias}.id ASC",
-            updated_at = sql_ident(ATTR_UPDATED_AT),
-        ),
-        DirectorySort::IdAsc => format!("{alias}.id ASC"),
+        DirectorySort::TypeAsc => vec![
+            order(&[alias, "type"], Asc),
+            order(&[alias, "title"], Asc),
+            order(&[alias, "id"], Asc),
+        ],
+        DirectorySort::CreatedAtDesc => vec![
+            order(&[alias, ATTR_CREATED_AT], Desc),
+            order(&[alias, "title"], Asc),
+            order(&[alias, "id"], Asc),
+        ],
+        DirectorySort::UpdatedAtDesc => vec![
+            order(&[alias, ATTR_UPDATED_AT], Desc),
+            order(&[alias, "title"], Asc),
+            order(&[alias, "id"], Asc),
+        ],
+        DirectorySort::IdAsc => vec![order(&[alias, "id"], Asc)],
     }
 }
-
-fn search_predicate(search: &str) -> String {
-    let pattern = sql_string(&format!("%{}%", search));
-    format!(
-        "e.id ILIKE {pattern} OR e.title ILIKE {pattern} OR e.{title_attr} ILIKE {pattern} OR e.type ILIKE {pattern}",
-        title_attr = sql_ident(ATTR_TITLE),
-    )
-}
-
-fn sql_string_list(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|value| sql_string(value))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-#[allow(dead_code)]
-fn sql_string_set(values: &BTreeSet<String>) -> String {
-    values
-        .iter()
-        .map(|value| sql_string(value))
-        .collect::<Vec<_>>()
-        .join(", ")
+fn search_predicate(search: &str) -> Expr {
+    let pattern = format!("%{search}%");
+    any(["id", "title", ATTR_TITLE, "type"]
+        .into_iter()
+        .map(|name| ilike(field(&["e", name]), &pattern)))
 }
 
 #[cfg(test)]
@@ -333,27 +381,32 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn sql_string_escapes_quotes() {
-        assert_eq!(sql_string("a'b"), "'a''b'");
-    }
-
-    #[test]
-    fn sql_ident_quotes_non_plain_identifiers() {
-        assert_eq!(sql_ident("entities"), "entities");
-        assert_eq!(
-            sql_ident("semantic:base:directory_node"),
-            "\"semantic:base:directory_node\""
-        );
+    fn contains_string(query: &SelectQuery, text: &str) -> bool {
+        use semantic_data::value::IntoValue;
+        fn walk(value: &Value, text: &str) -> bool {
+            match value {
+                Value::String(value) => value == text,
+                Value::List(values) => values.iter().any(|value| walk(value, text)),
+                Value::Object(values) => values.values().any(|value| walk(value, text)),
+                _ => false,
+            }
+        }
+        walk(&query.clone().into_value(), text)
     }
 
     #[test]
     fn root_query_uses_directory_class() {
         let query = root_query();
-        assert!(query.contains(DIRECTORY_CLASS_ID));
-        assert!(query.contains(ENTITIES_COLLECTION));
-        assert!(query.contains("d.type"));
-        assert!(!query.contains("NOT IN"));
+        assert_eq!(query.collection.as_deref(), Some(ENTITIES_COLLECTION));
+        assert_eq!(query.source_alias.as_deref(), Some("d"));
+        assert_eq!(
+            query.predicate,
+            Some(in_list(field(&["d", "type"]), [DIRECTORY_CLASS_ID], false))
+        );
+        assert_eq!(
+            query.field_format,
+            semantic_data::query::FieldFormat::Qualified
+        );
     }
 
     #[tokio::test]
@@ -366,7 +419,7 @@ mod tests {
         insert_directory(&db, "dir1", "Dir1").await;
 
         let result = db
-            .query(QueryInput::sql(root_query()))
+            .query(QueryInput::from(root_query()))
             .await
             .expect("root query should run");
         let QueryResult::Select(rows) = result else {
@@ -398,7 +451,7 @@ mod tests {
         insert_directory_node(&db, "node-1", "parent", "dir1", 10).await;
 
         let result = db
-            .query(QueryInput::sql(directory_nodes_query()))
+            .query(QueryInput::from(directory_nodes_query()))
             .await
             .expect("directory nodes query should run");
         let QueryResult::Select(rows) = result else {
@@ -424,7 +477,7 @@ mod tests {
         insert_directory_node(&db, "node-1", "parent", "child-dir", 10).await;
 
         let result = db
-            .query(QueryInput::sql(root_query()))
+            .query(QueryInput::from(root_query()))
             .await
             .expect("root query should run");
         let QueryResult::Select(rows) = result else {
@@ -445,7 +498,7 @@ mod tests {
         insert_entity(&db, "person1", "semantic:base:person", "Person 1").await;
 
         let result = db
-            .query(QueryInput::sql(root_query()))
+            .query(QueryInput::from(root_query()))
             .await
             .expect("root query should run");
         let QueryResult::Select(rows) = result else {
@@ -468,7 +521,7 @@ mod tests {
         insert_directory_node(&db, "node-2", "parent", "child-dir", 10).await;
 
         let result = db
-            .query(QueryInput::sql(child_query(
+            .query(QueryInput::from(child_query(
                 "parent",
                 DirectorySort::Order,
                 200,
@@ -499,7 +552,7 @@ mod tests {
         insert_directory_node(&db, "node-2", "parent", "child-dir", 10).await;
 
         let result = db
-            .query(QueryInput::sql(child_directories_query("parent", 200, 0)))
+            .query(QueryInput::from(child_directories_query("parent", 200, 0)))
             .await
             .expect("child directories query should run");
         let QueryResult::Select(rows) = result else {
@@ -521,7 +574,7 @@ mod tests {
         insert_directory_node(&db, "node-1", "parent", "child-dir", 10).await;
 
         let result = db
-            .query(QueryInput::sql(parent_query("child-dir")))
+            .query(QueryInput::from(parent_query("child-dir")))
             .await
             .expect("parent query should run");
         let QueryResult::Select(rows) = result else {
@@ -548,7 +601,7 @@ mod tests {
         insert_directory_node(&db, "node-low", "parent-b", "child-dir", 10).await;
 
         let result = db
-            .query(QueryInput::sql(parent_query("child-dir")))
+            .query(QueryInput::from(parent_query("child-dir")))
             .await
             .expect("parent query should run");
         let QueryResult::Select(rows) = result else {
@@ -564,50 +617,69 @@ mod tests {
     }
 
     #[test]
-    fn child_query_filters_from_parent() {
+    fn child_query_preserves_parent_identifier_and_ordering() {
         let query = child_query("parent'1", DirectorySort::Order, 101, 0);
-        assert!(query.contains("n.\"semantic:base:directory_node:from\" = 'parent''1'"));
-        assert!(query.contains("n.\"semantic:base:directory_node:order\" ASC"));
+        assert_eq!(query.limit, Some(Expr::from(101usize)));
+        assert_eq!(
+            query.order_by[0],
+            order(&["n", ATTR_DIRECTORY_NODE_ORDER], SortDirection::Asc)
+        );
+        assert!(contains_string(&query, "parent'1"));
+        assert!(!contains_string(&query, "parent''1"));
     }
 
     #[test]
-    fn child_links_query_escapes_parent_and_child_ids() {
+    fn child_links_query_preserves_parent_and_child_ids() {
         let query = child_links_query("parent'1", &["child'1".to_string(), "child2".to_string()]);
-        assert!(query.contains("n.\"semantic:base:directory_node:from\" = 'parent''1'"));
-        assert!(query.contains("n.\"semantic:relation:to\" IN ('child''1', 'child2')"));
+        for value in ["parent'1", "child'1", "child2"] {
+            assert!(contains_string(&query, value));
+        }
     }
 
     #[test]
-    fn entity_autocomplete_query_escapes_search_and_exclusions() {
+    fn entity_autocomplete_query_preserves_patterns_and_exclusions() {
         let excluded_ids = BTreeSet::from(["existing'1".to_string(), "existing2".to_string()]);
         let query = entity_autocomplete_query("Ada's", &excluded_ids);
-        assert!(query.contains("ILIKE '%Ada''s%'"));
-        assert!(query.contains("e.id ILIKE '%Ada''s%'"));
-        assert!(query.contains("e.\"semantic:title\" ILIKE '%Ada''s%'"));
-        assert!(query.contains("e.id NOT IN ('existing''1', 'existing2')"));
-        assert!(query.contains(DIRECTORY_NODE_CLASS_ID));
-        assert!(query.contains("LIMIT 50"));
+        for value in [
+            "%Ada's%",
+            "existing'1",
+            "existing2",
+            DIRECTORY_NODE_CLASS_ID,
+        ] {
+            assert!(contains_string(&query, value));
+        }
+        assert_eq!(query.limit, Some(Expr::from(50usize)));
     }
 
     #[test]
-    fn addable_entities_query_excludes_parent_and_existing_children() {
+    fn addable_entities_query_preserves_parent_and_limit() {
         let query = addable_entities_query("parent'1", "needle", 25);
-        assert!(query.contains("e.id != 'parent''1'"));
-        assert!(query.contains("e.id NOT IN (SELECT"));
-        assert!(query.contains("n.\"semantic:base:directory_node:from\" = 'parent''1'"));
-        assert!(query.contains("LIMIT 25"));
+        assert!(contains_string(&query, "parent'1"));
+        assert_eq!(query.limit, Some(Expr::from(25usize)));
     }
 
     #[test]
     fn parent_count_and_outgoing_queries_use_directory_relation_fields() {
         let parent_count = parent_count_query("child'1");
-        assert!(parent_count.contains("COUNT(*) AS parent_count"));
-        assert!(parent_count.contains("n.\"semantic:relation:to\" = 'child''1'"));
-        assert!(parent_count.contains(DIRECTORY_NODE_RELATION_ID));
-
+        assert_eq!(
+            parent_count.projection[0].alias.as_deref(),
+            Some("parent_count")
+        );
+        assert!(matches!(
+            *parent_count.projection[0].expr,
+            Expr::Aggregate {
+                op: AggregateOp::Count,
+                ..
+            }
+        ));
+        assert!(contains_string(&parent_count, "child'1"));
+        assert!(contains_string(&parent_count, DIRECTORY_NODE_RELATION_ID));
         let outgoing = directory_outgoing_links_query("dir'1");
-        assert!(outgoing.contains("n.\"semantic:base:directory_node:from\" = 'dir''1'"));
-        assert!(outgoing.contains("directory_to"));
+        assert!(contains_string(&outgoing, "dir'1"));
+        assert_eq!(
+            outgoing.projection[1].alias.as_deref(),
+            Some("directory_to")
+        );
     }
 
     #[tokio::test]
@@ -623,7 +695,7 @@ mod tests {
         insert_directory_node(&db, "node-b", "parent", "child-b", 2).await;
 
         let result = db
-            .query(QueryInput::sql(child_links_query(
+            .query(QueryInput::from(child_links_query(
                 "parent",
                 &["child-b".to_string()],
             )))
@@ -656,7 +728,7 @@ mod tests {
         insert_directory_node(&db, "node-existing", "parent", "existing", 1).await;
 
         let result = db
-            .query(QueryInput::sql(addable_entities_query(
+            .query(QueryInput::from(addable_entities_query(
                 "parent", "Needle", 50,
             )))
             .await
@@ -690,7 +762,7 @@ mod tests {
         .expect("entity should insert");
 
         let by_id = db
-            .query(QueryInput::sql(addable_entities_query(
+            .query(QueryInput::from(addable_entities_query(
                 "parent",
                 "find-by-id",
                 50,
@@ -702,7 +774,7 @@ mod tests {
         };
 
         let by_attr_title = db
-            .query(QueryInput::sql(addable_entities_query(
+            .query(QueryInput::from(addable_entities_query(
                 "parent",
                 "Attribute",
                 50,
@@ -720,14 +792,30 @@ mod tests {
     #[test]
     fn sort_options_map_to_stable_ordering() {
         let title = child_query("parent", DirectorySort::TitleDesc, 10, 0);
-        assert!(title.contains("ORDER BY child.title DESC, child.id ASC"));
+        assert_eq!(
+            title.order_by,
+            vec![
+                order(&["child", "title"], SortDirection::Desc),
+                order(&["child", "id"], SortDirection::Asc)
+            ]
+        );
         let id = child_query("parent", DirectorySort::IdAsc, 10, 0);
-        assert!(id.contains("ORDER BY child.id ASC"));
+        assert_eq!(
+            id.order_by,
+            vec![order(&["child", "id"], SortDirection::Asc)]
+        );
         let semantic = semantic_children_query("parent", DirectorySort::Order, 10, 0);
-        assert!(semantic.contains("ORDER BY child.title ASC, child.id ASC"));
+        assert_eq!(
+            semantic.order_by,
+            vec![
+                order(&["child", "title"], SortDirection::Asc),
+                order(&["child", "id"], SortDirection::Asc)
+            ]
+        );
         let roots = semantic_parent_roots_query(DirectorySort::Order, 10, 0);
-        assert!(roots.contains("parent.id IN (SELECT DISTINCT"));
-        assert!(!roots.contains("EXISTS"));
+        assert!(
+            matches!(roots.predicate, Some(Expr::Binary { op: BinaryOp::In, right, .. }) if matches!(right.as_ref(), Expr::Subquery(query) if query.distinct))
+        );
     }
 
     #[tokio::test]
@@ -747,7 +835,7 @@ mod tests {
         insert_parented_entity(&db, "unparented", "Unparented", None).await;
 
         let QueryResult::Select(first_page) = db
-            .query(QueryInput::sql(semantic_parent_roots_query(
+            .query(QueryInput::from(semantic_parent_roots_query(
                 DirectorySort::Order,
                 2,
                 0,
@@ -758,7 +846,7 @@ mod tests {
             panic!("semantic roots query should select rows");
         };
         let QueryResult::Select(second_page) = db
-            .query(QueryInput::sql(semantic_parent_roots_query(
+            .query(QueryInput::from(semantic_parent_roots_query(
                 DirectorySort::Order,
                 2,
                 2,
@@ -772,7 +860,7 @@ mod tests {
         assert_eq!(row_ids(&second_page), vec!["nested"]);
 
         let QueryResult::Select(children) = db
-            .query(QueryInput::sql(semantic_children_query(
+            .query(QueryInput::from(semantic_children_query(
                 "parent-a",
                 DirectorySort::Order,
                 10,
@@ -786,7 +874,7 @@ mod tests {
         assert_eq!(row_ids(&children), vec!["child-a1", "child-a2"]);
 
         let QueryResult::Select(classified) = db
-            .query(QueryInput::sql(semantic_parent_ids_for_candidates_query(
+            .query(QueryInput::from(semantic_parent_ids_for_candidates_query(
                 &[
                     "parent-a".to_string(),
                     "leaf".to_string(),
@@ -847,9 +935,8 @@ mod tests {
             .expect("semantic hierarchy should insert");
 
         let query = semantic_navigable_children_query("root", DirectorySort::Order, 200, 0);
-        assert!(!query.contains("EXISTS"));
         let QueryResult::Select(children) = db
-            .query(QueryInput::sql(query))
+            .query(QueryInput::from(query))
             .await
             .expect("navigable semantic children query should run")
         else {
@@ -877,7 +964,7 @@ mod tests {
         insert_parented_entity(&db, "quoted-child", "Quoted Child", Some("quote'parent")).await;
 
         let QueryResult::Select(self_children) = db
-            .query(QueryInput::sql(semantic_children_query(
+            .query(QueryInput::from(semantic_children_query(
                 "self",
                 DirectorySort::Order,
                 10,
@@ -891,7 +978,7 @@ mod tests {
         assert_eq!(row_ids(&self_children), vec!["self"]);
 
         let QueryResult::Select(parent) = db
-            .query(QueryInput::sql(semantic_parent_query("cycle-a")))
+            .query(QueryInput::from(semantic_parent_query("cycle-a")))
             .await
             .expect("semantic parent query should run")
         else {
@@ -900,7 +987,7 @@ mod tests {
         assert_eq!(row_ids(&parent), vec!["cycle-b"]);
 
         let QueryResult::Select(quoted_children) = db
-            .query(QueryInput::sql(semantic_children_query(
+            .query(QueryInput::from(semantic_children_query(
                 "quote'parent",
                 DirectorySort::Order,
                 10,
@@ -912,6 +999,35 @@ mod tests {
             panic!("escaped parent query should select rows");
         };
         assert_eq!(row_ids(&quoted_children), vec!["quoted-child"]);
+    }
+
+    #[tokio::test]
+    async fn empty_candidates_and_directory_aggregates_are_direct_asts() {
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
+        db.upsert_package(semantic_base::package()).await.unwrap();
+        insert_directory(&db, "parent'1", "Parent").await;
+        insert_entity(&db, "child'1", "semantic:base:person", "Child").await;
+        insert_directory_node(&db, "node", "parent'1", "child'1", 7).await;
+        for query in [
+            child_links_query("parent'1", &[]),
+            semantic_parent_ids_for_candidates_query(&[]),
+        ] {
+            let QueryResult::Select(rows) = db.query(query).await.unwrap() else {
+                panic!("expected rows")
+            };
+            assert!(rows.is_empty());
+        }
+        let QueryResult::Select(count) = db.query(parent_count_query("child'1")).await.unwrap()
+        else {
+            panic!("expected rows")
+        };
+        assert_eq!(count.len(), 1);
+        assert_eq!(count[0].get("parent_count"), Some(&Value::I64(1)));
+        let QueryResult::Select(max) = db.query(max_child_order_query("parent'1")).await.unwrap()
+        else {
+            panic!("expected rows")
+        };
+        assert_eq!(max[0].get("max_order"), Some(&Value::U64(7)));
     }
 
     async fn insert_directory(db: &Db, id: &str, title: &str) {

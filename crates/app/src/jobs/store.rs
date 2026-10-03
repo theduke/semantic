@@ -218,6 +218,7 @@ impl JobStore for DbJobStore {
                 arg: Box::new(FunctionArg::Wildcard),
             }),
             alias: Some("count".into()),
+            wildcard: None,
         }];
         let QueryResult::Select(rows) =
             self.db.query_data(query.into()).await.map_err(read_error)?

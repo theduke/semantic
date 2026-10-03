@@ -1,7 +1,11 @@
 use std::rc::Rc;
 
+use crate::query_ast::QueryRequest;
 use dioxus::prelude::*;
-use semantic_data::value::{Object, Value};
+use semantic_data::{
+    query::{Expr, SelectQuery},
+    value::{Object, Value},
+};
 use semantic_ui_core::{
     EntityDisplayMode, EntityDisplayRenderer,
     components::{EmptyState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator},
@@ -19,13 +23,13 @@ use crate::{
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE: usize = 1_000_000;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct CollectionQueryKey {
     scope_id: Option<String>,
     collection: String,
     page: usize,
     page_size: usize,
-    listing_filter: Option<String>,
+    listing_filter: Option<Expr>,
 }
 
 #[derive(Clone)]
@@ -295,22 +299,15 @@ async fn query_collection_page(
     client: semantic_rpc::RpcClient,
     key: &CollectionQueryKey,
 ) -> std::result::Result<CollectionQueryPage, String> {
-    let mut payload = Object::new();
-    if let Some(scope_id) = key.scope_id.clone() {
-        payload.insert("scope_id", Value::String(scope_id));
-    }
-    payload.insert(
-        "query",
-        Value::String(collection_page_query(
-            &key.collection,
-            key.page,
-            key.page_size,
-            key.listing_filter.as_deref(),
-        )),
-    );
-    payload.insert("format", Value::String("sql".to_string()));
+    let payload = QueryRequest::Ast(collection_page_query(
+        &key.collection,
+        key.page,
+        key.page_size,
+        key.listing_filter.as_ref(),
+    ))
+    .payload(key.scope_id.as_deref());
     let response = client
-        .invoke_value("semantic.db.query", Value::Object(payload))
+        .invoke_value("semantic.db.query", payload)
         .await
         .map_err(|err| err.to_string())?;
     let Value::Object(object) = response else {
@@ -342,23 +339,16 @@ fn collection_page_query(
     collection: &str,
     page: usize,
     page_size: usize,
-    listing_filter: Option<&str>,
-) -> String {
+    listing_filter: Option<&Expr>,
+) -> SelectQuery {
     let page = clamp_page(page);
     let page_size = clamp_page_size(page_size);
-    format!(
-        "SELECT * FROM {}{} LIMIT {} OFFSET {}",
-        sql_identifier(collection),
-        listing_filter
-            .map(|predicate| format!(" WHERE {predicate}"))
-            .unwrap_or_default(),
-        page_size.saturating_add(1),
-        page.saturating_mul(page_size)
-    )
-}
-
-fn sql_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
+    let mut query = SelectQuery::new()
+        .with_collection(collection)
+        .with_limit(page_size.saturating_add(1))
+        .with_offset(page.saturating_mul(page_size));
+    query.predicate = listing_filter.cloned();
+    query
 }
 
 fn clamp_page(page: usize) -> usize {
@@ -378,27 +368,51 @@ fn clamp_page_size(page_size: usize) -> usize {
 mod tests {
     use super::*;
 
-    #[test]
-    fn collection_page_query_quotes_identifiers_and_fetches_a_sentinel_row() {
-        assert_eq!(
-            collection_page_query("media:with\"quote", 2, 50, None),
-            "SELECT * FROM \"media:with\"\"quote\" LIMIT 51 OFFSET 100"
+    #[tokio::test]
+    async fn collection_sends_one_ast_request_with_scope() {
+        let (client, calls) = crate::query_ast::tests::capture_client();
+        let key = CollectionQueryKey {
+            scope_id: Some("scope".into()),
+            collection: "entities".into(),
+            page: 2,
+            page_size: 50,
+            listing_filter: listing_predicate("entities", None),
+        };
+        query_collection_page(client, &key).await.unwrap();
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        crate::query_ast::tests::assert_ast_call(
+            &calls[0],
+            &collection_page_query("entities", 2, 50, key.listing_filter.as_ref()),
+            Some("scope"),
         );
+    }
+
+    #[test]
+    fn collection_page_query_preserves_identifiers_and_fetches_a_sentinel_row() {
+        let query = collection_page_query("media:with\"quote", 2, 50, None);
+        assert_eq!(query.collection.as_deref(), Some("media:with\"quote"));
+        assert_eq!(query.limit, Some(51usize.into()));
+        assert_eq!(query.offset, 100usize.into());
     }
 
     #[test]
     fn collection_page_query_clamps_unbounded_route_state() {
-        assert_eq!(
-            collection_page_query("entities", usize::MAX, usize::MAX, None),
-            "SELECT * FROM \"entities\" LIMIT 201 OFFSET 200000000"
-        );
+        let query = collection_page_query("entities", usize::MAX, usize::MAX, None);
+        assert_eq!(query.limit, Some(201usize.into()));
+        assert_eq!(query.offset, 200_000_000usize.into());
     }
 
     #[test]
     fn collection_page_query_filters_before_fetching_the_sentinel_row() {
-        assert_eq!(
-            collection_page_query("entities", 1, 25, Some("type NOT IN ('example:hidden')")),
-            "SELECT * FROM \"entities\" WHERE type NOT IN ('example:hidden') LIMIT 26 OFFSET 25"
-        );
+        let predicate = Expr::InList {
+            expr: Box::new(crate::query_ast::field(None, "type")),
+            list: vec![crate::query_ast::literal("example:hidden".to_string())],
+            negated: true,
+        };
+        let query = collection_page_query("entities", 1, 25, Some(&predicate));
+        assert_eq!(query.predicate, Some(predicate));
+        assert_eq!(query.limit, Some(26usize.into()));
+        assert_eq!(query.offset, 25usize.into());
     }
 }

@@ -489,7 +489,8 @@ pub trait Backend: Send + Sync {
     /// statistics; backends that instrument operators override it.
     async fn explain_analyze(&self, query: TextQueryInput) -> Result<QueryExplain, DbError> {
         let query = match query {
-            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Ast(query) => query.into_bound(&std::collections::BTreeMap::new())?,
+            TextQueryInput::AstWithParams { query, params } => query.into_bound(&params)?,
             TextQueryInput::Text {
                 format,
                 query,
@@ -790,6 +791,12 @@ impl Db {
             .into_iter()
             .map(Into::into)
             .collect()
+    }
+
+    /// Parse SQL into a reusable public AST without binding or execution.
+    /// Uses this backend's SQL dialect, including its disabled SQL frontend.
+    pub fn parse_sql(&self, sql: &str) -> Result<semantic_data::query::Query, DbError> {
+        crate::sql::parse_sql_query_unbound(sql, self.backend.sql_dialect()).map_err(DbError::from)
     }
 
     pub async fn query(

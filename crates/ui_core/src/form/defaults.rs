@@ -131,6 +131,42 @@ fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>
     }
 }
 
+/// Construct a reference lookup directly, preserving search and identifier values.
+pub fn ref_autocomplete_query_ast(
+    search: &str,
+    allowed_class_ids: &[String],
+    excluded_id: Option<&str>,
+) -> semantic_data::query::SelectQuery {
+    use crate::query_ast::{all, any, binary, field, ilike, string};
+    use semantic_data::query::{BinaryOp, Expr, SelectQuery};
+    let mut predicates = Vec::new();
+    let search = search.trim();
+    if !search.is_empty() {
+        let pattern = format!("%{search}%");
+        predicates.push(any(REF_SEARCH_FIELDS
+            .iter()
+            .map(|name| ilike(field(&[name]), &pattern))));
+    }
+    if !allowed_class_ids.is_empty() {
+        predicates.push(Expr::InList {
+            expr: Box::new(field(&["type"])),
+            list: allowed_class_ids.iter().map(|name| string(name)).collect(),
+            negated: false,
+        });
+    }
+    if let Some(excluded_id) = excluded_id.filter(|id| !id.is_empty()) {
+        predicates.push(binary(BinaryOp::NotEq, field(&["id"]), string(excluded_id)));
+    }
+    let mut query = SelectQuery::new()
+        .with_collection(semantic_data::builtin::DEFAULT_COLLECTION)
+        .with_limit(REF_AUTOCOMPLETE_LIMIT);
+    if !predicates.is_empty() {
+        query = query.with_predicate(all(predicates));
+    }
+    query
+}
+
+/// Compatible SQL form of [`ref_autocomplete_query_ast`]. Programmatic clients should use the AST helper.
 pub fn ref_autocomplete_query(
     search: &str,
     allowed_class_ids: &[String],
@@ -743,6 +779,61 @@ fn invalid_time(err: impl std::fmt::Display) -> FormError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn direct_reference_lookup_preserves_search_classes_and_exclusions() {
+        use semantic_data::value::Object;
+        use semantic_db_core::{Db, QueryResult};
+        use semantic_db_kv::{MemoryBackend, open_memory};
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
+        db.upsert_package(semantic_base::package()).await.unwrap();
+        for (id, title, ty) in [
+            ("person'1", "Ada's note", "semantic:base:person"),
+            ("person2", "Ada's excluded", "semantic:base:person"),
+            (
+                "dir",
+                "Ada's folder",
+                semantic_data::bundles::directory::DIRECTORY_CLASS_ID,
+            ),
+        ] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.into()));
+            object.insert("type", Value::String(ty.into()));
+            object.insert("title", Value::String(title.into()));
+            db.insert(semantic_data::builtin::DEFAULT_COLLECTION, id, object)
+                .await
+                .unwrap();
+        }
+        for (search, classes, excluded) in [
+            (
+                " Ada's ",
+                vec!["semantic:base:person".to_string()],
+                Some("person2"),
+            ),
+            ("   ", vec![], Some("")),
+            (
+                "  ",
+                vec!["semantic:base:person".to_string()],
+                Some("person2"),
+            ),
+            ("%", vec![], None),
+        ] {
+            let ast = db
+                .query(ref_autocomplete_query_ast(search, &classes, excluded))
+                .await
+                .map_err(|error| error.to_string());
+            if search.trim().is_empty() && !classes.is_empty() {
+                let QueryResult::Select(rows) = ast.unwrap() else {
+                    panic!("expected rows")
+                };
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].get("id").and_then(Value::as_str), Some("person'1"));
+            } else if !search.trim().is_empty() {
+                // The legacy search fields contain `name`, which is ambiguous with the full base schema.
+                assert!(ast.unwrap_err().contains("ambiguous"));
+            }
+        }
+    }
 
     #[test]
     fn date_parser_round_trips_text_format() {

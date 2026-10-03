@@ -556,8 +556,10 @@ fn collect_expr_paths(expr: &crate::Expr, paths: &mut BTreeSet<FieldPath>) {
         E::Operand(crate::Operand::Field(path)) => {
             paths.insert(path.clone());
         }
-        E::Operand(crate::Operand::Literal(_)) => {}
-        E::Unary { expr, .. } | E::IsNull { expr, .. } => collect_expr_paths(expr, paths),
+        E::Operand(crate::Operand::Literal(_) | crate::Operand::Parameter(_)) => {}
+        E::Unary { expr, .. } | E::IsNull { expr, .. } | E::ProjectionRef(expr) => {
+            collect_expr_paths(expr, paths)
+        }
         E::Binary { left, right, .. } => {
             collect_expr_paths(left, paths);
             collect_expr_paths(right, paths);

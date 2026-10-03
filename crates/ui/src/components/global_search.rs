@@ -6,6 +6,7 @@ use futures::future::join_all;
 use regex::RegexBuilder;
 use semantic_data::{
     builtin::DEFAULT_COLLECTION,
+    query::{BinaryOp, Expr, SelectQuery},
     value::{Object, Value},
 };
 use semantic_rpc::RpcClient;
@@ -16,6 +17,7 @@ use semantic_ui_core::{
 
 use super::{IconButton, IconButtonSize};
 use crate::app::entity_route;
+use crate::query_ast::{QueryRequest, combine, field, literal};
 
 const SEARCH_RESULT_LIMIT: usize = 12;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -541,34 +543,33 @@ async fn search_entities(
     Ok(results)
 }
 
-fn search_query(collection: &SearchCollection, pattern: &str) -> String {
-    let mut fields = vec!["id"];
-    fields.extend(collection.title_fields.iter().map(String::as_str));
-    let pattern = escape_sql_string(pattern);
-    let predicate = fields
-        .into_iter()
-        .map(|field| format!("{} ~* '{pattern}'", quote_sql_ident(field)))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    format!(
-        "SELECT * FROM {} WHERE ({predicate}) LIMIT {SEARCH_RESULT_LIMIT}",
-        quote_sql_ident(&collection.name),
-    )
+fn search_query(collection: &SearchCollection, pattern: &str) -> SelectQuery {
+    let fields = std::iter::once("id").chain(collection.title_fields.iter().map(String::as_str));
+    SelectQuery::new()
+        .with_collection(&collection.name)
+        .with_predicate(
+            combine(
+                BinaryOp::Or,
+                fields.map(|name| Expr::RegexMatch {
+                    expr: Box::new(field(None, name)),
+                    pattern: Box::new(literal(pattern.to_string())),
+                    case_insensitive: true,
+                    negated: false,
+                }),
+            )
+            .expect("id search field"),
+        )
+        .with_limit(SEARCH_RESULT_LIMIT)
 }
 
 async fn run_search_query(
     client: RpcClient,
     scope_id: Option<String>,
-    query: String,
+    query: SelectQuery,
 ) -> std::result::Result<Vec<Object>, String> {
-    let mut payload = Object::new();
-    if let Some(scope_id) = scope_id {
-        payload.insert("scope_id", Value::String(scope_id));
-    }
-    payload.insert("query", Value::String(query));
-    payload.insert("format", Value::String("sql".to_string()));
+    let payload = QueryRequest::Ast(query).payload(scope_id.as_deref());
     let response = client
-        .invoke_value("semantic.db.query", Value::Object(payload))
+        .invoke_value("semantic.db.query", payload)
         .await
         .map_err(|error| error.to_string())?;
     let Value::Object(response) = response else {
@@ -605,14 +606,6 @@ fn search_rank(result: &SearchResult, pattern: &str) -> (u8, usize) {
     (4, usize::MAX)
 }
 
-fn quote_sql_ident(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-fn escape_sql_string(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
 fn result_dom_id(index: usize) -> String {
     format!("semantic-global-search-result-{index}")
 }
@@ -620,6 +613,24 @@ fn result_dom_id(index: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn search_sends_one_ast_request_with_scope() {
+        let (client, calls) = crate::query_ast::tests::capture_client();
+        let query = search_query(
+            &SearchCollection {
+                name: "people".into(),
+                title_fields: vec!["semantic:title".into()],
+            },
+            "Ada's",
+        );
+        run_search_query(client, Some("scope".into()), query.clone())
+            .await
+            .unwrap();
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        crate::query_ast::tests::assert_ast_call(&calls[0], &query, Some("scope"));
+    }
 
     #[test]
     fn query_uses_case_insensitive_regex_for_id_and_available_title_fields() {
@@ -632,9 +643,27 @@ mod tests {
             ],
         };
 
+        let query = search_query(&collection, "^Ada('s)?$");
+        assert_eq!(query.collection.as_deref(), Some("people"));
+        assert_eq!(query.limit, Some(SEARCH_RESULT_LIMIT.into()));
         assert_eq!(
-            search_query(&collection, "^Ada('s)?$"),
-            "SELECT * FROM \"people\" WHERE (\"id\" ~* '^Ada(''s)?$' OR \"semantic:title\" ~* '^Ada(''s)?$' OR \"semantic:filestore:file:filename\" ~* '^Ada(''s)?$' OR \"display_name\" ~* '^Ada(''s)?$') LIMIT 12"
+            query.predicate,
+            combine(
+                BinaryOp::Or,
+                [
+                    "id",
+                    "semantic:title",
+                    semantic_data::filestore::ATTR_FILE_FILENAME,
+                    "display_name"
+                ]
+                .into_iter()
+                .map(|name| Expr::RegexMatch {
+                    expr: Box::new(field(None, name)),
+                    pattern: Box::new(literal("^Ada('s)?$".to_string())),
+                    case_insensitive: true,
+                    negated: false
+                })
+            )
         );
     }
 

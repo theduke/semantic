@@ -15,7 +15,7 @@ use std::sync::Arc;
 use futures::future::{Either, select};
 use futures::pin_mut;
 use semantic_data::schema::{
-    AnyType, FunctionParam, FunctionType, InterfaceMethod, InterfaceType, Type, TypeKind,
+    AnyType, FunctionParam, FunctionType, InterfaceMethod, InterfaceType, Type, TypeDef, TypeKind,
     interface_fingerprint,
 };
 use semantic_rpc_core::{CallError, RpcError};
@@ -69,8 +69,16 @@ pub fn registry_interface<Ctx, E>(registry: &RpcRegistry<Ctx, E>) -> InterfaceTy
 pub fn registry_descriptor(
     interface: &InterfaceType,
 ) -> Result<ImplementationDescriptor, InvocationError> {
-    // Command types are inline, so there are no named definitions to resolve.
-    let fingerprint = interface_fingerprint(interface, &BTreeMap::new())
+    registry_descriptor_with_definitions(interface, &BTreeMap::new())
+}
+
+/// Describe commands with the complete named type graph used by their schemas.
+/// Only reachable definitions contribute to the fingerprint.
+pub fn registry_descriptor_with_definitions(
+    interface: &InterfaceType,
+    definitions: &BTreeMap<String, TypeDef>,
+) -> Result<ImplementationDescriptor, InvocationError> {
+    let fingerprint = interface_fingerprint(interface, definitions)
         .map_err(|error| InvocationError::new("interface_incompatible", error))?;
     Ok(ImplementationDescriptor {
         export: COMMAND_EXPORT.into(),
@@ -190,6 +198,55 @@ fn invocation_error<E: Into<RpcError>>(error: CallError<E>) -> InvocationError {
         code: error.code,
         message: error.message,
         data: error.data,
+    }
+}
+
+#[cfg(test)]
+mod named_definition_tests {
+    use super::*;
+    use semantic_data::value::SemanticType;
+
+    #[test]
+    fn fingerprints_resolve_recursive_query_definitions_and_ignore_unreachable_types() {
+        let interface = InterfaceType {
+            methods: vec![InterfaceMethod {
+                name: "query".into(),
+                signature: FunctionType {
+                    params: vec![FunctionParam {
+                        name: Some(PAYLOAD_PARAM.into()),
+                        ty: semantic_data::query::Query::semantic_type(),
+                    }],
+                    results: vec![String::semantic_type()],
+                    throws: None,
+                    async_fn: true,
+                },
+            }],
+        };
+        assert!(registry_descriptor(&interface).is_err());
+        let mut definitions = semantic_data::query::semantic::definitions();
+        let descriptor = registry_descriptor_with_definitions(&interface, &definitions).unwrap();
+        assert_eq!(
+            descriptor,
+            registry_descriptor_with_definitions(&interface, &definitions).unwrap()
+        );
+        let TypeKind::Named(reference) = semantic_data::query::Query::semantic_type().kind else {
+            panic!("named query")
+        };
+        let mut extra = definitions.get(&reference.name).unwrap().clone();
+        extra.name = "unreachable".into();
+        extra.ty = String::semantic_type();
+        definitions.insert("unreachable".into(), extra);
+        assert_eq!(
+            descriptor,
+            registry_descriptor_with_definitions(&interface, &definitions).unwrap()
+        );
+        definitions.get_mut(&reference.name).unwrap().ty = String::semantic_type();
+        assert_ne!(
+            descriptor.fingerprint,
+            registry_descriptor_with_definitions(&interface, &definitions)
+                .unwrap()
+                .fingerprint
+        );
     }
 }
 

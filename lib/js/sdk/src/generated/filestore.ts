@@ -3,6 +3,7 @@ import {
   command,
   type SemanticObject,
   type SemanticValue,
+  type TaggedScalar,
 } from "@semantic/sdk";
 import { ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE } from "@semantic/sdk/core";
 
@@ -57,13 +58,49 @@ export const ATTR_FILE_MIME_TYPE = "semantic:filestore:file:mime_type" as const;
 export const CLEANUP_CLASS_ID = "semantic:filestore:cleanup" as const;
 export const FILE_CLASS_ID = "semantic:filestore:file" as const;
 
-export type uploaded_at = number | bigint | Date;
-export type attempts = number;
+export type uploaded_at =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
+export type attempts =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
 export type last_error = string;
 export type locator = string;
-export type not_before = number | bigint | Date;
+export type not_before =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
 export type store = string;
-export type byte_size = number | bigint;
+export type byte_size =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
 export type content_hash_sha256 = string;
 export type filekind =
   | "image"
@@ -75,23 +112,141 @@ export type filekind =
   | "other";
 export type filename = string;
 export type filestore_locator = string;
-export type media_audio_bitrate = number | bigint;
-export type media_audio_channels = number | bigint;
+export type media_audio_bitrate =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
+export type media_audio_channels =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
 export type media_audio_codec = string;
-export type media_audio_sample_rate = number | bigint;
-export type media_bitrate = number | bigint;
+export type media_audio_sample_rate =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
+export type media_bitrate =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
 export type media_container_format = string;
-export type media_duration = number | bigint | Date;
+export type media_duration =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
 export type media_has_audio = boolean;
-export type media_pixel_height = number | bigint;
-export type media_pixel_width = number | bigint;
-export type media_video_bitrate = number | bigint;
+export type media_pixel_height =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
+export type media_pixel_width =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
+export type media_video_bitrate =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
 export type media_video_codec = string;
-export type media_video_frame_count = number | bigint;
-export type media_video_frames_per_second = number;
+export type media_video_frame_count =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
+export type media_video_frames_per_second =
+  | number
+  | TaggedScalar<"f32" | "f64">;
 export type mime_type = string;
 export type description = string;
-export type parent = SemanticValue;
+export type parent = string;
 export type title = string;
 export interface Cleanup {
   [ATTR_CLEANUP_ATTEMPTS]: attempts;

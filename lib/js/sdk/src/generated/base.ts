@@ -3,6 +3,7 @@ import {
   command,
   type SemanticObject,
   type SemanticValue,
+  type TaggedScalar,
 } from "@semantic/sdk";
 import {
   ATTR_CREATED_AT,
@@ -28,6 +29,7 @@ export const ATTR_LABEL_COLOR = "semantic:base:label:color" as const;
 export const ATTR_LABEL_NAME = "semantic:base:label:name" as const;
 export const ATTR_LABEL_SELECTION_MODE =
   "semantic:base:label:selection_mode" as const;
+export const ATTR_MAIN_CONTENT = "semantic:base:main_content" as const;
 export const ATTR_NOTE_NOTE_CONTENT =
   "semantic:base:note:note_content" as const;
 export const ATTR_NOTE_NOTE_FORMAT = "semantic:base:note:note_format" as const;
@@ -62,16 +64,39 @@ export const PERSON_CLASS_ID = "semantic:base:person" as const;
 export const WEB_BOOKMARK_CLASS_ID = "semantic:base:web_bookmark" as const;
 
 export type from = string;
-export type order = number | bigint;
+export type order =
+  | number
+  | bigint
+  | TaggedScalar<
+      | "i8"
+      | "i16"
+      | "i32"
+      | "i64"
+      | "i128"
+      | "u8"
+      | "u16"
+      | "u32"
+      | "u64"
+      | "u128"
+    >;
 export type entity_collection = string;
 export type label_color = string;
 export type label_name = string;
 export type selection_mode = "multiple" | "exclusive";
+export type main_content = { kind: "note"; data: string };
 export type note_content = string;
 export type note_format = "text" | "markdown";
 export type alternate_names = Array<string>;
-export type birth_date = number | bigint | Date;
-export type death_date = number | bigint | Date;
+export type birth_date =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
+export type death_date =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
 export type base_description = string;
 export type display_name = string;
 export type family_name = string;
@@ -80,10 +105,18 @@ export type honorific_prefix = string;
 export type honorific_suffix = string;
 export type middle_name = string;
 export type nickname = string;
-export type created_at = number | bigint | Date;
-export type updated_at = number | bigint | Date;
+export type created_at =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
+export type updated_at =
+  | number
+  | bigint
+  | Date
+  | TaggedScalar<"time" | "date" | "date_time" | "duration">;
 export type shared_description = string;
-export type parent = SemanticValue;
+export type parent = string;
 export type title = string;
 export interface Directory extends SemanticObject {
   [ATTR_CREATED_AT]?: created_at;

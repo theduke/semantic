@@ -49,7 +49,13 @@ default export.
 ## Quick start
 
 ```ts
-import { HttpTransport, SemanticClient } from "@semantic/sdk";
+import {
+  HttpTransport,
+  SemanticClient,
+  query,
+  expr,
+  projection,
+} from "@semantic/sdk";
 
 interface Post {
   title: string;
@@ -67,8 +73,12 @@ await client.insert<Post>(
   { collection: "posts" },
 );
 
-const result = await client.sql<Post>(
-  "SELECT title, published, views FROM posts",
+const result = await client.query<Post>(
+  query.select("posts", {
+    projection: ["title", "published", "views"].map((name) =>
+      projection.field(expr.field(name)),
+    ),
+  }),
 );
 
 if (result.kind === "select") {
@@ -159,24 +169,105 @@ RPC envelopes and tagged-value encoding themselves.
 
 ## Queries and mutations
 
-SQL accepts named expression parameters. Names are case-sensitive ASCII identifiers;
-map keys omit the colon. Repeated names reuse the same typed value.
+Construct a typed AST directly and send it through `client.query()`. The server executes
+it without converting it to SQL or parsing text. ASTs cover selects, joins, aggregates,
+subqueries, inserts, updates, deletes, and every supported DDL operation.
 
 ```ts
-await client.sql("SELECT id FROM default WHERE name = :name", {
-  params: { name: userInput },
+import {
+  query,
+  expr,
+  projection,
+  orderBy,
+  assignment,
+  fieldPath,
+} from "@semantic/sdk";
+
+const byOwner = query.select("notes", {
+  predicate: expr.eq(expr.field("owner"), expr.parameter("owner")),
+  projection: [
+    projection.field(expr.field("title")),
+    projection.wildcard("details"),
+  ],
+  order_by: [orderBy(expr.field("created_at"), "desc")],
+  limit: expr.literal(20),
+});
+await client.query(byOwner, {
+  params: { owner: "alice" },
+  scopeId: "workspace-1",
+});
+await client.query(byOwner, {
+  params: { owner: "bob" },
+  scopeId: "workspace-1",
+});
+
+await client.query(
+  query.insert("notes", [{ id: "note-1", title: "New note" }]),
+);
+await client.query(
+  query.update(
+    "notes",
+    [assignment(fieldPath("title"), expr.parameter("title"))],
+    { predicate: expr.eq(expr.field("id"), expr.literal("note-1")) },
+  ),
+  {
+    params: { title: "Updated note" },
+  },
+);
+await client.query(
+  query.ddl({
+    upsert_collection: {
+      name: "notes",
+      kind: "untyped",
+      integrity_mode: "permissive",
+    },
+  }),
+);
+```
+
+Builders are optional; ordinary objects matching the exported `Query`, `Expr` and
+`DdlOperation` types use the same representation. Query fields with schema defaults
+can be omitted. Field paths contain explicit segments: `expr.field("profile", "name")`
+selects a nested field, while `expr.field("profile.name")` names a single field.
+The complete transitive DDL schema is exported under `QuerySchema` and `@semantic/sdk/query`.
+
+AST parameters stay unbound and bindings are supplied separately. Names are
+case-sensitive ASCII identifiers without a leading colon; repeated names reuse the
+same typed value. Missing, unused or invalid bindings return `RpcError` with code
+`query_parameter_error` and `data.reason` (plus `data.name` when applicable).
+Bindings use the tagged value codec, including UUIDs, bytes and wide integers.
+
+### SQL parsing fallback
+
+When the starting input is SQL text, `parseSql()` returns a reusable AST without
+executing it. The selected scope determines the SQL dialect. Parameters remain
+unbound; values are provided when the returned AST is executed.
+
+```ts
+const parsed = await client.parseSql(
+  "SELECT id FROM notes WHERE owner = :owner",
+  {
+    scopeId: "workspace-1",
+  },
+);
+await client.query(parsed, {
+  params: { owner: "alice" },
+  scopeId: "workspace-1",
 });
 ```
 
-Parameters use the tagged value codec, including UUIDs, bytes and wide integers.
-Bindings cannot replace identifiers. Missing, unused, invalid and non-SQL bindings
-return `RpcError` with code `query_parameter_error` and `data.reason` (plus `data.name`
-when applicable). Quoted SQL text and comments do not introduce parameters.
+Parsing uses exact value decoding so literal widths and scalar kinds survive
+resubmission. Numeric and other typed scalar fields can be `TaggedScalar` wrappers;
+string, boolean and null fields retain their ordinary JavaScript representation.
+Void remains an explicit wrapper, including inside literal objects. Both
+`client.parseSql()` and `client.invoke(commands.parseSql, ...)` select exact decoding.
+Custom transports must honor `InvokeOptions.valueDecoding` for the same guarantee.
 
 ### SQL and PRQL
 
-`sql()` and `prql()` are conveniences around `query()`. All accept an optional
-`scopeId`.
+`sql()` and `prql()` remain available for text queries. All accept an optional
+`scopeId`; SQL accepts the same separate parameter bindings as AST queries. A
+`format` option is only valid when `query()` receives text.
 
 ```ts
 const sqlResult = await client.sql<{ id: string; title: string }>(
@@ -690,6 +781,14 @@ const titleAttribute = ATTR_TITLE;
 const sameTitleAttribute = CoreSchema.ATTR_TITLE;
 ```
 
+Query types in the main entry point are aliases of the generated Semantic query
+package, rather than a separate hand-maintained model. Package generation resolves
+`{ named: { name, args } }` as a type reference; `{ ref: ... }` represents an entity
+ID and generates `string`. Existing package definitions that used `ref` for named
+schema types should use `named`. Generated variants honor their schema tagging
+strategy; externally tagged unit cases are strings and payload cases are single-key
+objects. Exact scalar wrappers are included in generated scalar field types.
+
 Use the main entry point's ergonomic types for normal client/package authoring and
 the reflected core types when exact correspondence with Rust's full schema is
 important. Some reflected types include server-internal variants that the ergonomic
@@ -724,8 +823,6 @@ try {
 
 ## Current limitations
 
-- The high-level query client sends SQL or PRQL text. Query AST types are available
-  for package/schema authors, but there is no high-level AST query method yet.
 - Remote batches support create, upsert, and ID-based deletion only.
 - Types and generated command descriptors are compile-time contracts; the SDK does
   not perform runtime schema validation.
@@ -733,14 +830,15 @@ try {
 
 ## Package exports
 
-| Import                              | Contents                                                                                                                        |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `@semantic/sdk`                     | Ergonomic types, codecs, errors, commands, transports, client, builders, files, built-in command descriptors, and `CoreSchema`. |
-| `@semantic/sdk/core`                | Direct exports of the complete Rust-reflected core schema.                                                                      |
-| `@semantic/sdk/generator`           | Browser-safe package model and rendering API.                                                                                   |
-| `@semantic/sdk/generated/base`      | Generated types for `semantic.base`.                                                                                            |
-| `@semantic/sdk/generated/filestore` | Generated types for `semantic.filestore`.                                                                                       |
-| `@semantic/sdk/generated/commands`  | Built-in typed command descriptors; these are also exported as `commands` from the main entry point.                            |
+| Import                              | Contents                                                                                                                                      |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@semantic/sdk`                     | Ergonomic types, codecs, errors, commands, transports, client, builders, files, built-in command descriptors, and `CoreSchema`/`QuerySchema`. |
+| `@semantic/sdk/query`               | Canonical AST and transitive DDL schema generated from the Semantic query package.                                                            |
+| `@semantic/sdk/core`                | Direct exports of the complete Rust-reflected core schema.                                                                                    |
+| `@semantic/sdk/generator`           | Browser-safe package model and rendering API.                                                                                                 |
+| `@semantic/sdk/generated/base`      | Generated types for `semantic.base`.                                                                                                          |
+| `@semantic/sdk/generated/filestore` | Generated types for `semantic.filestore`.                                                                                                     |
+| `@semantic/sdk/generated/commands`  | Built-in typed command descriptors; these are also exported as `commands` from the main entry point.                                          |
 
 The wildcard `@semantic/sdk/generated/*` export also makes additional checked-in
 generated modules importable by subpath.

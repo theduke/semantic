@@ -8,6 +8,9 @@ export * from "./command.js";
 export * from "./transport.js";
 export * from "./client.js";
 export * from "./builder.js";
+export * from "./query.js";
+/** Complete canonical AST and transitive DDL schema definitions. */
+export * as QuerySchema from "./generated/query.js";
 export * from "./files.js";
 export * from "./http.js";
 export { commands } from "./generated/commands.js";

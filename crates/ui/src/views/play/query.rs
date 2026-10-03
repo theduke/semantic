@@ -1,4 +1,12 @@
-use semantic_data::{attr::ATTR_CREATED_AT, builtin::DEFAULT_COLLECTION, filestore::FILE_CLASS_ID};
+use crate::query_ast::{QueryRequest, binary, combine, field, literal, order};
+use semantic_data::{
+    attr::ATTR_CREATED_AT,
+    builtin::DEFAULT_COLLECTION,
+    filestore::FILE_CLASS_ID,
+    query::{
+        BinaryOp, Expr, PatternMatchKind, QueryField as AstQueryField, SelectQuery, SortDirection,
+    },
+};
 
 use crate::components::StructuredQuery;
 
@@ -6,7 +14,7 @@ pub use crate::components::{sql_ident, sql_string};
 
 const PAGE_SIZE: usize = 1_000;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlaylistFilter {
     pub collection: String,
     pub search: String,
@@ -17,7 +25,7 @@ pub struct PlaylistFilter {
     pub sql: String,
     pub expand_to_media: bool,
     pub structured: StructuredQuery,
-    pub structured_predicate: Option<String>,
+    pub structured_predicate: Option<Expr>,
 }
 
 impl Default for PlaylistFilter {
@@ -37,12 +45,12 @@ impl Default for PlaylistFilter {
     }
 }
 
-pub fn playlist_query(
+pub(crate) fn playlist_query(
     filter: &PlaylistFilter,
     offset: usize,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<QueryRequest, String> {
     if filter.advanced_sql {
-        return validate_raw_select(&filter.sql);
+        return validate_raw_select(&filter.sql).map(QueryRequest::Sql);
     }
     if filter.collection.trim().is_empty() {
         return Err("Collection is required".to_string());
@@ -60,28 +68,57 @@ pub fn playlist_query(
     if kinds.is_empty() {
         return Err("Select at least one media kind".to_string());
     }
-    let mime_predicate = kinds
-        .iter()
-        .map(|kind| format!("e.mime_type LIKE {}", sql_string(kind)))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    let search_predicate = if filter.search.trim().is_empty() {
-        String::new()
-    } else {
-        let pattern = sql_string(&format!("%{}%", filter.search.trim()));
-        format!(" AND (e.id ILIKE {pattern} OR e.title ILIKE {pattern})",)
+    let pattern = |name: &str, value: String, case_insensitive| Expr::PatternMatch {
+        kind: PatternMatchKind::Like,
+        expr: Box::new(field(Some("e"), name)),
+        pattern: Box::new(literal(value)),
+        case_insensitive,
+        negated: false,
     };
-    let structured_predicate = filter
-        .structured_predicate
-        .as_ref()
-        .map(|predicate| format!(" AND ({predicate})"))
-        .unwrap_or_default();
-    Ok(format!(
-        "SELECT e.id AS id, e.type AS type, e.title AS title, e.mime_type AS mime_type, e.media_duration AS media_duration FROM {collection} AS e WHERE e.type IN ({file_class}) AND ({mime_predicate}){search_predicate}{structured_predicate} ORDER BY e.{created_at} DESC, e.id ASC LIMIT {PAGE_SIZE} OFFSET {offset}",
-        collection = sql_ident(&filter.collection),
-        file_class = sql_string(FILE_CLASS_ID),
-        created_at = sql_ident(ATTR_CREATED_AT),
-    ))
+    let mut predicates = vec![
+        Expr::InList {
+            expr: Box::new(field(Some("e"), "type")),
+            list: vec![literal(FILE_CLASS_ID.to_string())],
+            negated: false,
+        },
+        combine(
+            BinaryOp::Or,
+            kinds
+                .into_iter()
+                .map(|kind| pattern("mime_type", kind.into(), false)),
+        )
+        .expect("selected media kinds"),
+    ];
+    if !filter.search.trim().is_empty() {
+        let value = format!("%{}%", filter.search.trim());
+        predicates.push(binary(
+            BinaryOp::Or,
+            pattern("id", value.clone(), true),
+            pattern("title", value, true),
+        ));
+    }
+    predicates.extend(filter.structured_predicate.clone());
+    let query = SelectQuery::new()
+        .with_collection(&filter.collection)
+        .with_source_alias("e")
+        .with_projection(
+            ["id", "type", "title", "mime_type", "media_duration"]
+                .into_iter()
+                .map(|name| AstQueryField {
+                    expr: Box::new(field(Some("e"), name)),
+                    alias: Some(name.into()),
+                    wildcard: None,
+                })
+                .collect(),
+        )
+        .with_predicate(combine(BinaryOp::And, predicates).expect("media predicates"))
+        .with_order_by(vec![
+            order(Some("e"), ATTR_CREATED_AT, SortDirection::Desc),
+            order(Some("e"), "id", SortDirection::Asc),
+        ])
+        .with_limit(PAGE_SIZE)
+        .with_offset(offset);
+    Ok(query.into())
 }
 
 pub fn page_size() -> usize {
@@ -124,15 +161,96 @@ mod tests {
         FilterGroup, FilterNode, FilterOperator, FilterRule, QueryField, QueryFieldKind,
         compile_structured_predicate,
     };
+    use semantic_data::value::Value;
+
+    #[tokio::test]
+    async fn media_filters_search_projection_and_pagination_execute_as_ast() {
+        use crate::query_ast::tests::{memory_db, row};
+        let db = memory_db(
+            "query_test",
+            [
+                row(
+                    "a",
+                    [
+                        ("type", Value::String(FILE_CLASS_ID.into())),
+                        ("mime_type", Value::String("image/png".into())),
+                        ("title", Value::String("Ada's photo".into())),
+                    ],
+                ),
+                row(
+                    "b",
+                    [
+                        ("type", Value::String(FILE_CLASS_ID.into())),
+                        ("mime_type", Value::String("audio/ogg".into())),
+                        ("title", Value::String("Ada's audio".into())),
+                    ],
+                ),
+                row(
+                    "c",
+                    [
+                        ("type", Value::String(FILE_CLASS_ID.into())),
+                        ("mime_type", Value::String("video/mp4".into())),
+                        ("title", Value::String("Ada's video".into())),
+                    ],
+                ),
+                row(
+                    "d",
+                    [
+                        ("type", Value::String(FILE_CLASS_ID.into())),
+                        ("mime_type", Value::String("image/png".into())),
+                        ("title", Value::String("other".into())),
+                    ],
+                ),
+            ],
+        )
+        .await;
+        let filter = PlaylistFilter {
+            collection: "query_test".into(),
+            video: false,
+            search: "Ada's".into(),
+            ..Default::default()
+        };
+        let QueryRequest::Ast(query) = playlist_query(&filter, 1).unwrap() else {
+            panic!("AST")
+        };
+        let semantic_db_core::QueryResult::Select(rows) = db
+            .query(semantic_data::query::QueryInput::from(query))
+            .await
+            .unwrap()
+        else {
+            panic!("AST rows")
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.get("id").unwrap().as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["b"]
+        );
+        assert_eq!(
+            rows[0].get("mime_type").and_then(Value::as_str),
+            Some("audio/ogg")
+        );
+    }
 
     #[test]
     fn default_query_is_playable_stable_and_paged() {
-        let query = playlist_query(&PlaylistFilter::default(), 2_000).unwrap();
-        assert!(query.contains("image/%"));
-        assert!(query.contains("audio/%"));
-        assert!(query.contains("video/%"));
-        assert!(query.contains("ORDER BY e.\"semantic:created_at\" DESC, e.id ASC"));
-        assert!(query.ends_with("LIMIT 1000 OFFSET 2000"));
+        let QueryRequest::Ast(query) = playlist_query(&PlaylistFilter::default(), 2_000).unwrap()
+        else {
+            panic!("generated AST")
+        };
+        assert_eq!(query.limit, Some(PAGE_SIZE.into()));
+        assert_eq!(query.offset, 2_000usize.into());
+        assert_eq!(
+            query.order_by,
+            vec![
+                order(Some("e"), ATTR_CREATED_AT, SortDirection::Desc),
+                order(Some("e"), "id", SortDirection::Asc)
+            ]
+        );
+        assert_eq!(query.projection.len(), 5);
+        for kind in ["image/%", "audio/%", "video/%"] {
+            assert!(crate::query_ast::tests::contains_string(&query, kind));
+        }
         assert!(
             PlaylistFilter::default()
                 .sql
@@ -141,13 +259,18 @@ mod tests {
     }
 
     #[test]
-    fn search_and_identifiers_are_escaped() {
+    fn search_and_identifiers_remain_literal_values() {
         let mut filter = PlaylistFilter::default();
         filter.collection = "odd\"collection".to_string();
         filter.search = "O'Brien".to_string();
-        let query = playlist_query(&filter, 0).unwrap();
-        assert!(query.contains("\"odd\"\"collection\""));
-        assert!(query.contains("%O''Brien%"));
+        let QueryRequest::Ast(query) = playlist_query(&filter, 0).unwrap() else {
+            panic!("generated AST")
+        };
+        assert_eq!(query.collection.as_deref(), Some("odd\"collection"));
+        assert!(crate::query_ast::tests::contains_string(
+            &query,
+            "%O'Brien%"
+        ));
     }
 
     #[test]
@@ -163,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_predicate_is_parenthesized_with_mandatory_media_filters() {
+    fn structured_predicate_combines_with_mandatory_media_filters() {
         let fields = vec![QueryField {
             name: "rating".to_string(),
             label: "Rating".to_string(),
@@ -189,8 +312,17 @@ mod tests {
         };
         filter.structured_predicate =
             compile_structured_predicate(&structured, &fields, Some("e"), &[]).unwrap();
-        let query = playlist_query(&filter, 0).unwrap();
-        assert!(query.contains("AND ((\"e\".\"rating\" >= 4))"));
-        assert!(query.contains(&format!("e.type IN ('{FILE_CLASS_ID}')")));
+        let QueryRequest::Ast(query) = playlist_query(&filter, 0).unwrap() else {
+            panic!("generated AST")
+        };
+        let Some(Expr::Binary {
+            op: BinaryOp::And,
+            right,
+            ..
+        }) = query.predicate
+        else {
+            panic!("mandatory media filters combined with user filter")
+        };
+        assert_eq!(*right, filter.structured_predicate.unwrap());
     }
 }

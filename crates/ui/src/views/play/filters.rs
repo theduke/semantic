@@ -169,7 +169,7 @@ pub fn PlayerFilters(
 
 fn prepare_structured_filter(
     draft: &PlaylistFilter,
-    predicate: &std::result::Result<Option<String>, String>,
+    predicate: &std::result::Result<Option<semantic_data::query::Expr>, String>,
 ) -> Option<PlaylistFilter> {
     let mut prepared = draft.clone();
     prepared.structured_predicate = predicate.clone().ok()?;
@@ -208,7 +208,11 @@ mod tests {
                 operator: FilterOperator::Equals,
                 values: vec!["value".into()],
             }));
-        draft.structured_predicate = Some("\"old_field\" = 'value'".into());
+        draft.structured_predicate = Some(crate::query_ast::binary(
+            semantic_data::query::BinaryOp::Eq,
+            crate::query_ast::field(Some("e"), "old_field"),
+            crate::query_ast::literal("value".to_string()),
+        ));
 
         let changed = change_collection(draft, "new".into());
 

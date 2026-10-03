@@ -385,7 +385,7 @@ const generatorFixture = (): Package => {
           kind: {
             result: {
               ok: {
-                kind: { ref: { name: "user-id", args: [] } },
+                kind: { named: { name: "user-id", args: [] } },
                 constraints: [],
                 annotations: [],
               },
@@ -406,7 +406,7 @@ const generatorFixture = (): Package => {
           kind: {
             optional: {
               inner: {
-                kind: { ref: { name: "T", args: [] } },
+                kind: { named: { name: "T", args: [] } },
                 constraints: [],
                 annotations: [],
               },
@@ -431,7 +431,7 @@ const generatorFixture = (): Package => {
         module: null,
         params: [],
         ty: {
-          kind: { ref: { name: "class", args: [] } },
+          kind: { named: { name: "class", args: [] } },
           constraints: [],
           annotations: [],
         },
@@ -443,7 +443,7 @@ const generatorFixture = (): Package => {
         module: null,
         params: [],
         ty: {
-          kind: { ref: { name: "missing", args: [stringNode] } },
+          kind: { named: { name: "missing", args: [stringNode] } },
           constraints: [],
           annotations: [],
         },
@@ -455,7 +455,7 @@ const generatorFixture = (): Package => {
           params: [{ name: "user-id", ty: stringNode }],
           results: [
             {
-              kind: { ref: { name: "result", args: [] } },
+              kind: { named: { name: "result", args: [] } },
               constraints: [],
               annotations: [],
             },
@@ -501,7 +501,7 @@ test("package generator uses lexical scopes and includes every declaration owner
     annotations: [],
   };
   const ref = (name: string): TypeNode => ({
-    kind: { ref: { name, args: [] } },
+    kind: { named: { name, args: [] } },
     constraints: [],
     annotations: [],
   });
@@ -658,7 +658,7 @@ const generatorEdgeFixture = (): Package => {
     constraints: [],
     annotations: [],
   });
-  const ref = (name: string): TypeNode => node({ ref: { name, args: [] } });
+  const ref = (name: string): TypeNode => node({ named: { name, args: [] } });
   const record = (field: string): TypeNode =>
     node({
       record: {
@@ -798,7 +798,7 @@ test("package generator protects names, defaults, and compound precedence", () =
   assert.match(output, /export type FunctionAndTail = \(\(\) => Left\) & Tail/);
   assert.match(
     output,
-    /export type WideNumberAndTail = \(number \| bigint\) & Tail/,
+    /export type WideNumberAndTail = \(number \| bigint \| TaggedScalar<[^>]+>\) & Tail/,
   );
 });
 

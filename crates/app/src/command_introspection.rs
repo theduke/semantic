@@ -2,6 +2,7 @@
 //!
 //! Types are encoded as facet-json strings, like `semantic.db.catalog`.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -10,7 +11,7 @@ use semantic_data::value::{FromValue, IntoValue, SemanticType};
 use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
 
-use crate::command::DocumentFormat;
+use crate::command::{CommandDictionary, DocumentFormat};
 use crate::{AppError, AppRequestContext};
 
 pub(crate) fn register(
@@ -37,6 +38,8 @@ struct ListOutput {
     /// The type encoding, with `schema`.
     format: Option<DocumentFormat>,
     commands: Vec<CommandEntry>,
+    /// Named TypeDefs encoded with `format`, shared by all commands.
+    definitions: Option<CommandDictionary<String>>,
 }
 
 /// A command's name, plus its encoded types with `schema`.
@@ -63,6 +66,8 @@ struct GetOutput {
     input_stream: Option<String>,
     /// A stream type for server-streaming commands.
     output: String,
+    /// Named TypeDefs available to command schemas, encoded with `format`.
+    definitions: CommandDictionary<String>,
 }
 
 impl RpcCommandSpec for List {
@@ -108,6 +113,9 @@ impl RpcCommand<AppRequestContext> for List {
             Ok(ListOutput {
                 format: schema.then_some(DocumentFormat::FacetJson),
                 commands,
+                definitions: schema
+                    .then(|| encode_definitions(ctx.app.registry()))
+                    .transpose()?,
             })
         })
     }
@@ -140,6 +148,7 @@ impl RpcCommand<AppRequestContext> for Get {
                 input: encode_type(&definition.input)?,
                 input_stream: encode_input_stream(definition)?,
                 output: encode_type(&definition.output)?,
+                definitions: encode_definitions(ctx.app.registry())?,
             })
         })
     }
@@ -155,4 +164,19 @@ fn encode_input_stream(definition: &CommandDef) -> Result<Option<String>, AppErr
 
 fn encode_type(ty: &Type) -> Result<String, AppError> {
     facet_json::to_string(ty).map_err(|err| AppError::InvalidRequest(err.to_string()))
+}
+
+fn encode_definitions(
+    registry: &RpcRegistry<AppRequestContext, AppError>,
+) -> Result<CommandDictionary<String>, AppError> {
+    registry
+        .definitions()
+        .iter()
+        .map(|(name, definition)| {
+            facet_json::to_string(definition)
+                .map(|value| (name.clone(), value))
+                .map_err(|err| AppError::InvalidRequest(err.to_string()))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map(CommandDictionary)
 }

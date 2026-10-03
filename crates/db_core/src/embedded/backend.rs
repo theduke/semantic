@@ -91,7 +91,8 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
 
     async fn resolve_query(&self, query: TextQueryInput) -> Result<Query, DbError> {
         match query {
-            TextQueryInput::Ast(query) => Ok(query),
+            TextQueryInput::Ast(query) => query.into_bound(&std::collections::BTreeMap::new()),
+            TextQueryInput::AstWithParams { query, params } => query.into_bound(&params),
             TextQueryInput::Text {
                 format,
                 query,
@@ -989,6 +990,204 @@ mod tests {
     }
 
     fn assert_backend_impl<T: Backend>() {}
+
+    fn binding_test_db() -> EmbeddedDb<MemoryEntityStorage> {
+        let mut db = EmbeddedDb::new(MemoryEntityStorage::new());
+        db.transact_ddl(
+            DdlBatch::new().with_op(crate::DdlOperation::UpsertCollection {
+                name: "items".into(),
+                kind: crate::DdlCollectionKind::Untyped,
+                integrity_mode: crate::catalog::IntegrityMode::Permissive,
+            }),
+        )
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn db_sql_parse_preserves_parameters_or_reports_disabled_frontend() {
+        let db = crate::Db::new(thread_backend(binding_test_db()));
+        let result = db.parse_sql("SELECT :value AS value FROM items");
+        #[cfg(feature = "sql")]
+        {
+            use semantic_data::query::{Expr, Operand, Query};
+            let Query::Select(select) = result.unwrap() else {
+                panic!("select")
+            };
+            assert!(
+                matches!(&*select.projection[0].expr, Expr::Operand(Operand::Parameter(name)) if name == "value")
+            );
+        }
+        #[cfg(not(feature = "sql"))]
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("sql support is disabled")
+        );
+    }
+
+    #[test]
+    fn client_constructed_ast_is_reusable_and_binds_for_query_plan_explain_and_metrics() {
+        use semantic_data::query as public;
+        use std::collections::BTreeMap;
+        let mut db = binding_test_db();
+        for score in [1, 2, 3] {
+            let id = format!("row-{score}");
+            let mut row = Object::new();
+            row.insert("id", Value::String(id.clone()));
+            row.insert("score", Value::I64(score));
+            db.insert("items", id, row).unwrap();
+        }
+        let db = crate::Db::new(thread_backend(db));
+        let ast: public::Query = public::SelectQuery::new()
+            .with_collection("items")
+            .with_predicate(public::Expr::Binary {
+                op: public::BinaryOp::Gt,
+                left: Box::new(public::Expr::Operand(public::Operand::Field(
+                    FieldPath::from_fields(["score"]),
+                ))),
+                right: Box::new(public::Expr::parameter("minimum")),
+            })
+            .into();
+        futures::executor::block_on(async {
+            for (minimum, count) in [(1, 2), (2, 1)] {
+                let input = public::QueryInput::ast_with_params(
+                    ast.clone(),
+                    BTreeMap::from([("minimum".into(), Value::I64(minimum))]),
+                );
+                let QueryResult::Select(rows) = db.query(input.clone()).await.unwrap() else {
+                    panic!("select");
+                };
+                assert_eq!(rows.len(), count);
+                db.plan(input.clone()).await.unwrap();
+                db.explain(input.clone()).await.unwrap();
+                let (QueryResult::Select(measured), _) =
+                    db.query_with_metrics(input).await.unwrap()
+                else {
+                    panic!("select");
+                };
+                assert_eq!(measured, rows);
+            }
+            for result in [
+                db.query(ast.clone()).await.map(|_| ()),
+                db.plan(ast.clone()).await.map(|_| ()),
+                db.explain(ast.clone()).await.map(|_| ()),
+                db.query_with_metrics(ast).await.map(|_| ()),
+            ] {
+                assert!(
+                    matches!(result, Err(DbError::QueryParameter { reason, .. }) if reason == "missing")
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn client_constructed_projection_references_execute_without_sql_frontend() {
+        use semantic_data::query as public;
+        use std::collections::BTreeMap;
+        let mut embedded = binding_test_db();
+        for (index, score) in [2, 1, 2].into_iter().enumerate() {
+            let id = format!("row-{index}");
+            let mut row = Object::new();
+            row.insert("id", Value::String(id.clone()));
+            row.insert("score", Value::I64(score));
+            embedded.insert("items", id, row).unwrap();
+        }
+        let db = crate::Db::new(thread_backend(embedded));
+        let ast = public::SelectQuery::new()
+            .with_collection("items")
+            .with_projection(vec![
+                public::QueryField {
+                    expr: Box::new(public::Expr::Operand(public::Operand::Field(
+                        FieldPath::from_fields(["score"]),
+                    ))),
+                    alias: Some("score".into()),
+                    wildcard: None,
+                },
+                public::QueryField {
+                    expr: Box::new(public::Expr::Aggregate {
+                        op: public::AggregateOp::Count,
+                        distinct: false,
+                        arg: Box::new(public::FunctionArg::Wildcard),
+                    }),
+                    alias: Some("count".into()),
+                    wildcard: None,
+                },
+            ])
+            .with_group_by(vec![public::Expr::ProjectionRef(Box::new(
+                public::Expr::parameter("group"),
+            ))])
+            .with_order_by(vec![public::OrderBy {
+                expr: public::Expr::ProjectionRef(Box::new(public::Expr::parameter("order"))),
+                direction: public::SortDirection::Desc,
+            }]);
+        futures::executor::block_on(async {
+            let input = public::QueryInput::ast_with_params(
+                ast,
+                BTreeMap::from([
+                    ("group".into(), Value::U64(1)),
+                    ("order".into(), Value::U64(2)),
+                ]),
+            );
+            let QueryResult::Select(rows) = db.query(input).await.unwrap() else {
+                panic!("select");
+            };
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].get("score"), Some(&Value::I64(2)));
+            assert_eq!(rows[1].get("score"), Some(&Value::I64(1)));
+        });
+    }
+
+    #[cfg(feature = "sql")]
+    #[test]
+    fn parsed_ast_execution_matches_bound_sql_for_projection_ordinals_and_aggregates() {
+        use semantic_data::query as public;
+        use std::collections::BTreeMap;
+        let mut embedded = binding_test_db();
+        for (index, score) in [2, 1, 2].into_iter().enumerate() {
+            let id = format!("row-{index}");
+            let mut row = Object::new();
+            row.insert("id", Value::String(id.clone()));
+            row.insert("score", Value::I64(score));
+            embedded.insert("items", id, row).unwrap();
+        }
+        let db = crate::Db::new(thread_backend(embedded));
+        for sql in [
+            "SELECT score AS score FROM items ORDER BY :order LIMIT :limit",
+            "SELECT score AS score, COUNT(*) AS count FROM items GROUP BY :group ORDER BY :order LIMIT :limit",
+            "SELECT :value AS value, COUNT(*) AS count FROM items GROUP BY :group ORDER BY :order LIMIT :limit",
+        ] {
+            let ast = crate::sql::parse_sql_query_unbound(sql, crate::sql::SqlDialectKind::Generic)
+                .unwrap();
+            for order in [1, 2] {
+                if order == 2 && !sql.contains("COUNT") {
+                    continue;
+                }
+                let params: BTreeMap<_, _> = [
+                    ("order", Value::U64(order)),
+                    ("limit", Value::U64(2)),
+                    ("group", Value::U64(1)),
+                    ("value", Value::I64(7)),
+                ]
+                .into_iter()
+                .filter(|(name, _)| sql.contains(&format!(":{name}")))
+                .map(|(name, value)| (name.to_string(), value))
+                .collect();
+                futures::executor::block_on(async {
+                    let expected = db
+                        .query(public::QueryInput::sql_with_params(sql, params.clone()))
+                        .await
+                        .unwrap();
+                    let actual = db
+                        .query(public::QueryInput::ast_with_params(ast.clone(), params))
+                        .await
+                        .unwrap();
+                    assert_eq!(actual, expected, "{sql}");
+                });
+            }
+        }
+    }
 
     #[test]
     fn kv_backend_blanket_impl_compiles() {

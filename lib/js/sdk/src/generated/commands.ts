@@ -6,6 +6,7 @@ import type {
   BatchReply,
   EntityRecord,
   FileAnalysisOutcome,
+  Query,
   QueryResult,
   ScopeInfo,
   SemanticObject,
@@ -36,14 +37,16 @@ export const commands = {
     { format: "facet-json"; catalog: string }
   >("semantic.db.catalog"),
   query: command<
-    {
-      query: string;
-      format?: "sql" | "prql";
-      scope_id?: string;
-      params?: Record<string, SemanticValue>;
-    },
+    (
+      | { query: Query; format?: never }
+      | { query: string; format?: "sql" | "prql" }
+    ) & { scope_id?: string; params?: Record<string, SemanticValue> },
     QueryResult
   >("semantic.db.query"),
+  parseSql: command<{ query: string; scope_id?: string }, Query>(
+    "semantic.db.query.parse_sql",
+    { valueDecoding: "exact" },
+  ),
   get: command<
     { id: string; collection?: string; scope_id?: string },
     EntityRecord | null

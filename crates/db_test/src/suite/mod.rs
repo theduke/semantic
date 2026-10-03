@@ -1442,6 +1442,7 @@ async fn test_subquery_patterns(db: &Db) {
                                 Value::String("in".to_string()),
                             ))
                             .with_projection(vec![QueryField {
+                                wildcard: None,
                                 expr: Box::new(Expr::Operand(Operand::Field(
                                     FieldPath::from_fields(["value"]),
                                 ))),
@@ -1477,6 +1478,7 @@ async fn test_subquery_patterns(db: &Db) {
                                     Value::String("in".to_string()),
                                 ))
                                 .with_projection(vec![QueryField {
+                                    wildcard: None,
                                     expr: Box::new(Expr::Operand(Operand::Field(
                                         FieldPath::from_fields(["value"]),
                                     ))),
@@ -1507,6 +1509,7 @@ async fn test_subquery_patterns(db: &Db) {
                                 Value::String("only".to_string()),
                             ))
                             .with_projection(vec![QueryField {
+                                wildcard: None,
                                 expr: Box::new(Expr::Operand(Operand::Field(
                                     FieldPath::from_fields(["value"]),
                                 ))),
@@ -1529,12 +1532,14 @@ async fn test_subquery_patterns(db: &Db) {
                 }])
                 .with_projection(vec![
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                             "id",
                         ])))),
                         alias: Some("id".to_string()),
                     },
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Subquery(Box::new(
                             SelectQuery::new()
                                 .with_collection("shared_suite_subquery_inner")
@@ -1543,6 +1548,7 @@ async fn test_subquery_patterns(db: &Db) {
                                     Value::String("only".to_string()),
                                 ))
                                 .with_projection(vec![QueryField {
+                                    wildcard: None,
                                     expr: Box::new(Expr::Operand(Operand::Field(
                                         FieldPath::from_fields(["value"]),
                                     ))),
@@ -1743,6 +1749,7 @@ async fn test_join_semantics(db: &Db) {
                     )),
                 }])
                 .with_projection(vec![QueryField {
+                    wildcard: None,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "s", "id",
                     ])))),
@@ -1796,6 +1803,7 @@ async fn test_nested_ref_field_access(db: &Db) {
             Value::String("abc".to_string()),
         ))
         .with_projection(vec![QueryField {
+            wildcard: None,
             expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                 "id",
             ])))),
@@ -1816,6 +1824,7 @@ async fn test_nested_ref_field_access(db: &Db) {
                     Value::String("blah".to_string()),
                 ))
                 .with_projection(vec![QueryField {
+                    wildcard: None,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "parent", "parent", "id",
                     ])))),
@@ -1846,6 +1855,7 @@ async fn test_nested_ref_field_access(db: &Db) {
                     )))),
                 })
                 .with_projection(vec![QueryField {
+                    wildcard: None,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "id",
                     ])))),
@@ -1881,12 +1891,14 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
                 )))])
                 .with_projection(vec![
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                             "kind",
                         ])))),
                         alias: Some("kind".to_string()),
                     },
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Aggregate {
                             op: AggregateOp::Count,
                             distinct: false,
@@ -1895,6 +1907,7 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
                         alias: Some("n".to_string()),
                     },
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Aggregate {
                             op: AggregateOp::Sum,
                             distinct: false,
@@ -1932,6 +1945,7 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
             SelectQuery::new()
                 .with_collection("shared_suite_ast_agg")
                 .with_projection(vec![QueryField {
+                    wildcard: None,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "kind",
                     ])))),
@@ -1956,6 +1970,7 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
                 .with_collection("shared_suite_ast_agg")
                 .with_projection(vec![
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Aggregate {
                             op: AggregateOp::Count,
                             distinct: true,
@@ -1966,6 +1981,7 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
                         alias: Some("kinds".to_string()),
                     },
                     QueryField {
+                        wildcard: None,
                         expr: Box::new(Expr::Aggregate {
                             op: AggregateOp::Sum,
                             distinct: true,

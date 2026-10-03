@@ -87,6 +87,13 @@ pub trait SemanticDb: Send + Sync + 'static {
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError>;
 
+    /// Parse SQL using the scope's backend dialect, preserving parameters.
+    async fn parse_sql(&self, _sql: String) -> Result<public_query::Query, DbError> {
+        Err(DbError::InvalidQuery(
+            "SQL parsing is not implemented by this database".into(),
+        ))
+    }
+
     /// Execute the portable query AST without converting typed literals to text.
     async fn query_data(&self, _query: public_query::QueryInput) -> Result<QueryResult, DbError> {
         Err(DbError::InvalidQuery(
@@ -175,6 +182,9 @@ pub trait SemanticDb: Send + Sync + 'static {
 
 #[async_trait]
 impl SemanticDb for Db {
+    async fn parse_sql(&self, sql: String) -> Result<public_query::Query, DbError> {
+        Db::parse_sql(self, &sql)
+    }
     async fn validation_preflight(
         &self,
     ) -> Result<Vec<semantic_db_core::ValidationViolation>, DbError> {
@@ -251,9 +261,17 @@ impl SemanticDb for Db {
                 })
                 .await
             }
-            TextQueryInput::Ast(_) => Err(DbError::InvalidQuery(
-                "core AST query execution is not exposed by the app Db adapter yet".to_string(),
-            )),
+            TextQueryInput::Ast(query) => {
+                self.query(semantic_data::query::QueryInput::Ast(query.into()))
+                    .await
+            }
+            TextQueryInput::AstWithParams { query, params } => {
+                self.query(semantic_data::query::QueryInput::ast_with_params(
+                    semantic_data::query::Query::from(query),
+                    params,
+                ))
+                .await
+            }
         }
     }
 
