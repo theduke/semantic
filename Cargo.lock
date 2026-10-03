@@ -9327,6 +9327,7 @@ dependencies = [
  "futures-util",
  "semantic_data",
  "semantic_db_core",
+ "semantic_jobs",
  "semantic_plugin",
  "semantic_rpc",
  "semantic_rpc_core",

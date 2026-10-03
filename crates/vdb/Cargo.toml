@@ -20,3 +20,4 @@ tokio = { workspace = true, features = ["sync", "macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+semantic_jobs = { path = "../jobs" }
