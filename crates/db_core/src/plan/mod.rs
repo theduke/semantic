@@ -8,6 +8,8 @@ mod summary;
 mod text_access;
 
 pub use execute::*;
+// Shared with federation negotiation so conjunct splitting stays consistent.
+pub(crate) use index_access::conjuncts;
 pub use logical::*;
 pub use optimizer::*;
 pub use physical::*;
