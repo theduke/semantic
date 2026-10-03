@@ -359,6 +359,13 @@ impl FederatedScopeDb {
                     }
                     local = self.inner.catalog().await?;
                     (cache, set) = self.vdbs.snapshot(local.clone()).await?;
+                    let names = referenced_collections(&Query::Select(query.clone()))
+                        .into_iter()
+                        .filter(|name| !Self::is_local(&local, name))
+                        .collect();
+                    if let Some(error) = self.vdbs.unavailable(&names, &set).await? {
+                        return Err(error);
+                    }
                 }
                 Err(FederatedError::SchemaChanged { collection }) => {
                     return Err(DbError::InvalidQuery(format!(
