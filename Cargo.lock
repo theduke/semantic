@@ -3425,6 +3425,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxgraph"
+version = "0.0.1"
+dependencies = [
+ "dioxus",
+ "dioxus-sdk-time",
+ "dioxus-ssr",
+ "dxcomp",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "web-sys",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9262,6 +9277,7 @@ dependencies = [
  "dioxus-icons",
  "dioxus-sdk-time",
  "dxcomp",
+ "dxgraph",
  "futures",
  "infer",
  "js-sys",
@@ -9297,9 +9313,11 @@ dependencies = [
  "dioxus-html",
  "dioxus-icons",
  "dioxus-sdk-time",
+ "dioxus-ssr",
  "dxcomp",
  "dxeditor",
  "dxform",
+ "dxgraph",
  "facet-json",
  "futures",
  "pulldown-cmark",
