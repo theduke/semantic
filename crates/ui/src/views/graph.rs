@@ -90,13 +90,15 @@ pub fn GraphPage(
         GraphMode::Relations => 1,
         GraphMode::Both => 2,
     };
-    let selected_layout = layout_name(&layout_config).to_owned();
+    let selected_layout = use_memo(use_reactive((&layout_config,), |(layout,)| {
+        Some(layout_name(&layout).to_owned())
+    }));
     let focus_layout = layout.clone();
     rsx! {
         div { class: "semantic-page semantic-graph-page", style: "display:flex;flex-direction:column;min-height:calc(100vh - 90px);gap:16px;",
             PageHeader { title: "Graph", description: Some("Explore entity hierarchies and relationships.".into()) }
             div { class: "semantic-graph-toolbar", style: "display:flex;flex-wrap:wrap;align-items:center;gap:12px;", aria_label: "Graph options",
-                EntityAutocomplete { value: root.clone(), aria_label: "Graph root", placeholder: "Choose a root entity",
+                EntityAutocomplete { value: root.clone(), collection: collection.clone(), search_fields: Some(vec!["id".into(), "semantic:title".into()]), aria_label: "Graph root", placeholder: "Choose a root entity",
                     on_value_change: move |root| { nav.replace(graph_route(root, picker_collection.clone(), mode, picker_layout.clone())); }
                 }
                 dxcomp::toggle_group::ToggleGroup { pressed: Some(HashSet::from([selected_mode])), horizontal: true,
@@ -105,7 +107,7 @@ pub fn GraphPage(
                     dxcomp::toggle_group::ToggleItem { index: 1usize, "Relations" }
                     dxcomp::toggle_group::ToggleItem { index: 2usize, "Both" }
                 }
-                dxcomp::select::Select::<String> { key: "{selected_layout}", default_value: selected_layout, aria_label: "Graph layout",
+                dxcomp::select::Select::<String> { value: Some(selected_layout.into()), aria_label: "Graph layout",
                     on_value_change: move |layout| { nav.replace(graph_route(layout_root.clone(), layout_collection.clone(), mode, layout)); },
                     for (index, (value, label)) in [("tree", "Tree"), ("mindmap", "Mind map"), ("force", "Force"), ("radial", "Radial")].into_iter().enumerate() {
                         dxcomp::select::SelectOption::<String> { value: value.to_owned(), index, text_value: label.to_owned(), "{label}" }

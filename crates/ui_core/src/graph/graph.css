@@ -1,8 +1,16 @@
 .semantic-entity-graph { position:relative; flex:1; min-height:480px; height:100%; }
-.semantic-entity-graph > .dxgraph-canvas { height:100%; min-height:480px; }
+.semantic-entity-graph > .dxgraph { height:100%; min-height:480px; }
 .semantic-graph-node { box-sizing:border-box; position:relative; display:flex; flex-direction:column; gap:4px; min-width:160px; max-width:240px; padding:12px 36px 12px 14px; background:var(--semantic-surface,white); color:var(--semantic-text,#222); border-left:4px solid var(--semantic-graph-accent); border-radius:8px; }
 .semantic-graph-node__title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .semantic-graph-node__class,.semantic-graph-node__id { font-size:12px; opacity:.65; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .semantic-graph-node button { position:absolute; right:8px; top:8px; }
 .semantic-graph-detail { position:absolute; top:12px; bottom:12px; right:12px; width:min(360px,calc(100% - 24px)); overflow:auto; background:var(--semantic-surface,white); color:var(--semantic-text,#222); border:1px solid var(--semantic-border-soft,#ddd); border-radius:10px; padding:14px; box-shadow:0 8px 30px #0002; pointer-events:auto; }
 .semantic-graph-detail > button { margin:6px 4px; }
+.semantic-graph-relation-0 { stroke:var(--primary-color-8,#6366f1); }
+.semantic-graph-relation-1 { stroke:#a855f7; }
+.semantic-graph-relation-2 { stroke:#db2777; }
+.semantic-graph-relation-3 { stroke:#d97706; }
+.semantic-graph-relation-4 { stroke:#65a30d; }
+.semantic-graph-relation-5 { stroke:#0d9488; }
+.semantic-graph-relation-6 { stroke:#0284c7; }
+.semantic-graph-relation-7 { stroke:#64748b; }

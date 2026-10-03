@@ -1,4 +1,43 @@
 use super::loading::{load_expansion, load_nodes};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum InitialGraphPhase {
+    #[default]
+    Root,
+    Neighborhood,
+    Ready,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct InitialGraphLoad {
+    generation: u64,
+    phase: InitialGraphPhase,
+}
+impl InitialGraphLoad {
+    fn new(generation: u64) -> Self {
+        Self {
+            generation,
+            phase: InitialGraphPhase::Root,
+        }
+    }
+    fn root_loaded(&mut self, generation: u64) {
+        if self.generation == generation && self.phase == InitialGraphPhase::Root {
+            self.phase = InitialGraphPhase::Neighborhood;
+        }
+    }
+    fn finish(&mut self, generation: u64) {
+        if self.generation == generation && self.phase == InitialGraphPhase::Neighborhood {
+            self.phase = InitialGraphPhase::Ready;
+        }
+    }
+    fn fail(&mut self, generation: u64) {
+        if self.generation == generation {
+            self.phase = InitialGraphPhase::Ready;
+        }
+    }
+    fn ready(self) -> bool {
+        self.phase == InitialGraphPhase::Ready
+    }
+}
 use super::{
     EntityGraphExplorer, EntityNodeData, EntityNodeKind, ExplorerLimits, GraphMode, RpcGraphSource,
     node_id,
@@ -29,6 +68,7 @@ pub fn EntityGraphView(
         use_signal(|| EntityGraphExplorer::new(root.clone(), mode, ExplorerLimits::default()));
     let mut selected = use_signal(|| None::<NodeId>);
     let mut generation = use_signal(|| 0u64);
+    let mut initial_load = use_signal(InitialGraphLoad::default);
     let toast = use_toast_dispatcher();
     let initialize_source = source.clone();
     let initialize_catalog = catalog.clone();
@@ -41,6 +81,7 @@ pub fn EntityGraphView(
         selected.set(None);
         let next = *generation.peek() + 1;
         generation.set(next);
+        initial_load.set(InitialGraphLoad::new(next));
         let source = initialize_source.clone();
         let catalog = initialize_catalog.clone();
         spawn(async move {
@@ -49,6 +90,7 @@ pub fn EntityGraphView(
                     if let Some(object) = nodes.into_iter().next().and_then(|node| node.object) {
                         explorer.write().set_object(&root, object);
                     }
+                    initial_load.write().root_loaded(next);
                     expand(
                         explorer,
                         generation,
@@ -59,9 +101,11 @@ pub fn EntityGraphView(
                         toast,
                     )
                     .await;
+                    initial_load.write().finish(next);
                 }
                 Err(error) if *generation.peek() == next => {
                     toast.show(Toast::error(error));
+                    initial_load.write().fail(next);
                 }
                 _ => {}
             }
@@ -153,22 +197,50 @@ pub fn EntityGraphView(
         selected.set(None);
         let token = *generation.peek() + 1;
         generation.set(token);
+        initial_load.set(InitialGraphLoad::new(token));
+        initial_load.write().root_loaded(token);
         let source = focus_source.clone();
         let catalog = focus_catalog.clone();
-        spawn(expand(
-            explorer,
-            generation,
-            token,
-            node_id(&target),
-            source,
-            catalog,
-            toast,
-        ));
+        spawn(async move {
+            expand(
+                explorer,
+                generation,
+                token,
+                node_id(&target),
+                source,
+                catalog,
+                toast,
+            )
+            .await;
+            initial_load.write().finish(token);
+        });
     });
     rsx! {
         style { {include_str!("graph.css")} }
         div { class: "semantic-entity-graph",
+            details { class: "semantic-graph-list",
+                summary { "List of loaded entities" }
+                ul { aria_label: "Loaded graph entities",
+                    for node in explorer.read().model().nodes() {
+                        li { key: "{node.id}",
+                            button { r#type: "button", onclick: { let id = node.id.clone(); move |_| selected.set(Some(id.clone())) },
+                                {node.data.object.as_ref().map(|object| catalog.entity_title(object)).unwrap_or_else(|| node.data.target.id.clone())}
+                            }
+                            if !matches!(node.data.kind, EntityNodeKind::Overflow { .. }) {
+                                button { r#type: "button", onclick: { let id = node.id.clone(); move |_| on_toggle.call(id.clone()) },
+                                    if explorer.read().is_expanded(&node.id) { "Collapse" } else { "Expand" }
+                                }
+                                if let Some(href) = catalog.entity_navigation().href.as_ref().and_then(|build| build(&node.data.target)) {
+                                    a { href, "Open entity" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if initial_load().ready() {
             GraphCanvas::<EntityNodeData, super::EntityEdgeData> {
+                key: "{node_id(&explorer.read().root)}",
                 model: model, render_node, node_label, layout, layout_revision, controller,
                 on_node_click: move |event: NodeEvent| selected.set(Some(event.id)),
                 on_node_activate: move |event: NodeEvent| on_toggle.call(event.id),
@@ -194,6 +266,7 @@ pub fn EntityGraphView(
                     }
                 }
             }
+            } else { p { role: "status", "Loading graph…" } }
         }
     }
 }
@@ -286,6 +359,24 @@ pub fn EntityGraphNode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn canvas_waits_for_neighborhood_and_old_load_cannot_reveal_new_root() {
+        let mut load = InitialGraphLoad::new(1);
+        load.finish(1);
+        assert!(!load.ready());
+        load.root_loaded(1);
+        assert!(!load.ready());
+        load.finish(1);
+        assert!(load.ready());
+        load = InitialGraphLoad::new(2);
+        load.root_loaded(1);
+        load.finish(1);
+        load.fail(1);
+        assert!(!load.ready());
+        load.root_loaded(2);
+        load.finish(2);
+        assert!(load.ready());
+    }
     #[test]
     fn node_ssr_covers_entity_unresolved_and_overflow() {
         fn app() -> Element {
