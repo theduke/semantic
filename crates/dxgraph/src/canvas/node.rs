@@ -1,0 +1,51 @@
+use super::{NodeDetail, NodeEvent, NodeRenderContext};
+use crate::{NodeId, Point, Size};
+use dioxus::prelude::*;
+
+#[derive(Props, Clone, PartialEq)]
+pub(crate) struct NodeViewProps<N: Clone + PartialEq + 'static> {
+    pub id: NodeId,
+    pub data: N,
+    pub position: Point,
+    pub size: Size,
+    pub selected: bool,
+    pub hidden: bool,
+    pub detail: NodeDetail,
+    pub label: String,
+    pub render_node: Callback<NodeRenderContext<N>, Element>,
+    pub render_minimal: Option<Callback<NodeRenderContext<N>, Element>>,
+    pub on_pointer: EventHandler<(NodeId, PointerEvent)>,
+    pub on_measure: EventHandler<(NodeId, Size)>,
+    pub on_activate: EventHandler<NodeEvent>,
+    pub on_select: EventHandler<NodeEvent>,
+}
+
+#[allow(non_snake_case)]
+pub(crate) fn NodeView<N: Clone + PartialEq + 'static>(props: NodeViewProps<N>) -> Element {
+    let context = NodeRenderContext {
+        id: props.id.clone(),
+        data: props.data,
+        selected: props.selected,
+        detail: props.detail,
+    };
+    let content = if props.detail == NodeDetail::Minimal {
+        if let Some(renderer) = props.render_minimal {
+            renderer.call(context)
+        } else {
+            rsx! {div{class:"dxgraph-placeholder",style:"width:{props.size.width}px;height:{props.size.height}px",aria_label:props.label.clone()}}
+        }
+    } else {
+        props.render_node.call(context)
+    };
+    let pointer_id = props.id.clone();
+    let measure_id = props.id.clone();
+    let key_id = props.id.clone();
+    rsx! {div {
+        class:"dxgraph-node", "data-dxgraph-node":props.id.to_string(), "data-selected":props.selected.to_string(),tabindex:0,role:"button",aria_label:props.label,
+        style:format!("transform:translate({}px,{}px);visibility:{}",props.position.x,props.position.y,if props.hidden {"hidden"} else {"visible"}),
+        onpointerdown:move |event|{event.stop_propagation();props.on_pointer.call((pointer_id.clone(),event));},
+        onresize:move |event|if let Ok(size)=event.get_border_box_size(){props.on_measure.call((measure_id.clone(),Size{width:size.width,height:size.height}));},
+        onkeydown:move |event|match event.key(){Key::Enter=>{event.stop_propagation();event.prevent_default();props.on_activate.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},Key::Character(value) if value==" "=>{event.stop_propagation();event.prevent_default();props.on_select.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},_=>{}},
+        {content}
+    }}
+}
