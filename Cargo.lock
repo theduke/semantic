@@ -3432,6 +3432,7 @@ dependencies = [
  "dioxus-sdk-time",
  "dioxus-ssr",
  "dxcomp",
+ "futures",
  "indexmap",
  "serde",
  "serde_json",

@@ -31,6 +31,9 @@ pub struct MindMapLayout(pub MindMapOptions);
 impl LayoutAlgorithm for MindMapLayout {
     fn layout(&self, input: &LayoutInput) -> LayoutOutput {
         let f = forest(input);
+        let mut children = f.children.clone();
+        let by_id: std::collections::BTreeMap<_, _> =
+            input.nodes.iter().map(|n| (&n.id, n)).collect();
         let mut output = LayoutOutput::default();
         let mut extents = vec![0.0; input.nodes.len()];
         for component in &f.components {
@@ -56,7 +59,6 @@ impl LayoutAlgorithm for MindMapLayout {
                 }
             }
             for (branches, mirror) in [(left, true), (right, false)] {
-                let mut children = f.children.clone();
                 children[root] = branches;
                 let side = tidy_positions(
                     input,
@@ -69,7 +71,7 @@ impl LayoutAlgorithm for MindMapLayout {
                     },
                 );
                 for (id, p) in side.positions {
-                    let Some(node) = input.nodes.iter().find(|node| node.id == id) else {
+                    let Some(node) = by_id.get(&id) else {
                         continue;
                     };
                     let x = if mirror {
@@ -79,10 +81,16 @@ impl LayoutAlgorithm for MindMapLayout {
                     };
                     output.positions.insert(id, Point::new(x, p.y));
                 }
+                children[root] = f.children[root].clone();
             }
         }
         if f.components.len() > 1 || input.nodes.iter().any(|n| n.fixed.is_some()) {
-            pack_components(input, &f.components, &mut output.positions, 80.0);
+            pack_components(
+                input,
+                &f.components,
+                &mut output.positions,
+                super::COMPONENT_GAP,
+            );
         }
         if input.nodes.iter().any(|n| n.fixed.is_some()) {
             super::remove_overlaps(input, &mut output.positions, 0.0);
@@ -104,9 +112,9 @@ mod tests {
             center,
             Point::new(-root.size.width / 2.0, -root.size.height / 2.0)
         );
-        let left = output.positions[&input.nodes[1].id].x;
-        let right = output.positions[&input.nodes[2].id].x;
-        assert!(left > 0.0 && right < 0.0);
+        let right = output.positions[&input.nodes[1].id].x;
+        let left = output.positions[&input.nodes[2].id].x;
+        assert!(left < 0.0 && right > 0.0);
     }
     #[test]
     fn all_right() {

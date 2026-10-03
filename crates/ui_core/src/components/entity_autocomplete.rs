@@ -185,6 +185,30 @@ fn autocomplete_query(
     query
 }
 
+fn entity_options_from_query_response(value: Value) -> Vec<EntityOption> {
+    let Value::Object(object) = value else {
+        return Vec::new();
+    };
+    let Some(Value::List(rows)) = object.get("rows") else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let Value::Object(object) = row else {
+                return None;
+            };
+            let id = object.get("id").and_then(Value::as_str)?.to_string();
+            let label = ENTITY_LABEL_FIELDS
+                .iter()
+                .skip(1)
+                .find_map(|field| object.get(field).and_then(Value::as_str))
+                .filter(|label| !label.is_empty())
+                .unwrap_or(&id)
+                .to_string();
+            Some(EntityOption { id, label })
+        })
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,29 +235,4 @@ mod tests {
             ref_autocomplete_query_ast("needle", &[], None)
         );
     }
-}
-
-fn entity_options_from_query_response(value: Value) -> Vec<EntityOption> {
-    let Value::Object(object) = value else {
-        return Vec::new();
-    };
-    let Some(Value::List(rows)) = object.get("rows") else {
-        return Vec::new();
-    };
-    rows.iter()
-        .filter_map(|row| {
-            let Value::Object(object) = row else {
-                return None;
-            };
-            let id = object.get("id").and_then(Value::as_str)?.to_string();
-            let label = ENTITY_LABEL_FIELDS
-                .iter()
-                .skip(1)
-                .find_map(|field| object.get(*field).and_then(Value::as_str))
-                .filter(|label| !label.is_empty())
-                .unwrap_or(&id)
-                .to_string();
-            Some(EntityOption { id, label })
-        })
-        .collect()
 }

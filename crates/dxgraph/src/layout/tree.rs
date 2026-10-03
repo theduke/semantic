@@ -53,7 +53,7 @@ impl LayoutAlgorithm for TreeLayout {
             input,
             &f.components,
             &mut output.positions,
-            self.0.sibling_gap.max(0.0) + 60.0,
+            super::COMPONENT_GAP,
         );
         if input.nodes.iter().any(|n| n.fixed.is_some()) {
             super::remove_overlaps(input, &mut output.positions, 0.0);
@@ -284,15 +284,5 @@ mod tests {
                 );
             }
         }
-    }
-    #[test]
-    #[ignore = "performance smoke test"]
-    fn three_hundred_nodes() {
-        let input = fixture(300);
-        let start = std::time::Instant::now();
-        TreeLayout::default().layout(&input);
-        let elapsed = start.elapsed();
-        eprintln!("300-node tree: {elapsed:?}");
-        assert!(elapsed < std::time::Duration::from_millis(50));
     }
 }

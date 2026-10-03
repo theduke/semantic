@@ -1,5 +1,11 @@
 # Graph explorer browser verification
 
+These are historical observations from the original implementation, before
+`review1.md` fixes. The scripts are one-off verification artifacts with local
+ports and fixture assumptions. See [review-disposition.md](review-disposition.md)
+for the review fixes and their new verification results. Timing observations
+below were not remeasured as part of the review fixes.
+
 Verified on 2026-10-03 with Chromium through Nix, using an isolated server database at `/tmp/semantic-graph-browser-20261003`. Preview status/open both returned `PreviewAutomationNoAvailableHostError`, so the retained Playwright script uses the locally installed Chromium and Playwright module.
 
 Run the server and web app in separate terminals, then execute the script:

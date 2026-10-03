@@ -45,6 +45,8 @@ pub trait GraphSource {
         &'a self,
         ids: &'a [EntityTarget],
     ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>>;
+    /// V1 hierarchy queries search each parent's own collection. An id-only
+    /// `semantic:parent` cannot identify cross-collection hierarchies safely.
     fn children<'a>(
         &'a self,
         parents: &'a [EntityTarget],
@@ -236,7 +238,7 @@ mod tests {
     };
 
     #[test]
-    fn queries_use_list_parameters_and_bounded_direct_relations() {
+    fn query_parameters_and_ast_round_trip() {
         let params = limited_params(&["a".into(), "b".into()], 51);
         assert_eq!(
             params.get("ids"),
@@ -254,25 +256,6 @@ mod tests {
             let value = query.clone().into_value();
             assert_eq!(SelectQuery::from_value(value).unwrap(), query);
         }
-        assert_eq!(
-            entities_query("custom").predicate,
-            Some(membership("entity", "id"))
-        );
-        assert_eq!(
-            children_query("custom").predicate,
-            Some(membership("child", ATTR_PARENT))
-        );
-        assert_eq!(
-            relations_query().predicate,
-            Some(all([
-                binary(
-                    BinaryOp::Eq,
-                    field(&["edge", "depth"]),
-                    Expr::Operand(Operand::Literal(Value::U64(1)))
-                ),
-                any([membership("edge", "source"), membership("edge", "target")])
-            ]))
-        );
     }
 
     #[test]
@@ -323,6 +306,75 @@ mod tests {
             .query(QueryInput::ast_with_params(
                 children_query("graph_test"),
                 limited_params(&["root".into()], 1).into_iter().collect(),
+            ))
+            .await
+            .unwrap();
+        let semantic_db_core::QueryResult::Select(rows) = result else {
+            panic!("select result")
+        };
+        assert_eq!(rows.len(), 1);
+        // Execute the actual relationship query, including incoming/outgoing
+        // edges, unrelated edges, transitive rows and the bounded limit.
+        use semantic_data::{
+            attr::{ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO},
+            schema::{RelationIndexingMode, RelationMode, RelationType},
+        };
+        db.upsert_relationship(RelationType {
+            id: "graph_test:links".into(),
+            name: "links".into(),
+            source_collection: "graph_test".into(),
+            mode: RelationMode::External,
+            indexing_mode: RelationIndexingMode::Enabled,
+            meta: Default::default(),
+        })
+        .await
+        .unwrap();
+        for (id, from, to) in [("ab", "a", "b"), ("bc", "b", "c"), ("unrelated", "c", "a")] {
+            let mut row = Object::new();
+            for (key, value) in [
+                ("id", id),
+                (ATTR_RELATION_FROM, from),
+                (ATTR_RELATION_TO, to),
+                (ATTR_RELATION_RELATION, "graph_test:links"),
+            ] {
+                row.insert(key, Value::String(value.into()));
+            }
+            db.insert("graph_test", id, row).await.unwrap();
+        }
+        let result = db
+            .query(QueryInput::ast_with_params(
+                relations_query(),
+                limited_params(&["b".into()], 10).into_iter().collect(),
+            ))
+            .await
+            .unwrap();
+        let semantic_db_core::QueryResult::Select(rows) = result else {
+            panic!("select result")
+        };
+        let endpoints = rows
+            .iter()
+            .map(|row| {
+                let edge = RelationEdgeRow::from_object(row).unwrap();
+                (edge.source, edge.target)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            endpoints,
+            std::collections::BTreeSet::from([
+                ("a".into(), "b".into()),
+                ("b".into(), "c".into()),
+                ("b".into(), "root".into()),
+            ])
+        );
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows.iter()
+                .all(|row| row.get("depth") == Some(&Value::U64(1)))
+        );
+        let result = db
+            .query(QueryInput::ast_with_params(
+                relations_query(),
+                limited_params(&["b".into()], 1).into_iter().collect(),
             ))
             .await
             .unwrap();

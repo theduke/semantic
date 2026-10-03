@@ -1,12 +1,19 @@
 mod background;
 mod controls;
 mod edges;
-pub mod keyboard;
+mod keyboard;
 mod node;
-pub mod state;
-pub use background::GraphBackground;
+mod pipeline;
+mod state;
+use background::GraphBackground;
 pub use controls::{GraphController, GraphControls, use_graph_controller};
-pub use state::NodeDetail;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NodeDetail {
+    #[default]
+    Full,
+    Compact,
+    Minimal,
+}
 
 use crate::{
     GraphModel, NodeId, Point, Rect, Size, ViewportLimits,
@@ -14,12 +21,14 @@ use crate::{
         GestureContext, GestureEffect, GestureInput, GestureState, GestureTarget, WheelMode, input,
         platform,
     },
-    layout::{LayoutConfig, LayoutEdge, LayoutInput, LayoutNode, run_layout},
+    layout::LayoutConfig,
 };
 use dioxus::prelude::*;
+use futures::StreamExt;
 use indexmap::{IndexMap, IndexSet};
 use keyboard::{KeyboardAction, keyboard_action};
-use state::{CanvasState, SelectionEvent, reduce_selection};
+use pipeline::{CanvasEffect, CanvasInput, CanvasPipeline};
+use state::SelectionEvent;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,21 +69,17 @@ pub struct NodeEvent {
 pub struct GraphCanvasProps<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'static> {
     pub model: ReadSignal<GraphModel<N, E>>,
     pub render_node: Callback<NodeRenderContext<N>, Element>,
-    pub node_label: Callback<NodeId, String>,
+    pub node_label: Callback<NodeRenderContext<N>, String>,
     #[props(default)]
     pub render_minimal: Option<Callback<NodeRenderContext<N>, Element>>,
     #[props(default)]
     pub layout: LayoutConfig,
-    #[props(default)]
-    pub layout_revision: u64,
     #[props(default)]
     pub config: CanvasConfig,
     #[props(default)]
     pub controller: Option<GraphController>,
     #[props(default)]
     pub on_node_click: Option<EventHandler<NodeEvent>>,
-    #[props(default)]
-    pub on_node_double_click: Option<EventHandler<NodeEvent>>,
     #[props(default)]
     pub on_node_activate: Option<EventHandler<NodeEvent>>,
     #[props(default)]
@@ -89,81 +94,98 @@ pub struct GraphCanvasProps<N: Clone + PartialEq + 'static, E: Clone + PartialEq
     pub children: Element,
 }
 
-fn rects<N, E>(model: &GraphModel<N, E>, state: &CanvasState) -> IndexMap<NodeId, Rect> {
-    model
-        .nodes()
-        .filter_map(|node| {
-            state
-                .positions
-                .get(&node.id)
-                .or(node.position.as_ref())
-                .map(|p| {
-                    (
-                        node.id.clone(),
-                        Rect {
-                            origin: *p,
-                            size: state
-                                .measured
-                                .get(&node.id)
-                                .copied()
-                                .unwrap_or(node.size_hint),
-                        },
-                    )
-                })
-        })
-        .collect()
+/// Apply reducer effects in one place, keeping controller geometry in sync.
+fn apply_canvas_input<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'static>(
+    mut pipeline: Signal<CanvasPipeline>,
+    model: ReadSignal<GraphModel<N, E>>,
+    mut controller: GraphController,
+    config: CanvasConfig,
+    input: CanvasInput,
+) {
+    let effects = pipeline.write().reduce(&model.peek(), input);
+    for effect in effects {
+        match effect {
+            CanvasEffect::RectsChanged => {
+                let pipeline = pipeline.peek();
+                let mut geometry = controller.geometry.write();
+                geometry.rects = pipeline.rects.clone();
+                geometry.revision = pipeline.revision;
+                if let Some(container) = pipeline.container {
+                    geometry.container = container;
+                }
+                geometry.limits = config.limits;
+            }
+            CanvasEffect::FitView => controller.fit_view(),
+            CanvasEffect::ScheduleTimeout(batch) => {
+                let config = config.clone();
+                spawn(async move {
+                    dioxus_sdk_time::sleep(std::time::Duration::from_millis(100)).await;
+                    apply_canvas_input(
+                        pipeline,
+                        model,
+                        controller,
+                        config,
+                        CanvasInput::MeasureTimeout(batch),
+                    );
+                });
+            }
+            CanvasEffect::ScheduleMeasurements(flush) => {
+                let config = config.clone();
+                spawn(async move {
+                    // A single queued tick absorbs a burst of ResizeObserver notifications.
+                    dioxus_sdk_time::sleep(std::time::Duration::from_millis(16)).await;
+                    apply_canvas_input(
+                        pipeline,
+                        model,
+                        controller,
+                        config,
+                        CanvasInput::FlushMeasurements(flush),
+                    );
+                });
+            }
+        }
+    }
 }
 
-fn calculate_layout<N, E>(
-    model: &GraphModel<N, E>,
-    state: &mut CanvasState,
-    layout: &LayoutConfig,
-    preserve: bool,
-) {
-    let input = LayoutInput {
-        nodes: model
-            .nodes()
-            .map(|node| LayoutNode {
-                id: node.id.clone(),
-                size: state
-                    .measured
-                    .get(&node.id)
-                    .copied()
-                    .unwrap_or(node.size_hint),
-                fixed: if node.pinned {
-                    node.position
-                        .or_else(|| state.positions.get(&node.id).copied())
-                } else if state.moved.contains(&node.id)
-                    || (preserve && state.stable.contains(&node.id))
-                {
-                    state.positions.get(&node.id).copied()
-                } else {
-                    None
-                },
-                previous: if state.stable.contains(&node.id) || state.moved.contains(&node.id) {
-                    state.positions.get(&node.id).copied().or(node.position)
-                } else {
-                    node.position
-                },
-                layout_parent: node.layout_parent.clone(),
-                order_key: node.order_key.clone(),
-            })
-            .collect(),
-        edges: model
-            .edges()
-            .map(|edge| LayoutEdge {
-                source: edge.source.clone(),
-                target: edge.target.clone(),
-                weight: 1.0,
-            })
-            .collect(),
-        roots: model
-            .nodes()
-            .filter(|node| node.layout_parent.is_none())
-            .map(|node| node.id.clone())
-            .collect(),
-    };
-    state.merge_positions(model, run_layout(layout, &input).positions);
+type EdgeGroups = IndexMap<(NodeId, NodeId), Vec<(crate::EdgeId, bool)>>;
+
+/// Lane indices use half-spacing units so even-sized groups are centred too.
+fn parallel_edge_offsets<N, E>(model: &GraphModel<N, E>) -> IndexMap<crate::EdgeId, i32> {
+    let mut groups = EdgeGroups::new();
+    for edge in model.edges() {
+        let reversed = edge.source > edge.target;
+        let pair = if reversed {
+            (edge.target.clone(), edge.source.clone())
+        } else {
+            (edge.source.clone(), edge.target.clone())
+        };
+        groups
+            .entry(pair)
+            .or_default()
+            .push((edge.id.clone(), reversed));
+    }
+    let mut offsets = IndexMap::new();
+    for (pair, group) in &groups {
+        let count = group.len() as i32;
+        for (index, (edge, reversed)) in group.iter().enumerate() {
+            let lane = if pair.0 == pair.1 {
+                index as i32 * 2
+            } else {
+                index as i32 * 2 - (count - 1)
+            };
+            // Geometry computes its perpendicular from the directed edge.
+            offsets.insert(edge.clone(), if *reversed { -lane } else { lane });
+        }
+    }
+    offsets
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct CanvasVisibility {
+    region: Option<(Rect, f64)>,
+    data: Option<(u64, IndexSet<NodeId>, Option<NodeId>)>,
+    visible: IndexSet<NodeId>,
+    detail: NodeDetail,
 }
 
 #[allow(non_snake_case)]
@@ -173,148 +195,77 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
     let fallback = use_graph_controller();
     let mut controller = props.controller.unwrap_or(fallback);
     let model = props.model;
-    let mut state = use_signal(|| {
-        let mut s = CanvasState::default();
-        calculate_layout(&model.peek(), &mut s, &props.layout, false);
-        s.pending = model.peek().nodes().map(|node| node.id.clone()).collect();
-        s
-    });
+    let pipeline = use_signal(|| CanvasPipeline::new(&model.peek(), props.layout.clone()));
     let mut gesture = use_signal(GestureState::default);
     let mut mounted = use_signal(|| None::<Rc<MountedData>>);
-    let mut origin = use_signal(Point::default);
-    let mut fitted = use_signal(|| false);
-    let mut measured_once = use_signal(|| false);
-    let mut measurement_batch = use_signal(|| 1u64);
-    let mut signature = use_signal(|| state::layout_signature(&model.peek()));
-    let mut layout_key = use_signal(|| (props.layout.clone(), props.layout_revision, 0u64));
-    let layout = props.layout.clone();
-    let layout_revision = props.layout_revision;
     let config = props.config.clone();
-    // Reactive inputs drive layout; node positions and payload changes are excluded.
-    use_effect(use_reactive!(|layout, layout_revision, config| {
-        let current = model.read();
-        let next = state::layout_signature(&current);
+    let apply = use_callback(move |input| {
+        apply_canvas_input(pipeline, model, controller, config.clone(), input);
+    });
+    use_effect(move || apply.call(CanvasInput::Start));
+    let layout = props.layout.clone();
+    let config = props.config.clone();
+    use_effect(use_reactive!(|layout, config| {
+        let _current = model.read();
         let revision = (controller.revision)();
-        let key = (layout.clone(), layout_revision, revision);
-        let changed = *signature.peek() != next;
-        let forced = *layout_key.peek() != key;
-        if changed || forced {
-            let mut s = state.write();
-            s.stable = if forced {
-                IndexSet::new()
-            } else {
-                s.positions.keys().cloned().collect()
-            };
-            s.pending = current
-                .nodes()
-                .filter(|node| !s.measured.contains_key(&node.id))
-                .map(|node| node.id.clone())
-                .collect();
-            calculate_layout(&current, &mut s, &layout, changed && !forced);
-            let pending = !s.pending.is_empty();
-            drop(s);
-            if pending {
-                let next = *measurement_batch.peek() + 1;
-                measurement_batch.set(next);
-            }
-            signature.set(next);
-            layout_key.set(key);
-        }
-        let s = state.peek();
-        let next_rects = rects(&current, &s);
-        drop(s);
-        let mut geometry = controller.geometry;
-        let mut value = geometry.peek().clone();
-        value.rects = next_rects;
-        value.revision += 1;
-        value.limits = config.limits;
-        geometry.set(value);
+        apply.call(CanvasInput::ModelChanged);
+        apply.call(CanvasInput::LayoutChanged(layout.clone(), revision));
+        // Limits can change without a model or layout change.
+        controller.geometry.write().limits = config.limits;
     }));
-    // A hint is enough for initial rendering; reveal stragglers after a bounded wait.
-    let timeout_layout = props.layout.clone();
-    use_effect(move || {
-        let batch = measurement_batch();
-        if state.peek().pending.is_empty() {
-            return;
-        }
-        let layout = timeout_layout.clone();
-        spawn(async move {
-            dioxus_sdk_time::sleep(std::time::Duration::from_millis(100)).await;
-            if *measurement_batch.peek() == batch {
-                let mut s = state.write();
-                let current = model.peek();
-                calculate_layout(&current, &mut s, &layout, *measured_once.peek());
-                s.pending.clear();
-                s.stable = s.positions.keys().cloned().collect();
-                let rects = rects(&current, &s);
-                drop(current);
-                drop(s);
-                measured_once.set(true);
-                {
-                    let mut geometry = controller.geometry.write();
-                    geometry.rects = rects;
-                    geometry.revision += 1;
-                }
-                if !*fitted.peek() && mounted.peek().is_some() {
-                    controller.fit_view();
-                    fitted.set(true);
-                }
-            }
-        });
+    let offsets = use_memo(move || parallel_edge_offsets(&model.read()));
+    let mut visibility = use_signal(|| CanvasVisibility {
+        visible: model.peek().nodes().map(|node| node.id.clone()).collect(),
+        ..CanvasVisibility::default()
     });
-    let mut cull = use_signal(|| None::<(Rect, f64)>);
-    let mut cull_data = use_signal(|| None::<(u64, IndexSet<NodeId>, Option<NodeId>)>);
-    let mut visible = use_signal(|| {
-        model
-            .peek()
-            .nodes()
-            .map(|node| node.id.clone())
-            .collect::<IndexSet<_>>()
-    });
-    let mut detail = use_signal(|| NodeDetail::Full);
     let cull_config = props.config.clone();
     use_effect(use_reactive!(|cull_config| {
         let viewport = *controller.viewport.read();
         let geometry = controller.geometry.read();
-        let s = state.read();
+        let pipeline = pipeline.read();
+        let mut next = visibility.peek().clone();
         let view = viewport.visible_world_rect(geometry.container);
-        let should = (*cull.peek())
+        let recull = next
+            .region
             .is_none_or(|(rect, zoom)| state::needs_recull(rect, view, zoom, viewport.zoom));
-        if should {
-            let inflated = view.inflate(cull_config.cull_margin);
-            cull.set(Some((inflated, viewport.zoom)));
+        if recull {
+            next.region = Some((view.inflate(cull_config.cull_margin), viewport.zoom));
         }
-        let region = (*cull.peek()).map(|(rect, _)| rect).unwrap_or(view);
-        let data = (geometry.revision, s.selection.clone(), s.dragging.clone());
-        if should || cull_data.peek().as_ref() != Some(&data) {
-            let next =
-                state::visible_nodes(&geometry.rects, region, &s.selection, s.dragging.as_ref());
-            if *visible.peek() != next {
-                visible.set(next);
-            }
-            cull_data.set(Some(data));
+        let data = (
+            pipeline.revision,
+            pipeline.state.selection.clone(),
+            pipeline.state.dragging.clone(),
+        );
+        if recull || next.data.as_ref() != Some(&data) {
+            let region = next.region.map(|(rect, _)| rect).unwrap_or(view);
+            next.visible = state::visible_nodes(
+                &pipeline.rects,
+                region,
+                &pipeline.state.selection,
+                pipeline.state.dragging.as_ref(),
+            );
+            next.data = Some(data);
         }
-        let next = state::detail_for_zoom(
+        next.detail = state::detail_for_zoom(
             viewport.zoom,
             cull_config.full_detail_zoom,
             cull_config.compact_detail_zoom,
         );
-        if *detail.peek() != next {
-            detail.set(next);
+        if *visibility.peek() != next {
+            visibility.set(next);
         }
     }));
     let callbacks = props.clone();
-    let dispatch = use_callback(move |event: GestureInput| {
-        let positions = |id: &NodeId| state.peek().positions.get(id).copied();
+    let dispatch = use_callback(move |(event, origin): (GestureInput, Point)| {
+        let positions = |id: &NodeId| pipeline.peek().state.positions.get(id).copied();
         let context = GestureContext {
             viewport: controller.viewport(),
-            container_origin: *origin.peek(),
+            container_origin: origin,
             limits: callbacks.config.limits,
             wheel_mode: callbacks.config.wheel_mode,
             node_position: &positions,
         };
         let effects = gesture.write().handle(event, &context);
-        let mut positions_changed = false;
         for effect in effects {
             if matches!(
                 &effect,
@@ -324,11 +275,7 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
                     | GestureEffect::NodeClick { .. }
                     | GestureEffect::BackgroundClick { .. }
             ) {
-                positions_changed |= matches!(
-                    &effect,
-                    GestureEffect::NodeDragMove { .. } | GestureEffect::NodeDragEnd { .. }
-                );
-                state.write().apply_effect(&effect);
+                apply.call(CanvasInput::Gesture(effect.clone()));
             }
             match effect {
                 GestureEffect::SetViewport(viewport) => controller.set_viewport(viewport),
@@ -339,21 +286,15 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
                     }
                 }
                 GestureEffect::NodeClick { node, shift } => {
-                    let s = state.peek();
-                    let selection = s.selection.iter().cloned().collect();
-                    drop(s);
                     if let Some(callback) = callbacks.on_selection_change {
-                        callback.call(selection);
+                        callback.call(pipeline.peek().state.selection.iter().cloned().collect());
                     }
                     if let Some(callback) = callbacks.on_node_click {
                         callback.call(NodeEvent { id: node, shift });
                     }
                 }
                 GestureEffect::NodeDoubleClick(node) => {
-                    if let Some(callback) = callbacks
-                        .on_node_double_click
-                        .or(callbacks.on_node_activate)
-                    {
+                    if let Some(callback) = callbacks.on_node_activate {
                         callback.call(NodeEvent {
                             id: node,
                             shift: false,
@@ -376,123 +317,237 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
                 }
             }
         }
-        if positions_changed {
-            let s = state.peek();
-            let current = model.peek();
-            let r = rects(&current, &s);
-            drop(s);
-            drop(current);
-            let mut geometry = controller.geometry.write();
-            geometry.rects = r;
-            geometry.revision += 1;
-        }
     });
-    let refresh_origin = use_callback(move |_: ()| {
-        if let Some(element) = mounted.peek().clone() {
-            spawn(async move {
-                if let Ok(rect) = element.get_client_rect().await {
-                    origin.set(Point {
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                    });
+    let native_inputs = use_coroutine(
+        move |mut receiver: UnboundedReceiver<GestureInput>| async move {
+            let mut origin = Point::default();
+            while let Some(input) = receiver.next().await {
+                if let Some(element) = mounted.peek().clone()
+                    && let Ok(rect) = element.get_client_rect().await
+                {
+                    origin = Point::new(rect.origin.x, rect.origin.y);
                 }
-            });
+                dispatch.call((input, origin));
+            }
+        },
+    );
+    let send_input = use_callback(move |input| {
+        if let Some(origin) = platform::client_origin(mounted.peek().as_deref()) {
+            dispatch.call((input, origin));
+        } else {
+            // Native mounted queries are async: preserve input order while refreshing.
+            native_inputs.send(input);
         }
     });
     let activate = use_callback(move |event: NodeEvent| {
-        if let Some(callback) = props.on_node_activate.or(props.on_node_double_click) {
+        if let Some(callback) = props.on_node_activate {
             callback.call(event);
         }
     });
+    let select = use_callback(move |event: NodeEvent| {
+        apply.call(CanvasInput::Selection(SelectionEvent::Click {
+            node: event.id,
+            shift: event.shift,
+        }));
+        if let Some(callback) = props.on_selection_change {
+            callback.call(pipeline.peek().state.selection.iter().cloned().collect());
+        }
+    });
     let node_pointer = use_callback(move |(id, event): (NodeId, PointerEvent)| {
-        refresh_origin.call(());
-        dispatch.call(input::pointer_down(
+        send_input.call(input::pointer_down(
             &event,
             GestureTarget::Node(id),
             platform::timestamp_ms(),
         ));
     });
-    let select = use_callback(move |event: NodeEvent| {
-        let mut s = state.write();
-        s.selection = reduce_selection(
-            &s.selection,
-            SelectionEvent::Click {
-                node: event.id,
-                shift: event.shift,
-            },
-        );
-        let selection = s.selection.iter().cloned().collect();
-        drop(s);
-        if let Some(callback) = props.on_selection_change {
-            callback.call(selection);
+    let measure = use_callback(move |(id, size, detail): (NodeId, Size, NodeDetail)| {
+        if detail == NodeDetail::Full {
+            apply.call(CanvasInput::Measured { id, size, detail });
         }
     });
-    let layout_measure = props.layout.clone();
-    let measure = use_callback(move |(id, size): (NodeId, Size)| {
-        let mut s = state.write();
-        let was_pending = !s.pending.is_empty();
-        let changed = s.measure(id, size);
-        let complete = s.pending.is_empty();
-        if changed && complete {
-            let current = model.peek();
-            calculate_layout(
-                &current,
-                &mut s,
-                &layout_measure,
-                was_pending && *measured_once.peek(),
-            );
-            measured_once.set(true);
-            s.stable = s.positions.keys().cloned().collect();
+    let on_mounted = move |event: MountedEvent| {
+        let element = event.data();
+        mounted.set(Some(element.clone()));
+        spawn(async move {
+            if let Ok(rect) = element.get_client_rect().await {
+                apply.call(CanvasInput::ContainerResized(Size::new(
+                    rect.size.width,
+                    rect.size.height,
+                )));
+            }
+        });
+    };
+    let on_resize = move |event: ResizeEvent| {
+        if let Ok(size) = event.get_border_box_size() {
+            apply.call(CanvasInput::ContainerResized(Size::new(
+                size.width,
+                size.height,
+            )));
         }
-        let current = model.peek();
-        let r = rects(&current, &s);
-        drop(s);
-        drop(current);
-        {
-            let mut geometry = controller.geometry.write();
-            geometry.rects = r;
-            geometry.revision += 1;
+    };
+    let on_pointer_down = move |event: PointerEvent| {
+        send_input.call(input::pointer_down(
+            &event,
+            GestureTarget::Background,
+            platform::timestamp_ms(),
+        ));
+    };
+    let on_pointer_move = move |event: PointerEvent| send_input.call(input::pointer_move(&event));
+    let on_pointer_up = move |event: PointerEvent| {
+        send_input.call(input::pointer_up(&event, platform::timestamp_ms()))
+    };
+    let on_pointer_cancel = move |event: PointerEvent| {
+        send_input.call(GestureInput::PointerCancel {
+            pointer: event.pointer_id(),
+        })
+    };
+    let on_pointer_leave = move |event: PointerEvent| {
+        #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+        send_input.call(GestureInput::PointerCancel {
+            pointer: event.pointer_id(),
+        });
+        #[cfg(all(feature = "web", target_arch = "wasm32"))]
+        let _ = event;
+    };
+    let on_wheel = move |event: WheelEvent| {
+        event.prevent_default();
+        send_input.call(input::wheel(&event, controller.geometry.peek().container));
+    };
+    let on_key_down = move |event: KeyboardEvent| {
+        let handled = match keyboard_action(&event.key().to_string()) {
+            Some(KeyboardAction::ClearSelection) => {
+                apply.call(CanvasInput::Selection(SelectionEvent::Clear));
+                if let Some(callback) = props.on_selection_change {
+                    callback.call(Vec::new());
+                }
+                true
+            }
+            Some(KeyboardAction::ZoomBy(factor)) => {
+                controller.zoom_by(factor);
+                true
+            }
+            Some(KeyboardAction::Fit) => {
+                controller.fit_view();
+                true
+            }
+            Some(KeyboardAction::Pan(delta)) => {
+                let mut viewport = controller.viewport();
+                viewport.x += delta.x;
+                viewport.y += delta.y;
+                controller.set_viewport(viewport);
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            event.prevent_default();
         }
-        if complete && !*fitted.peek() && mounted.peek().is_some() {
-            controller.fit_view();
-            fitted.set(true);
-        }
-    });
+    };
     let current = model.read();
-    let s = state.read();
-    let shown = visible.read();
-    let detail = detail();
-    let all_rects = rects(&current, &s);
+    let pipeline = pipeline.read();
+    let visibility = visibility.read();
+    let offsets = offsets.read();
     let marker = use_hook(|| format!("dxgraph-arrow-{}", dioxus::core::current_scope_id().0));
     let class = format!("dxgraph {}", props.class.as_deref().unwrap_or(""));
     let world = rsx! {
-        svg {class:"dxgraph-edges","aria-hidden":"true",defs {marker {id:marker.clone(),view_box:"0 0 10 10",ref_x:"9",ref_y:"5",marker_width:"6",marker_height:"6",orient:"auto-start-reverse",path{d:"M 0 0 L 10 5 L 0 10 z",fill:"currentColor"}}},
-            for edge in current.edges().filter(|edge|state::edge_visible(&edge.source,&edge.target,&shown)) {
-                if let (Some(source),Some(target))=(all_rects.get(&edge.source),all_rects.get(&edge.target)) {edges::EdgeView{key:"{edge.id}",id:edge.id.to_string(),source:*source,target:*target,style:edge.style.clone(),marker:marker.clone(),offset:current.edges().take_while(|other|other.id!=edge.id).filter(|other|other.source==edge.source&&other.target==edge.target).count() as i32}}
+        svg { class: "dxgraph-edges", "aria-hidden": "true",
+            defs {
+                marker {
+                    id: marker.clone(),
+                    view_box: "0 0 10 10",
+                    ref_x: "9",
+                    ref_y: "5",
+                    marker_width: "6",
+                    marker_height: "6",
+                    orient: "auto-start-reverse",
+                    path { d: "M 0 0 L 10 5 L 0 10 z", fill: "currentColor" }
+                }
+            }
+            for edge in current
+                .edges()
+                .filter(|edge| state::edge_visible(
+                    &edge.source,
+                    &edge.target,
+                    &visibility.visible,
+                ))
+            {
+                if let (Some(source), Some(target)) = (
+                    pipeline.rects.get(&edge.source),
+                    pipeline.rects.get(&edge.target),
+                )
+                {
+                    edges::EdgeView {
+                        key: "{edge.id}",
+                        id: edge.id.to_string(),
+                        source: *source,
+                        target: *target,
+                        self_loop: edge.source == edge.target,
+                        style: edge.style.clone(),
+                        label: edge.label.clone(),
+                        marker: marker.clone(),
+                        offset: offsets.get(&edge.id).copied().unwrap_or_default(),
+                    }
+                }
             }
         }
-        for graph_node in current.nodes().filter(|node|shown.contains(&node.id)||s.pending.contains(&node.id)) {
-            node::NodeView {key:"{graph_node.id}",id:graph_node.id.clone(),data:graph_node.data.clone(),position:all_rects.get(&graph_node.id).map(|r|r.origin).unwrap_or_default(),size:s.measured.get(&graph_node.id).copied().unwrap_or(graph_node.size_hint),selected:s.selection.contains(&graph_node.id),hidden:s.pending.contains(&graph_node.id),detail,label:props.node_label.call(graph_node.id.clone()),render_node:props.render_node,render_minimal:props.render_minimal,on_pointer:node_pointer,on_measure:measure,on_activate:activate,on_select:select}
+        for graph_node in current
+            .nodes()
+            .filter(|node| {
+                visibility.visible.contains(&node.id)
+                    || pipeline.state.pending.contains(&node.id)
+            })
+        {
+            node::NodeView {
+                key: "{graph_node.id}",
+                id: graph_node.id.clone(),
+                data: graph_node.data.clone(),
+                position: pipeline.rects.get(&graph_node.id).map(|rect| rect.origin).unwrap_or_default(),
+                size: pipeline.state.measured.get(&graph_node.id).copied().unwrap_or(graph_node.size_hint),
+                selected: pipeline.state.selection.contains(&graph_node.id),
+                hidden: pipeline.state.pending.contains(&graph_node.id),
+                detail: if pipeline.state.pending.contains(&graph_node.id) { NodeDetail::Full } else { visibility.detail },
+                label: props
+                    .node_label
+                    .call(NodeRenderContext {
+                        id: graph_node.id.clone(),
+                        data: graph_node.data.clone(),
+                        selected: pipeline.state.selection.contains(&graph_node.id),
+                        detail: visibility.detail,
+                    }),
+                render_node: props.render_node,
+                render_minimal: props.render_minimal,
+                on_pointer: node_pointer,
+                on_measure: measure,
+                on_activate: activate,
+                on_select: select,
+            }
         }
     };
-    rsx! {div {
-        class,role:"application",aria_label:props.config.aria_label.clone(),tabindex:0,
-        onmounted:move |event|{let element=event.data();mounted.set(Some(element.clone()));spawn(async move{if let Ok(rect)=element.get_client_rect().await {origin.set(Point{x:rect.origin.x,y:rect.origin.y});{let mut geometry=controller.geometry.write();geometry.container=Size{width:rect.size.width,height:rect.size.height};geometry.revision+=1;}if state.peek().pending.is_empty(){controller.fit_view();fitted.set(true);}}});},
-        onresize:move |event|{if let Ok(size)=event.get_border_box_size(){{let mut geometry=controller.geometry.write();geometry.container=Size{width:size.width,height:size.height};geometry.revision+=1;}if !*fitted.peek()&&state.peek().pending.is_empty(){controller.fit_view();fitted.set(true);}}refresh_origin.call(());},
-        onpointerdown:move |event|{refresh_origin.call(());dispatch.call(input::pointer_down(&event,GestureTarget::Background,platform::timestamp_ms()));},
-        onpointermove:move |event|dispatch.call(input::pointer_move(&event)),onpointerup:move |event|dispatch.call(input::pointer_up(&event,platform::timestamp_ms())),
-        onpointercancel:move |event|dispatch.call(GestureInput::PointerCancel{pointer:event.pointer_id()}),
-        onpointerleave:move |event|{#[cfg(not(all(feature="web",target_arch="wasm32")))] dispatch.call(GestureInput::PointerCancel{pointer:event.pointer_id()});#[cfg(all(feature="web",target_arch="wasm32"))] let _=event;},
-        onwheel:move |event|{event.prevent_default();dispatch.call(input::wheel(&event,controller.geometry.peek().container));},
-        onkeydown:move |event|{let handled=match keyboard_action(&event.key().to_string()){Some(KeyboardAction::ClearSelection)=>{state.write().selection.clear();if let Some(callback)=props.on_selection_change{callback.call(Vec::new());}true},Some(KeyboardAction::ZoomBy(factor))=>{controller.zoom_by(factor);true},Some(KeyboardAction::Fit)=>{controller.fit_view();true},Some(KeyboardAction::Pan(delta))=>{let mut viewport=controller.viewport();viewport.x+=delta.x;viewport.y+=delta.y;controller.set_viewport(viewport);true},_=>false};if handled{event.prevent_default();}},
-        GraphBackground{viewport:controller.viewport}
-        background::GraphWorld{viewport:controller.viewport,children:world}
-        div{class:"dxgraph-overlay",{props.children}}
-    }}
+    rsx! {
+        div {
+            class,
+            role: "application",
+            aria_label: props.config.aria_label.clone(),
+            tabindex: 0,
+            onmounted: on_mounted,
+            onresize: on_resize,
+            onpointerdown: on_pointer_down,
+            onpointermove: on_pointer_move,
+            onpointerup: on_pointer_up,
+            onpointercancel: on_pointer_cancel,
+            onpointerleave: on_pointer_leave,
+            onwheel: on_wheel,
+            onkeydown: on_key_down,
+            GraphBackground { viewport: controller.viewport }
+            background::GraphWorld { viewport: controller.viewport, children: world }
+            div { class: "dxgraph-overlay", {props.children} }
+        }
+    }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::pipeline::{calculate_layout, rects};
+    use super::state::CanvasState;
     use super::*;
     use crate::GraphNode;
 
@@ -564,5 +619,60 @@ mod tests {
             model.node(&"b".into()).unwrap().size_hint
         );
         assert!(!rects[&NodeId::from("a")].intersects(rects[&NodeId::from("b")]));
+    }
+    #[test]
+    fn parallel_and_opposite_edges_have_centred_distinct_lanes() {
+        let mut model = GraphModel::<(), ()>::default();
+        model.insert_node(GraphNode::new("a", ())).unwrap();
+        model.insert_node(GraphNode::new("b", ())).unwrap();
+        model
+            .insert_edge(crate::GraphEdge::new("ab", "a", "b", ()))
+            .unwrap();
+        model
+            .insert_edge(crate::GraphEdge::new("ba", "b", "a", ()))
+            .unwrap();
+        let offsets = parallel_edge_offsets(&model);
+        assert_eq!(offsets[&crate::EdgeId::from("ab")], -1);
+        assert_eq!(offsets[&crate::EdgeId::from("ba")], -1);
+        let a = Rect::new(Point::default(), Size::new(100.0, 60.0));
+        let b = Rect::new(Point::new(300.0, 0.0), a.size);
+        let forward = crate::edge_geometry_with_offset(
+            a,
+            b,
+            &crate::EdgeStyle::default(),
+            offsets[&crate::EdgeId::from("ab")],
+            false,
+        );
+        let reverse = crate::edge_geometry_with_offset(
+            b,
+            a,
+            &crate::EdgeStyle::default(),
+            offsets[&crate::EdgeId::from("ba")],
+            false,
+        );
+        assert_ne!(
+            forward.label_pos, reverse.label_pos,
+            "opposite edges must occupy different physical lanes"
+        );
+        model
+            .insert_edge(crate::GraphEdge::new("ab2", "a", "b", ()))
+            .unwrap();
+        let offsets = parallel_edge_offsets(&model);
+        assert_eq!(offsets[&crate::EdgeId::from("ab")], -2);
+        assert_eq!(offsets[&crate::EdgeId::from("ba")], 0);
+        assert_eq!(offsets[&crate::EdgeId::from("ab2")], 2);
+    }
+
+    #[test]
+    fn self_loop_offsets_have_distinct_radii() {
+        let mut model = GraphModel::<(), ()>::default();
+        model.insert_node(GraphNode::new("a", ())).unwrap();
+        for id in ["one", "two", "three"] {
+            model
+                .insert_edge(crate::GraphEdge::new(id, "a", "a", ()))
+                .unwrap();
+        }
+        let offsets = parallel_edge_offsets(&model);
+        assert_eq!(offsets.values().copied().collect::<Vec<_>>(), [0, 2, 4]);
     }
 }

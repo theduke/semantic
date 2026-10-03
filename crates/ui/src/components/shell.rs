@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Plus, Tags,
+    CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Network, Plus, Tags,
 };
 
 use super::{
@@ -192,7 +192,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                 PrimaryNavLink {
                     to: Route::GraphPage { root: None, collection: None, mode: None, layout: None },
                     label: "Graph",
-                    icon: rsx! { FolderTree { width: 17, height: 17 } },
+                    icon: rsx! { Network { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Graph),
                     on_navigate: move |_| menu_open.set(false),
                 }

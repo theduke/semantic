@@ -60,6 +60,14 @@ impl Rect {
             && self.origin.y <= other.bottom()
             && self.bottom() >= other.origin.y
     }
+
+    /// Whether the rectangles share area. Touching boundaries are not overlaps.
+    pub fn overlaps(self, other: Self) -> bool {
+        self.right() > other.origin.x
+            && other.right() > self.origin.x
+            && self.bottom() > other.origin.y
+            && other.bottom() > self.origin.y
+    }
     pub fn union(self, other: Self) -> Self {
         let origin = Point::new(
             self.origin.x.min(other.origin.x),
@@ -179,13 +187,6 @@ fn zoom_limits(min: f64, max: f64) -> (f64, f64) {
     let min = valid_zoom(min);
     (min, valid_zoom(max).max(min))
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NodeDetail {
-    #[default]
-    Full,
-    Compact,
-    Minimal,
-}
 
 #[cfg(test)]
 mod tests {
@@ -197,6 +198,8 @@ mod tests {
         assert!(rect.contains(Point::new(40.0, 60.0)));
         assert!(!rect.contains(Point::new(41.0, 60.0)));
         assert!(rect.intersects(Rect::new(Point::new(40.0, 20.0), Size::new(1.0, 1.0))));
+        assert!(!rect.overlaps(Rect::new(Point::new(40.0, 20.0), Size::new(1.0, 1.0))));
+        assert!(rect.overlaps(Rect::new(Point::new(39.0, 20.0), Size::new(1.0, 1.0))));
         assert!(!rect.intersects(Rect::new(Point::new(41.0, 20.0), Size::new(1.0, 1.0))));
         assert_eq!(
             rect.inflate(5.0),

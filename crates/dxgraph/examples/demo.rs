@@ -39,16 +39,30 @@ fn App() -> Element {
     let controller = use_graph_controller();
     rsx! {
         Stylesheet {}
-        style { {"html,body,#main{margin:0;width:100%;height:100%;font-family:system-ui;}button{padding:8px;}"} }
-        div { style:"width:100vw;height:100vh;",
-            GraphCanvas::<usize, ()> {
-                model, controller,
+        style {
+            {
+                "html,body,#main{margin:0;width:100%;height:100%;font-family:system-ui;}button{padding:8px;}"
+            }
+        }
+        div { style: "width:100vw;height:100vh;",
+            GraphCanvas::<usize,()> {
+                model,
+                controller,
                 render_node: |context: NodeRenderContext<usize>| rsx! {
-                    div { style:"box-sizing:border-box;width:160px;min-height:64px;padding:16px;background:#fff;border:1px solid #aaa;border-radius:6px;", "Node {context.data}" }
+                    div { style: "box-sizing:border-box;width:160px;min-height:64px;padding:16px;background:#fff;border:1px solid #aaa;border-radius:6px;",
+                        "Node {context.data}"
+                    }
                 },
-                node_label: |id: NodeId| id.to_string(),
-                div { style:"position:absolute;top:16px;left:16px;pointer-events:auto;display:flex;gap:8px;",
-                    button { onclick: move |_| { let current = controller.viewport(); controller.zoom_by(1.0 / current.zoom); controller.center_on("node-000".into()); }, "Focus root at 1x" }
+                node_label: |node: NodeRenderContext<usize>| format!("Node {}", node.data),
+                div { style: "position:absolute;top:16px;left:16px;pointer-events:auto;display:flex;gap:8px;",
+                    button {
+                        onclick: move |_| {
+                            let current = controller.viewport();
+                            controller.zoom_by(1.0 / current.zoom);
+                            controller.center_on("node-000".into());
+                        },
+                        "Focus root at 1x"
+                    }
                     button { onclick: move |_| controller.fit_view(), "Fit 300 nodes" }
                 }
                 GraphControls { controller }

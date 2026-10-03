@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::EntityTarget;
 use dxgraph::{
-    EdgeAnchor, EdgeId, EdgePathStyle, EdgeSide, EdgeStyle, GraphEdge, GraphModel, GraphNode,
-    NodeId, Size,
+    EdgeId, EdgePathStyle, EdgeStyle, GraphEdge, GraphModel, GraphNode, NodeId, Point, Size,
 };
 use semantic_data::{
     attr::ATTR_PARENT,
@@ -48,19 +47,59 @@ impl Default for ExplorerLimits {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct EntityNodeData {
-    pub target: EntityTarget,
-    pub object: Option<Object>,
-    pub kind: EntityNodeKind,
-}
-#[derive(Clone, Debug, PartialEq)]
-pub enum EntityNodeKind {
-    Entity,
-    Unresolved,
+pub enum EntityNodeData {
+    Entity {
+        target: EntityTarget,
+        object: Option<Object>,
+        loading: bool,
+        expanded: bool,
+    },
+    /// The relationship index does not identify a unique target collection.
+    Ambiguous {
+        id: String,
+        candidates: Vec<EntityTarget>,
+    },
     Overflow {
         parent: NodeId,
-        remaining_hint: usize,
     },
+}
+impl EntityNodeData {
+    pub fn target(&self) -> Option<&EntityTarget> {
+        match self {
+            Self::Entity { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+    pub fn object(&self) -> Option<&Object> {
+        match self {
+            Self::Entity { object, .. } => object.as_ref(),
+            _ => None,
+        }
+    }
+    pub fn id(&self) -> NodeId {
+        match self {
+            Self::Entity { target, .. } => node_id(target),
+            Self::Ambiguous { id, candidates } => {
+                NodeId(format!("ambiguous:{}:{id}:{:?}", id.len(), candidates))
+            }
+            Self::Overflow { parent } => NodeId(format!("overflow:{parent}")),
+        }
+    }
+    pub fn loading(&self) -> bool {
+        matches!(self, Self::Entity { loading: true, .. })
+    }
+    pub fn expanded(&self) -> bool {
+        matches!(self, Self::Entity { expanded: true, .. })
+    }
+    fn set_state(&mut self, is_loading: bool, is_expanded: bool) {
+        if let Self::Entity {
+            loading, expanded, ..
+        } = self
+        {
+            *loading = is_loading;
+            *expanded = is_expanded;
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityEdgeData {
@@ -80,39 +119,39 @@ pub struct ExpansionRequest {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExpansionEdge {
-    pub source: EntityTarget,
-    pub target: EntityTarget,
+    pub source: NodeId,
+    pub target: NodeId,
     pub kind: EntityEdgeKind,
 }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExpansionResult {
     pub nodes: Vec<EntityNodeData>,
     pub edges: Vec<ExpansionEdge>,
-    pub remaining_hint: usize,
 }
 
 pub fn node_id(target: &EntityTarget) -> NodeId {
-    NodeId(format!("{}/{}", target.collection_or_default(), target.id))
+    let collection = target.collection_or_default();
+    NodeId(format!(
+        "entity:{}:{collection}{}",
+        collection.len(),
+        target.id
+    ))
 }
 pub fn entity_data(target: EntityTarget, object: Option<Object>) -> EntityNodeData {
-    let kind = if object.is_some() {
-        EntityNodeKind::Entity
-    } else {
-        EntityNodeKind::Unresolved
-    };
-    EntityNodeData {
+    EntityNodeData::Entity {
         target,
         object,
-        kind,
+        loading: false,
+        expanded: false,
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityGraphExplorer {
     model: GraphModel<EntityNodeData, EntityEdgeData>,
-    pub mode: GraphMode,
-    pub limits: ExplorerLimits,
-    pub root: EntityTarget,
+    mode: GraphMode,
+    limits: ExplorerLimits,
+    root: EntityTarget,
     expanded: BTreeSet<NodeId>,
     loading: BTreeSet<NodeId>,
     // Expansion provenance, separate from semantic edge direction, drives collapse.
@@ -139,8 +178,24 @@ impl EntityGraphExplorer {
     pub fn model(&self) -> &GraphModel<EntityNodeData, EntityEdgeData> {
         &self.model
     }
-    pub fn model_mut(&mut self) -> &mut GraphModel<EntityNodeData, EntityEdgeData> {
-        &mut self.model
+    pub fn root(&self) -> &EntityTarget {
+        &self.root
+    }
+    pub fn mode(&self) -> GraphMode {
+        self.mode
+    }
+    pub fn limits(&self) -> ExplorerLimits {
+        self.limits
+    }
+    pub fn pin(&mut self, id: &NodeId, position: Point) {
+        let _ = self.model.set_position(id, position);
+        let _ = self.model.set_pinned(id, true);
+    }
+    fn update_state(&mut self, id: &NodeId) {
+        if let Some(node) = self.model.node_mut(id) {
+            node.data
+                .set_state(self.loading.contains(id), self.expanded.contains(id));
+        }
     }
     pub fn is_expanded(&self, id: &NodeId) -> bool {
         self.expanded.contains(id)
@@ -149,9 +204,12 @@ impl EntityGraphExplorer {
         self.loading.contains(id)
     }
     pub fn set_object(&mut self, target: &EntityTarget, object: Object) {
-        if let Some(node) = self.model.node_mut(&node_id(target)) {
-            node.data.object = Some(object);
-            node.data.kind = EntityNodeKind::Entity;
+        if let Some(node) = self.model.node_mut(&node_id(target))
+            && let EntityNodeData::Entity {
+                object: current, ..
+            } = &mut node.data
+        {
+            *current = Some(object);
         }
     }
     pub fn begin_expand(&mut self, id: &NodeId) -> Option<ExpansionRequest> {
@@ -162,20 +220,19 @@ impl EntityGraphExplorer {
             return None;
         }
         let node = self.model.node(id)?;
-        if matches!(node.data.kind, EntityNodeKind::Overflow { .. }) {
-            return None;
-        }
         let request = ExpansionRequest {
             node: id.clone(),
-            target: node.data.target.clone(),
+            target: node.data.target()?.clone(),
             mode: self.mode,
             limit: self.limits.fan_out.saturating_add(1),
         };
         self.loading.insert(id.clone());
+        self.update_state(id);
         Some(request)
     }
     pub fn fail_expansion(&mut self, id: &NodeId) {
         self.loading.remove(id);
+        self.update_state(id);
     }
     pub fn apply_expansion(&mut self, id: &NodeId, result: ExpansionResult) {
         self.loading.remove(id);
@@ -187,21 +244,20 @@ impl EntityGraphExplorer {
         let unique_new = result
             .nodes
             .iter()
-            .map(|node| node_id(&node.target))
+            .map(EntityNodeData::id)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter(|id| self.model.node(id).is_none())
             .count();
         let available = self.limits.max_nodes.saturating_sub(current);
-        let needs_overflow =
-            unique_new > available || unique_new > self.limits.fan_out || result.remaining_hint > 0;
+        let needs_overflow = unique_new > available || unique_new > self.limits.fan_out;
         let budget = available
             .saturating_sub(usize::from(needs_overflow))
             .min(self.limits.fan_out);
         let mut owned = BTreeSet::new();
-        let mut omitted = result.remaining_hint;
+        let mut omitted = 0;
         for data in result.nodes {
-            let target = node_id(&data.target);
+            let target = data.id();
             if self.model.node(&target).is_none() {
                 if new_count >= budget {
                     omitted += 1;
@@ -211,8 +267,12 @@ impl EntityGraphExplorer {
             }
             owned.insert(target.clone());
             if let Some(existing) = self.model.node_mut(&target) {
-                if data.object.is_some() {
+                if data.object().is_some() {
                     existing.data = data;
+                    existing.data.set_state(
+                        self.loading.contains(&target),
+                        self.expanded.contains(&target),
+                    );
                 }
             } else {
                 self.model.upsert_node(make_node(data, Some(id.clone())));
@@ -220,8 +280,8 @@ impl EntityGraphExplorer {
         }
         let mut owned_edges = BTreeSet::new();
         for edge in result.edges {
-            let source = node_id(&edge.source);
-            let target = node_id(&edge.target);
+            let source = edge.source;
+            let target = edge.target;
             if self.model.node(&source).is_none() || self.model.node(&target).is_none() {
                 continue;
             }
@@ -230,16 +290,13 @@ impl EntityGraphExplorer {
                     EdgeId(format!("parent:{target}->{source}")),
                     EdgeStyle {
                         path: EdgePathStyle::Bezier,
-                        source_anchor: EdgeAnchor::Side(EdgeSide::Bottom),
-                        target_anchor: EdgeAnchor::Side(EdgeSide::Top),
                         ..EdgeStyle::default()
                     },
                 ),
-                EntityEdgeKind::Relation { relation_id, label } => (
+                EntityEdgeKind::Relation { relation_id, .. } => (
                     EdgeId(format!("rel:{relation_id}:{source}->{target}")),
                     EdgeStyle {
                         path: EdgePathStyle::Bezier,
-                        label: Some(label.clone()),
                         class: Some(format!(
                             "semantic-graph-relation-{}",
                             stable_color(relation_id)
@@ -249,32 +306,24 @@ impl EntityGraphExplorer {
                 ),
             };
             owned_edges.insert(edge_id.clone());
-            if self.model.edges().all(|edge| edge.id != edge_id) {
+            if !self.model.contains_edge(&edge_id) {
                 let _ = self.model.insert_edge(GraphEdge {
                     id: edge_id,
                     source,
                     target,
+                    label: match &edge.kind {
+                        EntityEdgeKind::Relation { label, .. } => Some(label.clone()),
+                        _ => None,
+                    },
                     data: EntityEdgeData { kind: edge.kind },
                     style,
                 });
             }
         }
         if omitted > 0 && self.model.nodes().count() < self.limits.max_nodes {
-            let overflow_id = NodeId(format!("overflow:{id}"));
-            let target = EntityTarget::default_collection(overflow_id.0.clone());
-            let mut node = make_node(
-                EntityNodeData {
-                    target,
-                    object: None,
-                    kind: EntityNodeKind::Overflow {
-                        parent: id.clone(),
-                        remaining_hint: omitted,
-                    },
-                },
-                Some(id.clone()),
-            );
-            node.id = overflow_id.clone();
-            self.model.upsert_node(node);
+            let data = EntityNodeData::Overflow { parent: id.clone() };
+            let overflow_id = data.id();
+            self.model.upsert_node(make_node(data, Some(id.clone())));
             owned.insert(overflow_id.clone());
             let edge_id = EdgeId(format!("overflow:{id}"));
             owned_edges.insert(edge_id.clone());
@@ -282,6 +331,7 @@ impl EntityGraphExplorer {
                 id: edge_id,
                 source: id.clone(),
                 target: overflow_id,
+                label: None,
                 data: EntityEdgeData {
                     kind: EntityEdgeKind::Parent,
                 },
@@ -294,6 +344,7 @@ impl EntityGraphExplorer {
         self.expansion_nodes.insert(id.clone(), owned);
         self.expansion_edges.insert(id.clone(), owned_edges);
         self.expanded.insert(id.clone());
+        self.update_state(id);
     }
     pub fn collapse(&mut self, id: &NodeId) {
         self.expansion_nodes.remove(id);
@@ -310,6 +361,7 @@ impl EntityGraphExplorer {
         }
         self.expanded.remove(id);
         self.loading.remove(id);
+        self.update_state(id);
         let root = node_id(&self.root);
         let mut retained = BTreeSet::from([root.clone()]);
         let mut pending = VecDeque::from([root.clone()]);
@@ -357,29 +409,24 @@ impl EntityGraphExplorer {
             }
         }
     }
-    pub fn set_mode(&mut self, mode: GraphMode) {
-        let object = self
-            .model
-            .node(&node_id(&self.root))
-            .and_then(|node| node.data.object.clone());
-        *self = Self::new(self.root.clone(), mode, self.limits);
-        if let Some(object) = object {
-            let root = self.root.clone();
-            self.set_object(&root, object);
-        }
-    }
+    /// V1 parent refs carry only an id; ancestor lookup stays in the child's
+    /// collection. Cross-collection hierarchies require collection-aware refs.
     pub fn ancestors_request(&self, id: &NodeId) -> Option<EntityTarget> {
         let node = self.model.node(id)?;
-        let parent = node.data.object.as_ref()?.get(ATTR_PARENT)?.as_str()?;
-        let target = EntityTarget::new(node.data.target.collection.clone(), parent);
+        let parent = node.data.object()?.get(ATTR_PARENT)?.as_str()?;
+        let target = EntityTarget::new(node.data.target()?.collection.clone(), parent);
         (self.model.node(&node_id(&target)).is_none()).then_some(target)
     }
     pub fn apply_ancestor(&mut self, child: &NodeId, data: EntityNodeData) {
         if self.model.nodes().count() >= self.limits.max_nodes {
             return;
         }
-        let parent = node_id(&data.target);
-        let Some(child_target) = self.model.node(child).map(|node| node.data.target.clone()) else {
+        let parent = data.id();
+        let Some(child_target) = self
+            .model
+            .node(child)
+            .and_then(|node| node.data.target().cloned())
+        else {
             return;
         };
         self.model.upsert_node(make_node(data.clone(), None));
@@ -399,24 +446,20 @@ impl EntityGraphExplorer {
             id: edge_id,
             source: parent,
             target: node_id(&child_target),
+            label: None,
             data: EntityEdgeData {
                 kind: EntityEdgeKind::Parent,
             },
-            style: EdgeStyle {
-                source_anchor: EdgeAnchor::Side(EdgeSide::Bottom),
-                target_anchor: EdgeAnchor::Side(EdgeSide::Top),
-                ..EdgeStyle::default()
-            },
+            style: EdgeStyle::default(),
         });
     }
 }
 
 fn make_node(data: EntityNodeData, parent: Option<NodeId>) -> GraphNode<EntityNodeData> {
     GraphNode {
-        id: node_id(&data.target),
+        id: data.id(),
         order_key: data
-            .object
-            .as_ref()
+            .object()
             .and_then(|object| object.get("semantic:title"))
             .and_then(Value::as_str)
             .map(str::to_owned),
@@ -454,16 +497,15 @@ mod tests {
             edges: nodes
                 .iter()
                 .map(|node| ExpansionEdge {
-                    source: target(source),
-                    target: target(node),
+                    source: id(source),
+                    target: id(node),
                     kind: EntityEdgeKind::Parent,
                 })
                 .collect(),
-            remaining_hint: 0,
         }
     }
     #[test]
-    fn seed_expand_deduplicate_and_switch_mode() {
+    fn seed_expand_deduplicate() {
         let mut graph = EntityGraphExplorer::new(
             target("root"),
             GraphMode::Hierarchy,
@@ -476,9 +518,6 @@ mod tests {
         assert_eq!(graph.model.nodes().count(), 3);
         assert_eq!(graph.model.edges().count(), 2);
         graph.set_object(&target("root"), Object::new());
-        graph.set_mode(GraphMode::Relations);
-        assert_eq!(graph.model.nodes().count(), 1);
-        assert!(graph.model.node(&id("root")).unwrap().data.object.is_some());
     }
     #[test]
     fn fanout_and_global_caps_include_overflow() {
@@ -499,7 +538,7 @@ mod tests {
                 graph
                     .model
                     .nodes()
-                    .any(|node| matches!(node.data.kind, EntityNodeKind::Overflow { .. }))
+                    .any(|node| matches!(node.data, EntityNodeData::Overflow { .. }))
             );
         }
     }
@@ -532,10 +571,15 @@ mod tests {
             graph.model.node(&id("root")).unwrap().layout_parent,
             Some(id("parent"))
         );
-        assert!(matches!(
-            graph.model.node(&id("parent")).unwrap().data.kind,
-            EntityNodeKind::Unresolved
-        ));
+        assert!(
+            graph
+                .model
+                .node(&id("parent"))
+                .unwrap()
+                .data
+                .object()
+                .is_none()
+        );
     }
 
     #[test]
@@ -552,5 +596,43 @@ mod tests {
             graph.model.node(&id("shared")).unwrap().layout_parent,
             Some(id("b"))
         );
+    }
+
+    #[test]
+    fn placeholder_ids_cannot_alias_entities_and_have_no_navigation_target() {
+        let parent = id("root");
+        let overflow = EntityNodeData::Overflow {
+            parent: parent.clone(),
+        };
+        let ambiguous = EntityNodeData::Ambiguous {
+            id: "missing".into(),
+            candidates: Vec::new(),
+        };
+        for placeholder in [overflow, ambiguous] {
+            let real = entity_data(target(&placeholder.id().0), None);
+            assert_ne!(placeholder.id(), real.id());
+            assert!(placeholder.target().is_none());
+        }
+        assert_ne!(
+            node_id(&EntityTarget::new(Some("a/b".into()), "c")),
+            node_id(&EntityTarget::new(Some("a".into()), "b/c")),
+        );
+    }
+
+    #[test]
+    fn expansion_state_only_changes_the_affected_node_payload() {
+        let mut graph =
+            EntityGraphExplorer::new(target("root"), GraphMode::Both, ExplorerLimits::default());
+        graph.apply_expansion(&id("root"), fixture(&["a", "b"], "root"));
+        let sibling = graph.model().node(&id("b")).unwrap().clone();
+        graph.begin_expand(&id("a")).unwrap();
+        assert!(graph.model().node(&id("a")).unwrap().data.loading());
+        assert_eq!(graph.model().node(&id("b")), Some(&sibling));
+        graph.apply_expansion(&id("a"), fixture(&[], "a"));
+        assert!(graph.model().node(&id("a")).unwrap().data.expanded());
+        assert!(!graph.model().node(&id("a")).unwrap().data.loading());
+        graph.collapse(&id("a"));
+        assert!(!graph.model().node(&id("a")).unwrap().data.expanded());
+        assert_eq!(graph.model().node(&id("b")), Some(&sibling));
     }
 }

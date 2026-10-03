@@ -34,3 +34,18 @@ pub fn timestamp_ms() -> u64 {
             .as_millis() as u64
     }
 }
+
+/// Fetch the current client origin synchronously where DOM access is available.
+pub(crate) fn client_origin(element: Option<&MountedData>) -> Option<crate::Point> {
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    {
+        let element = element?.downcast::<web_sys::Element>()?;
+        let rect = element.get_bounding_client_rect();
+        Some(crate::Point::new(rect.x(), rect.y()))
+    }
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    {
+        let _ = element;
+        None
+    }
+}

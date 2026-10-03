@@ -77,7 +77,6 @@ pub fn GraphPage(
     let mode = GraphMode::parse(mode.as_deref());
     let layout_config = graph_layout(mode, layout.as_deref());
     let controller = use_graph_controller();
-    let mut revision = use_signal(|| 0u64);
     let nav = navigator();
     let picker_collection = collection.clone();
     let picker_layout = layout.clone();
@@ -95,32 +94,94 @@ pub fn GraphPage(
     }));
     let focus_layout = layout.clone();
     rsx! {
-        div { class: "semantic-page semantic-graph-page", style: "display:flex;flex-direction:column;min-height:calc(100vh - 90px);gap:16px;",
-            PageHeader { title: "Graph", description: Some("Explore entity hierarchies and relationships.".into()) }
-            div { class: "semantic-graph-toolbar", style: "display:flex;flex-wrap:wrap;align-items:center;gap:12px;", aria_label: "Graph options",
-                EntityAutocomplete { value: root.clone(), collection: collection.clone(), search_fields: Some(vec!["id".into(), "semantic:title".into()]), aria_label: "Graph root", placeholder: "Choose a root entity",
-                    on_value_change: move |root| { nav.replace(graph_route(root, picker_collection.clone(), mode, picker_layout.clone())); }
+        div { class: "semantic-page semantic-graph-page",
+            PageHeader {
+                title: "Graph",
+                description: Some("Explore entity hierarchies and relationships.".into()),
+            }
+            div { class: "semantic-graph-toolbar", aria_label: "Graph options",
+                EntityAutocomplete {
+                    value: root.clone(),
+                    collection: collection.clone(),
+                    search_fields: Some(vec!["id".into(), "semantic:title".into()]),
+                    aria_label: "Graph root",
+                    placeholder: "Choose a root entity",
+                    on_value_change: move |root| {
+                        nav.replace(
+                            graph_route(root, picker_collection.clone(), mode, picker_layout.clone()),
+                        );
+                    },
                 }
-                dxcomp::toggle_group::ToggleGroup { pressed: Some(HashSet::from([selected_mode])), horizontal: true,
-                    on_pressed_change: move |items: HashSet<usize>| { if let Some(index) = items.iter().next() { let mode = match index { 1 => GraphMode::Relations, 2 => GraphMode::Both, _ => GraphMode::Hierarchy }; nav.replace(graph_route(mode_root.clone(), mode_collection.clone(), mode, None)); } },
+                dxcomp::toggle_group::ToggleGroup {
+                    pressed: Some(HashSet::from([selected_mode])),
+                    horizontal: true,
+                    on_pressed_change: move |items: HashSet<usize>| {
+                        if let Some(index) = items.iter().next() {
+                            let mode = match index {
+                                1 => GraphMode::Relations,
+                                2 => GraphMode::Both,
+                                _ => GraphMode::Hierarchy,
+                            };
+                            nav.replace(
+                                graph_route(mode_root.clone(), mode_collection.clone(), mode, None),
+                            );
+                        }
+                    },
                     dxcomp::toggle_group::ToggleItem { index: 0usize, "Hierarchy" }
                     dxcomp::toggle_group::ToggleItem { index: 1usize, "Relations" }
                     dxcomp::toggle_group::ToggleItem { index: 2usize, "Both" }
                 }
-                dxcomp::select::Select::<String> { value: Some(selected_layout.into()), aria_label: "Graph layout",
-                    on_value_change: move |layout| { nav.replace(graph_route(layout_root.clone(), layout_collection.clone(), mode, layout)); },
-                    for (index, (value, label)) in [("tree", "Tree"), ("mindmap", "Mind map"), ("force", "Force"), ("radial", "Radial")].into_iter().enumerate() {
-                        dxcomp::select::SelectOption::<String> { value: value.to_owned(), index, text_value: label.to_owned(), "{label}" }
+                dxcomp::select::Select::<String> {
+                    value: Some(selected_layout.into()),
+                    aria_label: "Graph layout",
+                    on_value_change: move |layout| {
+                        nav.replace(
+                            graph_route(layout_root.clone(), layout_collection.clone(), mode, layout),
+                        );
+                    },
+                    for (index, (value, label)) in [("tree", "Tree"), ("mindmap", "Mind map"), ("force", "Force"), ("radial", "Radial")]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        dxcomp::select::SelectOption::<String> {
+                            value: value.to_owned(),
+                            index,
+                            text_value: label.to_owned(),
+                            "{label}"
+                        }
                     }
                 }
-                dxcomp::button::Button { onclick: move |_| { let next = revision() + 1; revision.set(next); }, "Re-layout" }
+                dxcomp::button::Button { onclick: move |_| controller.relayout(), "Re-layout" }
                 dxcomp::button::Button { onclick: move |_| controller.fit_view(), "Fit" }
-                Link { to: Route::BrowsePage { collection: collection.clone(), view: Some("table".into()), renderer: None, page: None, page_size: None, filters: None, sql: None }, "Browse as a list" }
+                Link {
+                    to: Route::BrowsePage {
+                        collection: collection.clone(),
+                        view: Some("table".into()),
+                        renderer: None,
+                        page: None,
+                        page_size: None,
+                        filters: None,
+                        sql: None,
+                    },
+                    "Browse as a list"
+                }
             }
             if let Some(root) = root.filter(|id| !id.trim().is_empty()) {
-                EntityGraphView { key: "{collection:?}/{root}/{mode:?}", root: EntityTarget::new(collection, root), mode, layout: layout_config, layout_revision: revision(), controller, on_focus: move |target: EntityTarget| { nav.replace(graph_route(Some(target.id), target.collection, mode, focus_layout.clone())); } }
+                EntityGraphView {
+                    root: EntityTarget::new(collection, root),
+                    mode,
+                    layout: layout_config,
+                    controller,
+                    on_focus: move |target: EntityTarget| {
+                        nav.replace(
+                            graph_route(Some(target.id), target.collection, mode, focus_layout.clone()),
+                        );
+                    },
+                }
             } else {
-                div { class: "semantic-empty-state", role: "status", p { "Choose an entity above to explore its hierarchy and relationships." } }
+                div { class: "semantic-empty-state", role: "status",
+                    p { "Choose an entity above to explore its hierarchy and relationships." }
+                }
             }
         }
     }

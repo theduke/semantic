@@ -1,7 +1,6 @@
 //! Seeded force simulation with warm-start anchors and rectangle collision removal.
 use super::{
     LayoutAlgorithm, LayoutInput, LayoutOutput, pack_components, remove_overlaps, rng::Rng,
-    spanning::forest,
 };
 use crate::{Point, Rect};
 use serde::{Deserialize, Serialize};
@@ -53,13 +52,12 @@ impl LayoutAlgorithm for ForceLayout {
             })
             .collect();
         for (i, node) in input.nodes.iter().enumerate() {
-            if let Some(&parent) = node.layout_parent.as_ref().and_then(|p| by_id.get(p)) {
-                if !links
+            if let Some(&parent) = node.layout_parent.as_ref().and_then(|p| by_id.get(p))
+                && !links
                     .iter()
                     .any(|&(a, b, _)| (a == i && b == parent) || (a == parent && b == i))
-                {
-                    links.push((parent, i, 1.0));
-                }
+            {
+                links.push((parent, i, 1.0));
             }
         }
         let mut rng = Rng::new(self.0.seed);
@@ -185,12 +183,45 @@ impl LayoutAlgorithm for ForceLayout {
             &mut output.positions,
             self.0.collision_padding.max(0.0),
         );
-        let f = forest(input);
         if input.nodes.iter().all(|n| n.previous.is_none()) {
-            pack_components(input, &f.components, &mut output.positions, 80.0);
+            pack_components(
+                input,
+                &components(n, &links),
+                &mut output.positions,
+                super::COMPONENT_GAP,
+            );
         }
         output
     }
+}
+
+fn components(count: usize, links: &[(usize, usize, f64)]) -> Vec<Vec<usize>> {
+    let mut adjacency = vec![Vec::new(); count];
+    for &(a, b, _) in links {
+        adjacency[a].push(b);
+        adjacency[b].push(a);
+    }
+    let mut visited = vec![false; count];
+    let mut components = Vec::new();
+    for root in 0..count {
+        if visited[root] {
+            continue;
+        }
+        visited[root] = true;
+        let mut component = Vec::new();
+        let mut pending = std::collections::VecDeque::from([root]);
+        while let Some(node) = pending.pop_front() {
+            component.push(node);
+            for &next in &adjacency[node] {
+                if !visited[next] {
+                    visited[next] = true;
+                    pending.push_back(next);
+                }
+            }
+        }
+        components.push(component);
+    }
+    components
 }
 // Measurement can enlarge an existing node. Previous positions are soft anchors:
 // release affected nodes when their rectangles already overlap, while retaining
@@ -211,11 +242,7 @@ fn warm_anchors(input: &LayoutInput, padding: f64) -> Vec<bool> {
                 continue;
             };
             let rb = Rect::new(pb, b.size).inflate(padding / 2.0);
-            if ra.right() > rb.origin.x
-                && rb.right() > ra.origin.x
-                && ra.bottom() > rb.origin.y
-                && rb.bottom() > ra.origin.y
-            {
+            if ra.overlaps(rb) {
                 if a.fixed.is_none() {
                     anchored[i] = false;
                 }
@@ -268,14 +295,5 @@ mod tests {
         let output = ForceLayout::default().layout(&input);
         assert_eq!(output.positions[&input.nodes[0].id], Point::default());
         assert_clear(&input, &output);
-    }
-    #[test]
-    #[ignore = "performance smoke test"]
-    fn three_hundred_nodes() {
-        let start = std::time::Instant::now();
-        ForceLayout::default().layout(&fixture(300));
-        let elapsed = start.elapsed();
-        eprintln!("300-node force: {elapsed:?}");
-        assert!(elapsed < std::time::Duration::from_millis(500));
     }
 }

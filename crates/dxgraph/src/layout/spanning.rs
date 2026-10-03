@@ -8,6 +8,10 @@ pub(super) struct Forest {
     pub components: Vec<Vec<usize>>,
 }
 pub(super) fn forest(input: &LayoutInput) -> Forest {
+    forest_with_roots(input, &input.roots)
+}
+
+pub(super) fn forest_with_roots(input: &LayoutInput, roots: &[crate::NodeId]) -> Forest {
     let n = input.nodes.len();
     let by_id: BTreeMap<_, _> = input
         .nodes
@@ -18,11 +22,11 @@ pub(super) fn forest(input: &LayoutInput) -> Forest {
     let mut adjacency = vec![Vec::new(); n];
     let mut has_parent = vec![false; n];
     for (i, node) in input.nodes.iter().enumerate() {
-        if let Some(&parent) = node.layout_parent.as_ref().and_then(|id| by_id.get(id)) {
-            if i != parent {
-                adjacency[parent].push(i);
-                has_parent[i] = true;
-            }
+        if let Some(&parent) = node.layout_parent.as_ref().and_then(|id| by_id.get(id))
+            && i != parent
+        {
+            adjacency[parent].push(i);
+            has_parent[i] = true;
         }
     }
     for edge in &input.edges {
@@ -40,8 +44,7 @@ pub(super) fn forest(input: &LayoutInput) -> Forest {
         list.sort_by_key(key);
         list.dedup();
     }
-    let mut candidates: Vec<_> = input
-        .roots
+    let mut candidates: Vec<_> = roots
         .iter()
         .filter_map(|id| by_id.get(id).copied())
         .collect();

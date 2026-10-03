@@ -36,7 +36,6 @@ pub struct EdgeStyle {
     pub to_end: EdgeMarker,
     pub dashed: bool,
     pub class: Option<String>,
-    pub label: Option<String>,
 }
 impl Default for EdgeStyle {
     fn default() -> Self {
@@ -48,7 +47,6 @@ impl Default for EdgeStyle {
             to_end: EdgeMarker::Arrow,
             dashed: false,
             class: None,
-            label: None,
         }
     }
 }
@@ -125,8 +123,13 @@ fn number(value: f64) -> String {
 fn xy(p: Point) -> String {
     format!("{} {}", number(p.x), number(p.y))
 }
-pub fn edge_geometry(source: Rect, target: Rect, style: &EdgeStyle) -> EdgeGeometry {
-    edge_geometry_with_offset(source, target, style, 0)
+pub fn edge_geometry(
+    source: Rect,
+    target: Rect,
+    style: &EdgeStyle,
+    self_loop: bool,
+) -> EdgeGeometry {
+    edge_geometry_with_offset(source, target, style, 0, self_loop)
 }
 /// `offset_index` separates parallel edges. Self-loops are determined by coincident rectangles.
 pub fn edge_geometry_with_offset(
@@ -134,8 +137,9 @@ pub fn edge_geometry_with_offset(
     target: Rect,
     style: &EdgeStyle,
     offset_index: i32,
+    self_loop: bool,
 ) -> EdgeGeometry {
-    if source == target {
+    if self_loop {
         let start = Point::new(source.right(), source.origin.y + source.size.height * 0.25);
         let end = Point::new(source.origin.x + source.size.width * 0.75, source.origin.y);
         let distance = 40.0 + f64::from(offset_index.unsigned_abs()) * 12.0;
@@ -158,7 +162,7 @@ pub fn edge_geometry_with_offset(
             let offset = distance.max(40.0) * 0.4;
             let n1 = normal(style.source_anchor, start, end);
             let n2 = normal(style.target_anchor, end, start);
-            let bend = f64::from(offset_index) * 24.0;
+            let bend = f64::from(offset_index) * 12.0;
             let denominator = distance.max(1.0);
             let perpendicular = Point::new(
                 -(end.y - start.y) / denominator * bend,
@@ -245,28 +249,46 @@ mod tests {
             path: EdgePathStyle::Straight,
             ..Default::default()
         };
-        assert_eq!(edge_geometry(a, b, &style).path_d, "M 100 50 L 200 50");
+        assert_eq!(
+            edge_geometry(a, b, &style, false).path_d,
+            "M 100 50 L 200 50"
+        );
         style.path = EdgePathStyle::Step;
         assert_eq!(
-            edge_geometry(a, b, &style).path_d,
+            edge_geometry(a, b, &style, false).path_d,
             "M 100 50 L 150 50 L 150 50 L 200 50"
         );
         style.path = EdgePathStyle::Bezier;
         assert_eq!(
-            edge_geometry(a, b, &style).path_d,
+            edge_geometry(a, b, &style, false).path_d,
             "M 100 50 C 140 50 160 50 200 50"
         );
         assert_ne!(
-            edge_geometry_with_offset(a, b, &style, 1).path_d,
-            edge_geometry(a, b, &style).path_d
+            edge_geometry_with_offset(a, b, &style, 1, false).path_d,
+            edge_geometry(a, b, &style, false).path_d
         );
         assert_eq!(
-            edge_geometry(a, a, &style).path_d,
+            edge_geometry(a, a, &style, true).path_d,
             "M 100 25 C 140 -15 115 -40 75 0"
         );
         let overlap = Rect::new(Point::new(10.0, 10.0), a.size);
-        assert_eq!(edge_geometry(a, overlap, &style).start, a.center());
+        assert_eq!(edge_geometry(a, overlap, &style, false).start, a.center());
+        let coincident = edge_geometry(a, a, &style, false);
+        assert_eq!(coincident.start, a.center());
+        assert_eq!(coincident.end, a.center());
+        assert_ne!(coincident.path_d, edge_geometry(a, a, &style, true).path_d);
         assert_eq!(number(-0.01), "0");
         assert_eq!(number(1.26), "1.3");
+    }
+
+    #[test]
+    fn opposite_direction_lanes_are_separate_and_centered() {
+        let a = Rect::new(Point::default(), Size::new(100.0, 100.0));
+        let b = Rect::new(Point::new(200.0, 0.0), a.size);
+        let forward = edge_geometry_with_offset(a, b, &EdgeStyle::default(), -1, false);
+        let reverse = edge_geometry_with_offset(b, a, &EdgeStyle::default(), -1, false);
+        assert!(forward.label_pos.y < 50.0);
+        assert!(reverse.label_pos.y > 50.0);
+        assert_eq!(forward.label_pos.y + reverse.label_pos.y, 100.0);
     }
 }

@@ -17,7 +17,6 @@ markdown = ["semantic_ui_core/markdown"]
 web = [
   "markdown",
   "dioxus/web",
-  "dxgraph/web",
   "semantic_ui_core/web",
   "semantic_rpc/client-http-web",
   "time/wasm-bindgen",

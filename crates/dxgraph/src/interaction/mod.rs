@@ -1,16 +1,30 @@
 pub mod gesture;
-pub mod input;
-pub mod platform;
+pub(crate) mod input;
+pub(crate) mod platform;
 use dioxus::prelude::*;
 pub use gesture::*;
 
 /// Wrap interactive node content so it does not start a node drag.
 #[component]
 pub fn NoDrag(children: Element) -> Element {
-    rsx! { div { class:"dxgraph-nodrag", onpointerdown:move |event|event.stop_propagation(), onclick:move |event|event.stop_propagation(), onkeydown:move |event|event.stop_propagation(), {children} } }
+    let on_pointer_down = move |event: PointerEvent| event.stop_propagation();
+    let on_click = move |event: MouseEvent| event.stop_propagation();
+    let on_key_down = move |event: KeyboardEvent| event.stop_propagation();
+    rsx! {
+        div {
+            class: "dxgraph-nodrag",
+            onpointerdown: on_pointer_down,
+            onclick: on_click,
+            onkeydown: on_key_down,
+            {children}
+        }
+    }
 }
 /// Wrap scrollable node content so it retains its own wheel behavior.
 #[component]
 pub fn NoWheel(children: Element) -> Element {
-    rsx! { div { class:"dxgraph-nowheel", onwheel:move |event|event.stop_propagation(), {children} } }
+    let on_wheel = move |event: WheelEvent| event.stop_propagation();
+    rsx! {
+        div { class: "dxgraph-nowheel", onwheel: on_wheel, {children} }
+    }
 }

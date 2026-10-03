@@ -2,6 +2,8 @@ use crate::{NodeId, Point, Rect, Size, Viewport, ViewportLimits};
 use dioxus::prelude::*;
 use indexmap::IndexMap;
 
+const FIT_PADDING: f64 = 40.0;
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ControllerGeometry {
     pub revision: u64,
@@ -73,7 +75,7 @@ impl GraphController {
             let viewport = Viewport::fit(
                 bounds,
                 geometry.container,
-                40.0,
+                FIT_PADDING,
                 geometry.limits.min_zoom,
                 geometry.limits.max_zoom,
             );
@@ -102,14 +104,20 @@ impl GraphController {
 }
 
 #[component]
-pub fn GraphControls(
-    controller: GraphController,
-    on_relayout: Option<EventHandler<()>>,
-) -> Element {
-    rsx! { div { class:"dxgraph-controls", role:"group", aria_label:"Graph controls",
-        dxcomp::button::Button { aria_label:"Zoom in", onclick:move |_|controller.zoom_by(1.2), "+" }
-        dxcomp::button::Button { aria_label:"Zoom out", onclick:move |_|controller.zoom_by(1.0/1.2), "−" }
-        dxcomp::button::Button { aria_label:"Fit graph", onclick:move |_|controller.fit_view(), "Fit" }
-        dxcomp::button::Button { aria_label:"Re-layout graph", onclick:move |_| { if let Some(callback)=on_relayout { callback.call(()); } else {controller.relayout();} }, "Re-layout" }
-    } }
+pub fn GraphControls(controller: GraphController) -> Element {
+    let on_zoom_in = move |_| controller.zoom_by(1.2);
+    let on_zoom_out = move |_| controller.zoom_by(1.0 / 1.2);
+    let on_fit = move |_| controller.fit_view();
+    let on_relayout = move |_| controller.relayout();
+    rsx! {
+        div {
+            class: "dxgraph-controls",
+            role: "group",
+            aria_label: "Graph controls",
+            dxcomp::button::Button { aria_label: "Zoom in", onclick: on_zoom_in, "+" }
+            dxcomp::button::Button { aria_label: "Zoom out", onclick: on_zoom_out, "−" }
+            dxcomp::button::Button { aria_label: "Fit graph", onclick: on_fit, "Fit" }
+            dxcomp::button::Button { aria_label: "Re-layout graph", onclick: on_relayout, "Re-layout" }
+        }
+    }
 }

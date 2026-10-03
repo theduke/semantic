@@ -22,7 +22,7 @@ fn App() -> Element {
                 model,
                 controller,
                 render_node: |node: NodeRenderContext<String>| rsx! { div { {node.data} } },
-                node_label: |id: NodeId| id.to_string(),
+                node_label: |node: NodeRenderContext<String>| node.data,
                 GraphControls { controller }
             }
         }
@@ -36,8 +36,10 @@ and edge components receive viewport-independent props. Culling uses a margin
 and 15% zoom hysteresis. Full, compact and minimal detail thresholds default to
 0.6 and 0.3; minimal nodes use a placeholder instead of invoking the full renderer.
 
-Measured unscaled border-box sizes replace each node's `size_hint`. Measurement
-noise within eight pixels does not trigger layout. A 100 ms fallback reveals
+Measured unscaled Full-detail border-box sizes replace each node's `size_hint`.
+Compact and Minimal measurements never change layout sizes. All valid Full sizes
+update anchors and culling; changes within eight pixels do not trigger layout.
+Resize bursts request at most one layout per queued tick. A 100 ms fallback reveals
 nodes whose renderer does not provide resize notifications.
 
 Wrap buttons, links, inputs and editors in `NoDrag` so they do not start gestures.
@@ -48,14 +50,15 @@ capture through web-sys; native drags end when the pointer leaves the canvas.
 Layouts include a variable-size tidy tree (top-down or left-right), a balanced
 left/right mind map, deterministic warm-started force layout with rectangle
 collision removal, concentric radial rings, and manual positions. Implement
-`LayoutAlgorithm` to supply another engine. `LayoutConfig` chooses built-in
-engines. Fixed nodes are preserved, disconnected components are packed, and
+`LayoutAlgorithm` and pass `LayoutConfig::Custom(Rc::new(engine))` to supply
+another engine. Custom engine identity is compared by `Rc` pointer. Fixed nodes
+are preserved, disconnected components are packed, and
 cycles become a spanning forest for tree layouts.
 
 The canvas keeps dragged positions for its lifetime and emits `on_node_moved`.
 The caller decides whether to persist the position and set the model node's
-`pinned` flag. Incremental expansion retains existing positions. Changing
-`layout_revision`, calling `controller.relayout()`, or changing `layout` requests
+`pinned` flag. Incremental expansion retains existing positions. Calling
+`controller.relayout()` or changing `layout` requests
 a fresh layout, while user-moved and pinned nodes remain fixed.
 
 Keyboard: Enter activates a focused node, Space selects, Escape clears selection,
@@ -63,6 +66,5 @@ Keyboard: Enter activates a focused node, Space selects, Escape clears selection
 `GraphController` also provides `fit_view`, `zoom_by`, `center_on` and
 `set_viewport`. Each node needs an accessible label through `node_label`.
 
-GraphModel, node/edge IDs, geometry, styles and layout configuration support
-Serde serialization. Future persisted canvas schemas can map their positions,
+GraphModel, node/edge IDs, geometry, and styles support Serde serialization. Future persisted canvas schemas can map their positions,
 sizes, anchors and markers onto JSON Canvas without coupling dxgraph to entities.

@@ -26,11 +26,22 @@ fn canvas() -> Element {
             zoom: 0.8,
         })
     });
-    rsx! {GraphCanvas{model,controller,render_node:move |node:NodeRenderContext<String>|rsx!{div{{node.data}}},node_label:move |id:NodeId|format!("Node {id}")}}
+    rsx! {
+        GraphCanvas {
+            model,
+            controller,
+            render_node: move |node: NodeRenderContext<String>| rsx! {
+                div { {node.data} }
+            },
+            node_label: move |node: NodeRenderContext<String>| format!("Node {}", node.id),
+        }
+    }
 }
 fn controls() -> Element {
     let controller = use_graph_controller();
-    rsx! {GraphControls{controller}}
+    rsx! {
+        GraphControls { controller }
+    }
 }
 #[test]
 fn canvas_has_nodes_paths_markers_transform_and_accessibility() {
@@ -39,6 +50,11 @@ fn canvas_has_nodes_paths_markers_transform_and_accessibility() {
     let html = dioxus_ssr::render(&dom);
     assert_eq!(html.matches("data-dxgraph-node=").count(), 3, "{html}");
     assert!(html.contains("dxgraph-arrow-"));
+    assert_eq!(
+        html.matches("<path ").count(),
+        3,
+        "one marker plus one path per edge"
+    );
     assert!(html.contains("data-dxgraph-edge=\"ra\""));
     assert!(html.contains("translate(11px,22px) scale(0.8)"));
     assert!(html.contains("role=\"application\""));
@@ -53,4 +69,38 @@ fn controls_are_accessible() {
     for label in ["Zoom in", "Zoom out", "Fit graph", "Re-layout graph"] {
         assert!(html.contains(label));
     }
+}
+
+struct CustomLayout;
+impl LayoutAlgorithm for CustomLayout {
+    fn layout(&self, input: &LayoutInput) -> LayoutOutput {
+        LayoutOutput {
+            positions: input
+                .nodes
+                .iter()
+                .map(|node| (node.id.clone(), Point::new(123.0, 456.0)))
+                .collect(),
+        }
+    }
+}
+fn custom_canvas() -> Element {
+    let model = use_signal(graph);
+    let layout = LayoutConfig::Custom(std::rc::Rc::new(CustomLayout));
+    rsx! {
+        GraphCanvas {
+            model,
+            layout,
+            render_node: |node: NodeRenderContext<String>| rsx! {
+                div { {node.data} }
+            },
+            node_label: |node: NodeRenderContext<String>| node.data,
+        }
+    }
+}
+#[test]
+fn canvas_accepts_a_custom_layout_engine() {
+    let mut dom = VirtualDom::new(custom_canvas);
+    dom.rebuild_in_place();
+    let html = dioxus_ssr::render(&dom);
+    assert_eq!(html.matches("transform:translate(123px,456px)").count(), 3);
 }

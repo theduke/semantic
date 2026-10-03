@@ -1,10 +1,10 @@
 use indexmap::{IndexMap, IndexSet};
 
-pub use crate::geometry::NodeDetail;
+use super::NodeDetail;
 use crate::{GraphModel, NodeId, Point, Rect, Size};
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct CanvasState {
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CanvasState {
     pub measured: IndexMap<NodeId, Size>,
     pub positions: IndexMap<NodeId, Point>,
     pub selection: IndexSet<NodeId>,
@@ -13,20 +13,6 @@ pub struct CanvasState {
     pub stable: IndexSet<NodeId>,
     pub dragging: Option<NodeId>,
     pub pending: IndexSet<NodeId>,
-}
-
-impl Default for CanvasState {
-    fn default() -> Self {
-        Self {
-            measured: IndexMap::new(),
-            positions: IndexMap::new(),
-            selection: IndexSet::new(),
-            moved: IndexSet::new(),
-            stable: IndexSet::new(),
-            dragging: None,
-            pending: IndexSet::new(),
-        }
-    }
 }
 
 impl CanvasState {
@@ -69,9 +55,7 @@ impl CanvasState {
         let changed = self.measured.get(&id).is_none_or(|old| {
             (old.width - size.width).abs() > 8.0 || (old.height - size.height).abs() > 8.0
         });
-        if changed {
-            self.measured.insert(id, size);
-        }
+        self.measured.insert(id, size);
         changed
     }
 
@@ -248,29 +232,12 @@ mod tests {
         assert!(reduce_selection(&selection, SelectionEvent::Clear).is_empty());
     }
     #[test]
-    fn measurement_filters_noise() {
+    fn small_measurements_are_retained_without_requesting_layout() {
         let mut state = CanvasState::default();
-        assert!(state.measure(
-            "a".into(),
-            Size {
-                width: 100.0,
-                height: 50.0
-            }
-        ));
-        assert!(!state.measure(
-            "a".into(),
-            Size {
-                width: 107.0,
-                height: 51.0
-            }
-        ));
-        assert!(state.measure(
-            "a".into(),
-            Size {
-                width: 109.0,
-                height: 51.0
-            }
-        ));
+        assert!(state.measure("a".into(), Size::new(100.0, 50.0)));
+        assert!(!state.measure("a".into(), Size::new(107.0, 51.0)));
+        assert_eq!(state.measured[&NodeId::from("a")], Size::new(107.0, 51.0));
+        assert!(state.measure("a".into(), Size::new(116.0, 51.0)));
     }
     #[test]
     fn drag_effects_keep_position_and_mark_moved() {
@@ -324,21 +291,110 @@ mod tests {
         state.merge_positions(&model, IndexMap::new());
         assert!(!state.positions.contains_key(&NodeId::from("u")));
     }
-    #[test]
-    fn layout_signature_ignores_drag_and_payload_but_detects_structure() {
-        let mut model = GraphModel::<String, ()>::default();
+    fn signature_fixture() -> GraphModel<String, ()> {
+        let mut model = GraphModel::default();
         model
             .insert_node(crate::GraphNode::new("a", "one".into()))
             .unwrap();
+        model
+    }
+
+    #[test]
+    fn layout_signature_ignores_payload_changes() {
+        let mut model = signature_fixture();
         let before = layout_signature(&model);
         model.node_mut(&"a".into()).unwrap().data = "two".into();
+        assert_eq!(layout_signature(&model), before);
+    }
+
+    #[test]
+    fn layout_signature_ignores_drag_positions() {
+        let mut model = signature_fixture();
+        let before = layout_signature(&model);
         model
-            .set_position(&"a".into(), Point { x: 10.0, y: 12.0 })
+            .set_position(&"a".into(), Point::new(10.0, 12.0))
             .unwrap();
         assert_eq!(layout_signature(&model), before);
+    }
+
+    #[test]
+    fn layout_signature_detects_structure_changes() {
+        let mut model = signature_fixture();
+        let before = layout_signature(&model);
         model
             .insert_node(crate::GraphNode::new("b", "three".into()))
             .unwrap();
         assert_ne!(layout_signature(&model), before);
+    }
+
+    #[test]
+    fn three_hundred_nodes_keep_the_visible_set_bounded() {
+        use crate::{LayoutAlgorithm, LayoutInput, LayoutNode, Viewport, layout::TreeLayout};
+        let input = LayoutInput {
+            nodes: (0..300)
+                .map(|index| LayoutNode {
+                    id: NodeId::from(format!("node-{index:03}")),
+                    size: Size::new(160.0, 64.0),
+                    fixed: None,
+                    previous: None,
+                    layout_parent: (index > 0)
+                        .then(|| NodeId::from(format!("node-{:03}", (index - 1) / 2))),
+                    order_key: None,
+                })
+                .collect(),
+            edges: Vec::new(),
+            roots: vec!["node-000".into()],
+        };
+        let positions = TreeLayout::default().layout(&input).positions;
+        let rects: IndexMap<_, _> = input
+            .nodes
+            .iter()
+            .map(|node| (node.id.clone(), Rect::new(positions[&node.id], node.size)))
+            .collect();
+        let root = positions[&input.nodes[0].id];
+        let viewport = Viewport {
+            x: -root.x + 450.0,
+            y: -root.y + 100.0,
+            zoom: 1.0,
+        };
+        let container = Size::new(1000.0, 700.0);
+        let visible = viewport.visible_world_rect(container).inflate(200.0);
+        let nodes = visible_nodes(&rects, visible, &IndexSet::new(), None);
+        assert!(nodes.contains(&input.nodes[0].id));
+        assert!(
+            nodes.len() < 60,
+            "culling unexpectedly exposes {} nodes",
+            nodes.len()
+        );
+        let remote = input
+            .nodes
+            .iter()
+            .find(|node| !nodes.contains(&node.id))
+            .unwrap()
+            .id
+            .clone();
+        let selected = IndexSet::from([remote.clone()]);
+        let kept = visible_nodes(&rects, visible, &selected, None);
+        assert!(kept.contains(&remote));
+        assert_eq!(kept.len(), nodes.len() + 1);
+        assert!(visible_nodes(&rects, visible, &IndexSet::new(), Some(&remote)).contains(&remote));
+        // Screen-space panning only changes which subset is exposed, not node positions.
+        let panned = Viewport {
+            x: viewport.x - 600.0,
+            ..viewport
+        };
+        assert_ne!(
+            nodes,
+            visible_nodes(
+                &rects,
+                panned.visible_world_rect(container).inflate(200.0),
+                &IndexSet::new(),
+                None
+            )
+        );
+        assert_eq!(
+            viewport.screen_to_world(viewport.world_to_screen(Point::new(50.0, 70.0))),
+            Point::new(50.0, 70.0)
+        );
     }
 }

@@ -1,3 +1,4 @@
+// One-off verification artifact: hard-coded inspector ports and fixture assumptions.
 // Test-only WebKitGTK inspector + real X11 input. No application JS is injected.
 // INSPECTOR_PORT=9224 DISPLAY=:93 nix develop -c node docs/plans/2026-10-03-graph-views/desktop.mjs
 import assert from 'node:assert/strict';
@@ -7,7 +8,7 @@ import { resolve } from 'node:path';
 const port = process.env.INSPECTOR_PORT || '9224';
 const semantic = port === '9223';
 const prefix = semantic ? 'semantic-graph' : 'demo-300';
-const rootId = semantic ? 'entities/graph-desktop-note-root' : 'node-000';
+const rootId = semantic ? 'entity:8:entitiesgraph-desktop-note-root' : 'node-000';
 const rootQuery = `document.querySelector('[data-dxgraph-node="${rootId}"]')`;
 const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
 const socketPath = html.match(/\/socket\/\d+\/\d+\/WebPage/)[0];

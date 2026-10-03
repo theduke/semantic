@@ -7532,3 +7532,6 @@ html:has(.semantic-note-form) {
  .semantic-task-toolbar { padding: .85rem; }
  .semantic-task-description, .semantic-task-properties, .semantic-task-subtasks { padding: 1rem; }
 }
+
+.semantic-graph-page { display:flex; flex-direction:column; min-height:calc(100vh - 90px); gap:16px; }
+.semantic-graph-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }

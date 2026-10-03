@@ -5,36 +5,45 @@ use super::{
 };
 use crate::{EntityTarget, UiCatalog};
 use semantic_data::{
-    attr::ATTR_PARENT, builtin::DEFAULT_COLLECTION, schema::RelationType, value::Value,
+    attr::ATTR_PARENT,
+    schema::{RelationMode, RelationType},
+    value::Value,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-/// Edge rows omit collection names. Multiple known target collections are ambiguous.
+/// Edge rows omit target collections. Only schema sources or unique known
+/// entities can identify an endpoint; unknown targets stay non-navigable.
 pub fn resolve_endpoint(
     id: &str,
     source: bool,
     relation: Option<&RelationType>,
     known: &[EntityTarget],
-) -> EntityTarget {
+) -> EntityNodeData {
     if source && let Some(relation) = relation {
-        return EntityTarget::new(Some(relation.source_collection.clone()), id);
+        return entity_data(
+            EntityTarget::new(Some(relation.source_collection.clone()), id),
+            None,
+        );
     }
-    let collections = known
+    let candidates = known
         .iter()
         .filter(|target| target.id == id)
-        .map(|target| target.collection_or_default())
-        .collect::<BTreeSet<_>>();
-    match collections.len() {
-        0 => EntityTarget::default_collection(id),
-        1 => EntityTarget::new(
-            collections
-                .first()
-                .filter(|collection| **collection != DEFAULT_COLLECTION)
-                .map(|collection| (*collection).to_owned()),
-            id,
-        ),
-        _ => EntityTarget::new(Some("__unresolved".into()), id),
+        .map(|target| (target.collection_or_default().to_owned(), target.clone()))
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
+    if candidates.len() == 1 {
+        entity_data(candidates[0].clone(), None)
+    } else {
+        EntityNodeData::Ambiguous {
+            id: id.to_owned(),
+            candidates,
+        }
     }
+}
+
+fn embedded_parent(relation: &RelationType) -> bool {
+    matches!(&relation.mode, RelationMode::Embedded { attribute } if attribute == ATTR_PARENT)
 }
 
 pub async fn load_nodes(
@@ -49,11 +58,7 @@ pub async fn load_nodes(
             .push(target.clone());
     }
     let mut nodes = Vec::new();
-    for (collection, targets) in groups {
-        if collection == "__unresolved" {
-            nodes.extend(targets.into_iter().map(|target| entity_data(target, None)));
-            continue;
-        }
+    for targets in groups.into_values() {
         let objects = source.entities(&targets).await?;
         for target in targets {
             let object = objects
@@ -83,14 +88,24 @@ pub async fn load_expansion(
             };
             let target = EntityTarget::new(request.target.collection.clone(), id);
             result.edges.push(ExpansionEdge {
-                source: request.target.clone(),
-                target: target.clone(),
+                source: request.node.clone(),
+                target: node_id(&target),
                 kind: EntityEdgeKind::Parent,
             });
             result.nodes.push(entity_data(target, Some(object)));
         }
     }
     if request.mode != GraphMode::Hierarchy {
+        let known = known
+            .iter()
+            .cloned()
+            .chain(
+                result
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.target().cloned()),
+            )
+            .collect::<Vec<_>>();
         let rows = source
             .relation_edges(std::slice::from_ref(&request.target.id), request.limit)
             .await?;
@@ -102,19 +117,13 @@ pub async fn load_expansion(
                 .iter()
                 .map(|stored| &stored.relationship)
                 .find(|relation| relation.id == row.relation);
-            if request.mode == GraphMode::Both
-                && relation.is_some_and(|relation| {
-                    relation.id == ATTR_PARENT
-                        || relation.name == ATTR_PARENT
-                        || relation.name == "parent"
-                })
-            {
+            if request.mode == GraphMode::Both && relation.is_some_and(embedded_parent) {
                 continue;
             }
-            let source_target = resolve_endpoint(&row.source, true, relation, known);
-            let target = resolve_endpoint(&row.target, false, relation, known);
+            let source_target = resolve_endpoint(&row.source, true, relation, &known);
+            let target = resolve_endpoint(&row.target, false, relation, &known);
             // An id-only edge query can return another collection's entity with the same id.
-            if node_id(&source_target) != request.node && node_id(&target) != request.node {
+            if source_target.id() != request.node && target.id() != request.node {
                 continue;
             }
             let label = relation
@@ -126,20 +135,25 @@ pub async fn load_expansion(
                         .unwrap_or_else(|| relation.name.clone())
                 })
                 .unwrap_or_else(|| row.relation.clone());
-            targets.insert(node_id(&source_target), source_target.clone());
-            targets.insert(node_id(&target), target.clone());
+            targets.insert(source_target.id(), source_target.clone());
+            targets.insert(target.id(), target.clone());
             result.edges.push(ExpansionEdge {
-                source: source_target,
-                target,
+                source: source_target.id(),
+                target: target.id(),
                 kind: EntityEdgeKind::Relation {
                     relation_id: row.relation,
                     label,
                 },
             });
         }
+        let entities = targets
+            .values()
+            .filter_map(|node| node.target().cloned())
+            .collect::<Vec<_>>();
+        result.nodes.extend(load_nodes(source, &entities).await?);
         result
             .nodes
-            .extend(load_nodes(source, &targets.into_values().collect::<Vec<_>>()).await?);
+            .extend(targets.into_values().filter(|node| node.target().is_none()));
     }
     Ok(result)
 }
@@ -147,19 +161,22 @@ pub async fn load_expansion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{EntityGraphExplorer, EntityNodeKind, ExplorerLimits, RelationEdgeRow};
+    use crate::graph::{EntityGraphExplorer, ExplorerLimits, RelationEdgeRow};
     use futures::future::LocalBoxFuture;
     use semantic_data::value::Object;
-    struct MockGraphSource;
+    #[derive(Default)]
+    struct MockGraphSource {
+        fetched: std::cell::RefCell<Vec<EntityTarget>>,
+    }
     impl GraphSource for MockGraphSource {
         fn entities<'a>(
             &'a self,
             targets: &'a [EntityTarget],
         ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>> {
             Box::pin(async move {
+                self.fetched.borrow_mut().extend_from_slice(targets);
                 Ok(targets
                     .iter()
-                    .filter(|target| target.id != "missing")
                     .map(|target| {
                         let mut row = Object::new();
                         row.insert("id", Value::String(target.id.clone()));
@@ -197,20 +214,17 @@ mod tests {
         }
     }
     #[test]
-    fn resolver_preserves_ambiguity_and_default_fallback() {
-        assert!(resolve_endpoint("a", false, None, &[]).is_default_collection());
+    fn resolver_preserves_ambiguity_without_guessing_default() {
+        assert!(resolve_endpoint("a", false, None, &[]).target().is_none());
         let known = vec![
             EntityTarget::new(Some("people".into()), "a"),
             EntityTarget::new(Some("files".into()), "a"),
         ];
-        assert_eq!(
-            resolve_endpoint("a", false, None, &known)
-                .collection
-                .as_deref(),
-            Some("__unresolved")
-        );
+        assert_eq!(resolve_endpoint("a", false, None, &known).target(), None);
         assert_eq!(
             resolve_endpoint("a", false, None, &known[..1])
+                .target()
+                .unwrap()
                 .collection
                 .as_deref(),
             Some("people")
@@ -225,6 +239,8 @@ mod tests {
         };
         assert_eq!(
             resolve_endpoint("a", true, Some(&relation), &known)
+                .target()
+                .unwrap()
                 .collection
                 .as_deref(),
             Some("people")
@@ -239,24 +255,55 @@ mod tests {
             ExplorerLimits::default(),
         );
         let request = graph.begin_expand(&node_id(&root)).unwrap();
+        let source = MockGraphSource::default();
         let result = load_expansion(
-            &MockGraphSource,
+            &source,
             &request,
             &UiCatalog::empty(),
-            &[root.clone()],
+            std::slice::from_ref(&root),
         )
         .await
         .unwrap();
+        // The mock would return a real object for "missing" if asked. Its id
+        // also exists in the default collection, but no such fetch is allowed.
+        assert!(
+            source
+                .fetched
+                .borrow()
+                .iter()
+                .all(|target| target.id == "root")
+        );
         graph.apply_expansion(&request.node, result);
         assert_eq!(graph.model().edges().count(), 2);
-        assert!(matches!(
+        assert!(graph.model().nodes().any(|node| matches!(
+            &node.data, EntityNodeData::Ambiguous { id, .. } if id == "missing"
+        )));
+        assert!(
             graph
                 .model()
                 .node(&node_id(&EntityTarget::default_collection("missing")))
-                .unwrap()
-                .data
-                .kind,
-            EntityNodeKind::Unresolved
-        ));
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn only_embedded_parent_attribute_is_filtered() {
+        let mut relation = RelationType {
+            id: "custom-parent".into(),
+            name: "parent".into(),
+            source_collection: "people".into(),
+            mode: RelationMode::External,
+            indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
+            meta: Default::default(),
+        };
+        assert!(!embedded_parent(&relation));
+        relation.mode = RelationMode::Embedded {
+            attribute: ATTR_PARENT.into(),
+        };
+        assert!(embedded_parent(&relation));
+        relation.mode = RelationMode::Embedded {
+            attribute: "custom:parent".into(),
+        };
+        assert!(!embedded_parent(&relation));
     }
 }

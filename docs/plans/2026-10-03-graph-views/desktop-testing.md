@@ -1,5 +1,11 @@
 # Native desktop smoke and performance
 
+These are historical observations from the original implementation, before
+`review1.md` fixes. The scripts are one-off verification artifacts with local
+ports and fixture assumptions. See [review-disposition.md](review-disposition.md)
+for the review fixes and their new verification results. Timing observations
+below were not remeasured as part of the review fixes.
+
 Verified on 2026-10-03 with native Dioxus desktop/WebKitGTK, an Xvfb display at 1440×1000, and the existing isolated RPC server on port 8888. No user database was opened. The desktop bundle was built with global assets; running the bare Cargo binary alone does not bundle those assets.
 
 ## Commands

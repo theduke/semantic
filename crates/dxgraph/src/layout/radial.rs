@@ -1,5 +1,7 @@
 //! Hop-distance concentric rings, ordered by parent angle and stable node key.
-use super::{LayoutAlgorithm, LayoutInput, LayoutOutput, pack_components, spanning::forest};
+use super::{
+    LayoutAlgorithm, LayoutInput, LayoutOutput, pack_components, spanning::forest_with_roots,
+};
 use crate::{NodeId, Point};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,13 +10,13 @@ use std::{
 };
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RadialOptions {
-    pub focus: NodeId,
+    pub focus: Option<NodeId>,
     pub ring_gap: f64,
 }
 impl Default for RadialOptions {
     fn default() -> Self {
         Self {
-            focus: "".into(),
+            focus: None,
             ring_gap: 80.0,
         }
     }
@@ -23,12 +25,17 @@ impl Default for RadialOptions {
 pub struct RadialLayout(pub RadialOptions);
 impl LayoutAlgorithm for RadialLayout {
     fn layout(&self, input: &LayoutInput) -> LayoutOutput {
-        let mut rooted = input.clone();
-        if input.nodes.iter().any(|n| n.id == self.0.focus) {
-            rooted.roots.retain(|r| r != &self.0.focus);
-            rooted.roots.insert(0, self.0.focus.clone());
+        let mut roots = input.roots.clone();
+        if let Some(focus) = self
+            .0
+            .focus
+            .as_ref()
+            .filter(|id| input.nodes.iter().any(|n| &n.id == *id))
+        {
+            roots.retain(|r| r != focus);
+            roots.insert(0, focus.clone());
         }
-        let f = forest(&rooted);
+        let f = forest_with_roots(input, &roots);
         let mut output = LayoutOutput::default();
         let mut depth = vec![0usize; input.nodes.len()];
         let mut parent = vec![None; input.nodes.len()];
@@ -78,7 +85,12 @@ impl LayoutAlgorithm for RadialLayout {
             }
         }
         if f.components.len() > 1 || input.nodes.iter().any(|n| n.fixed.is_some()) {
-            pack_components(input, &f.components, &mut output.positions, 80.0);
+            pack_components(
+                input,
+                &f.components,
+                &mut output.positions,
+                super::COMPONENT_GAP,
+            );
         }
         if input.nodes.iter().any(|n| n.fixed.is_some()) {
             super::remove_overlaps(input, &mut output.positions, 0.0);
@@ -94,7 +106,7 @@ mod tests {
     fn hop_rings_increase() {
         let input = fixture(7);
         let output = RadialLayout(RadialOptions {
-            focus: input.nodes[0].id.clone(),
+            focus: Some(input.nodes[0].id.clone()),
             ..Default::default()
         })
         .layout(&input);

@@ -65,6 +65,7 @@ pub struct GraphEdge<E> {
     pub target: NodeId,
     pub data: E,
     pub style: EdgeStyle,
+    pub label: Option<String>,
 }
 impl<E> GraphEdge<E> {
     pub fn new(
@@ -79,6 +80,7 @@ impl<E> GraphEdge<E> {
             target: target.into(),
             data,
             style: EdgeStyle::default(),
+            label: None,
         }
     }
 }
@@ -158,17 +160,35 @@ impl<N, E> GraphModel<N, E> {
     pub fn edges(&self) -> impl ExactSizeIterator<Item = &GraphEdge<E>> {
         self.edges.values()
     }
+
+    pub fn edge(&self, id: &EdgeId) -> Option<&GraphEdge<E>> {
+        self.edges.get(id)
+    }
+
+    pub fn edge_mut(&mut self, id: &EdgeId) -> Option<&mut GraphEdge<E>> {
+        self.edges.get_mut(id)
+    }
+
+    pub fn contains_edge(&self, id: &EdgeId) -> bool {
+        self.edges.contains_key(id)
+    }
     pub fn incident_edges<'a>(&'a self, id: &'a NodeId) -> impl Iterator<Item = &'a GraphEdge<E>> {
         self.edges
             .values()
             .filter(move |e| &e.source == id || &e.target == id)
     }
     pub fn neighbors<'a>(&'a self, id: &'a NodeId) -> impl Iterator<Item = &'a NodeId> {
-        self.nodes.keys().filter(move |other| {
-            self.edges.values().any(|e| {
-                (&e.source == id && &e.target == *other) || (&e.target == id && &e.source == *other)
+        let neighbors: indexmap::IndexSet<_> = self
+            .incident_edges(id)
+            .map(|edge| {
+                if &edge.source == id {
+                    &edge.target
+                } else {
+                    &edge.source
+                }
             })
-        })
+            .collect();
+        neighbors.into_iter()
     }
     pub fn set_position(&mut self, id: &NodeId, position: Point) -> Result<(), GraphError> {
         self.node_mut(id)
@@ -210,6 +230,30 @@ impl<N, E> GraphModel<N, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn neighbors_deduplicate_incident_edges_and_support_direct_lookup() {
+        let mut model = GraphModel::default();
+        for id in ["a", "b", "c"] {
+            model.insert_node(GraphNode::new(id, ())).unwrap();
+        }
+        for (id, source, target) in [("ab", "a", "b"), ("ba", "b", "a"), ("ac", "a", "c")] {
+            model
+                .insert_edge(GraphEdge::new(id, source, target, ()))
+                .unwrap();
+        }
+        assert_eq!(
+            model.neighbors(&"a".into()).cloned().collect::<Vec<_>>(),
+            vec![NodeId::from("b"), NodeId::from("c")]
+        );
+        assert!(model.contains_edge(&"ab".into()));
+        model.edge_mut(&"ab".into()).unwrap().label = Some("label".into());
+        assert_eq!(
+            model.edge(&"ab".into()).unwrap().label.as_deref(),
+            Some("label")
+        );
+        assert!(model.edge(&"unknown".into()).is_none());
+    }
     #[test]
     fn mutation_invariants() {
         let mut graph = GraphModel::<(), ()>::default();

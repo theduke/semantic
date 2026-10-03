@@ -6,3 +6,6 @@ pub mod loading;
 pub use explorer::*;
 pub mod source;
 pub use source::{GraphSource, RelationEdgeRow, RpcGraphSource};
+
+#[cfg(test)]
+mod view_tests;

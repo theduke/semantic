@@ -1,7 +1,7 @@
 //! Deterministic, framework-independent layouts. Positions are world top-left corners.
 use crate::{NodeId, Point, Rect, Size};
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use std::{fmt, rc::Rc};
 pub mod force;
 pub mod mindmap;
 pub mod radial;
@@ -40,14 +40,44 @@ pub struct LayoutOutput {
 pub trait LayoutAlgorithm {
     fn layout(&self, input: &LayoutInput) -> LayoutOutput;
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone)]
 pub enum LayoutConfig {
     Tree(TreeLayoutOptions),
     MindMap(MindMapOptions),
     Force(ForceOptions),
     Radial(RadialOptions),
     Manual,
+    Custom(Rc<dyn LayoutAlgorithm>),
 }
+
+impl PartialEq for LayoutConfig {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Tree(a), Self::Tree(b)) => a == b,
+            (Self::MindMap(a), Self::MindMap(b)) => a == b,
+            (Self::Force(a), Self::Force(b)) => a == b,
+            (Self::Radial(a), Self::Radial(b)) => a == b,
+            (Self::Manual, Self::Manual) => true,
+            (Self::Custom(a), Self::Custom(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for LayoutConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tree(options) => f.debug_tuple("Tree").field(options).finish(),
+            Self::MindMap(options) => f.debug_tuple("MindMap").field(options).finish(),
+            Self::Force(options) => f.debug_tuple("Force").field(options).finish(),
+            Self::Radial(options) => f.debug_tuple("Radial").field(options).finish(),
+            Self::Manual => f.write_str("Manual"),
+            Self::Custom(_) => f.write_str("Custom"),
+        }
+    }
+}
+
+const COMPONENT_GAP: f64 = 80.0;
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self::Tree(TreeLayoutOptions::default())
@@ -59,6 +89,7 @@ pub fn run_layout(config: &LayoutConfig, input: &LayoutInput) -> LayoutOutput {
         LayoutConfig::MindMap(options) => MindMapLayout(options.clone()).layout(input),
         LayoutConfig::Force(options) => ForceLayout(options.clone()).layout(input),
         LayoutConfig::Radial(options) => RadialLayout(options.clone()).layout(input),
+        LayoutConfig::Custom(engine) => engine.layout(input),
         LayoutConfig::Manual => LayoutOutput {
             positions: input
                 .nodes
@@ -70,7 +101,7 @@ pub fn run_layout(config: &LayoutConfig, input: &LayoutInput) -> LayoutOutput {
 }
 /// Pack disconnected components in rows. Components containing pins retain their
 /// world coordinates; movable components are placed outside their bounds.
-pub fn pack_components(
+pub(super) fn pack_components(
     input: &LayoutInput,
     components: &[Vec<usize>],
     positions: &mut IndexMap<NodeId, Point>,
@@ -102,7 +133,7 @@ pub fn pack_components(
     let max_width = components
         .iter()
         .filter_map(|c| component_bounds(input, c, positions))
-        .map(|r| r.size.width)
+        .map(|r| (r.size.width + gap) * (r.size.height + gap))
         .sum::<f64>()
         .sqrt()
         .max(1000.0);
@@ -125,10 +156,7 @@ pub fn pack_components(
             let candidate = Rect::new(cursor, bounds.size).inflate(gap / 2.0);
             let collision = occupied.iter().find(|r| {
                 let other = r.inflate(gap / 2.0);
-                candidate.right() > other.origin.x
-                    && other.right() > candidate.origin.x
-                    && candidate.bottom() > other.origin.y
-                    && other.bottom() > candidate.origin.y
+                candidate.overlaps(other)
             });
             match collision {
                 Some(rect) => cursor.x = (rect.right() + gap).max(cursor.x + 1e-6),
@@ -254,12 +282,7 @@ pub(super) fn remove_overlaps(
         };
         loop {
             let rect = Rect::new(position, node.size).inflate(padding / 2.0);
-            let Some(other) = placed.iter().find(|other| {
-                rect.right() > other.origin.x
-                    && other.right() > rect.origin.x
-                    && rect.bottom() > other.origin.y
-                    && other.bottom() > rect.origin.y
-            }) else {
+            let Some(other) = placed.iter().find(|other| rect.overlaps(**other)) else {
                 break;
             };
             position.x = other.right() + padding / 2.0 + 0.001;
@@ -318,7 +341,7 @@ mod tests {
                 ..Default::default()
             })),
             Box::new(RadialLayout(RadialOptions {
-                focus: "n000".into(),
+                focus: Some("n000".into()),
                 ..Default::default()
             })),
         ];
@@ -385,5 +408,54 @@ mod tests {
         let output = run_layout(&LayoutConfig::Manual, &input);
         assert_eq!(output.positions[&input.nodes[0].id], Point::new(3.0, 4.0));
         assert_eq!(output.positions[&input.nodes[1].id], Point::new(7.0, 8.0));
+    }
+
+    #[test]
+    fn many_components_pack_in_rows_using_area() {
+        let mut input = fixture(100);
+        for node in &mut input.nodes {
+            node.layout_parent = None;
+            node.size = Size::new(400.0, 400.0);
+        }
+        let components: Vec<_> = (0..100).map(|i| vec![i]).collect();
+        let mut positions = input
+            .nodes
+            .iter()
+            .map(|n| (n.id.clone(), Point::default()))
+            .collect();
+        pack_components(&input, &components, &mut positions, COMPONENT_GAP);
+        let output = LayoutOutput { positions };
+        assert_clear(&input, &output);
+        let bounds = input
+            .nodes
+            .iter()
+            .map(|n| Rect::new(output.positions[&n.id], n.size))
+            .reduce(Rect::union)
+            .unwrap();
+        assert!(bounds.size.width / bounds.size.height > 0.8);
+        assert!(bounds.size.width / bounds.size.height < 1.2);
+    }
+
+    #[test]
+    fn custom_layout_dispatch_and_pointer_equality() {
+        struct Custom;
+        impl LayoutAlgorithm for Custom {
+            fn layout(&self, input: &LayoutInput) -> LayoutOutput {
+                LayoutOutput {
+                    positions: input
+                        .nodes
+                        .iter()
+                        .map(|n| (n.id.clone(), Point::new(12.0, 34.0)))
+                        .collect(),
+                }
+            }
+        }
+        let config = LayoutConfig::Custom(Rc::new(Custom));
+        assert_eq!(config, config.clone());
+        assert_ne!(config, LayoutConfig::Custom(Rc::new(Custom)));
+        assert_eq!(
+            run_layout(&config, &fixture(1)).positions[&NodeId::from("n000")],
+            Point::new(12.0, 34.0)
+        );
     }
 }

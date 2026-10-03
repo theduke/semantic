@@ -116,13 +116,13 @@ impl GestureState {
                 self.pointers.insert(pointer, client);
                 effects.push(GestureEffect::CapturePointer(pointer));
                 if self.pointers.len() == 2 {
-                    if let Mode::Dragging { press, position } = &self.mode {
-                        if let GestureTarget::Node(node) = &press.target {
-                            effects.push(GestureEffect::NodeDragEnd {
-                                node: node.clone(),
-                                position: *position,
-                            });
-                        }
+                    if let Mode::Dragging { press, position } = &self.mode
+                        && let GestureTarget::Node(node) = &press.target
+                    {
+                        effects.push(GestureEffect::NodeDragEnd {
+                            node: node.clone(),
+                            position: *position,
+                        });
                     }
                     let (midpoint, distance) = self.pinch_geometry();
                     self.mode = Mode::Pinching {
@@ -207,15 +207,14 @@ impl GestureState {
                 if !self.pointers.contains_key(&pointer) {
                     return effects;
                 }
-                if let Mode::Dragging { press, position } = &self.mode {
-                    if press.pointer == pointer {
-                        if let GestureTarget::Node(node) = &press.target {
-                            effects.push(GestureEffect::NodeDragEnd {
-                                node: node.clone(),
-                                position: *position,
-                            });
-                        }
-                    }
+                if let Mode::Dragging { press, position } = &self.mode
+                    && press.pointer == pointer
+                    && let GestureTarget::Node(node) = &press.target
+                {
+                    effects.push(GestureEffect::NodeDragEnd {
+                        node: node.clone(),
+                        position: *position,
+                    });
                 }
                 self.last_click = None;
                 self.release(pointer, ctx, &mut effects);
@@ -254,20 +253,21 @@ impl GestureState {
             return;
         };
         *point = client;
-        if let Mode::Pending(press) = &self.mode {
-            if press.pointer == pointer && press.client.distance(client) > DRAG_THRESHOLD {
-                self.last_click = None;
-                self.mode = match &press.target {
-                    GestureTarget::Background => Mode::Panning(press.clone()),
-                    GestureTarget::Node(node) => {
-                        effects.push(GestureEffect::NodeDragStart(node.clone()));
-                        Mode::Dragging {
-                            press: press.clone(),
-                            position: press.node_origin,
-                        }
+        if let Mode::Pending(press) = &self.mode
+            && press.pointer == pointer
+            && press.client.distance(client) > DRAG_THRESHOLD
+        {
+            self.last_click = None;
+            self.mode = match &press.target {
+                GestureTarget::Background => Mode::Panning(press.clone()),
+                GestureTarget::Node(node) => {
+                    effects.push(GestureEffect::NodeDragStart(node.clone()));
+                    Mode::Dragging {
+                        press: press.clone(),
+                        position: press.node_origin,
                     }
-                };
-            }
+                }
+            };
         }
         match &mut self.mode {
             Mode::Panning(press) if press.pointer == pointer => {

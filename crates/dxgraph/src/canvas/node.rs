@@ -28,7 +28,7 @@ pub(crate) struct NodeViewProps<N: Clone + PartialEq + 'static> {
     pub render_node: Callback<NodeRenderContext<N>, Element>,
     pub render_minimal: Option<Callback<NodeRenderContext<N>, Element>>,
     pub on_pointer: EventHandler<(NodeId, PointerEvent)>,
-    pub on_measure: EventHandler<(NodeId, Size)>,
+    pub on_measure: EventHandler<(NodeId, Size, NodeDetail)>,
     pub on_activate: EventHandler<NodeEvent>,
     pub on_select: EventHandler<NodeEvent>,
 }
@@ -45,7 +45,13 @@ pub(crate) fn NodeView<N: Clone + PartialEq + 'static>(props: NodeViewProps<N>) 
         if let Some(renderer) = props.render_minimal {
             renderer.call(context)
         } else {
-            rsx! {div{class:"dxgraph-placeholder",style:"width:{props.size.width}px;height:{props.size.height}px",aria_label:props.label.clone()}}
+            rsx! {
+                div {
+                    class: "dxgraph-placeholder",
+                    style: "width:{props.size.width}px;height:{props.size.height}px",
+                    aria_label: props.label.clone(),
+                }
+            }
         }
     } else {
         props.render_node.call(context)
@@ -53,14 +59,51 @@ pub(crate) fn NodeView<N: Clone + PartialEq + 'static>(props: NodeViewProps<N>) 
     let pointer_id = props.id.clone();
     let measure_id = props.id.clone();
     let key_id = props.id.clone();
-    rsx! {div {
-        class:"dxgraph-node", "data-dxgraph-node":props.id.to_string(), "data-selected":props.selected.to_string(),tabindex:0,role:"button",aria_label:props.label,
-        style:format!("transform:translate({}px,{}px);visibility:{}",props.position.x,props.position.y,if props.hidden {"hidden"} else {"visible"}),
-        onpointerdown:move |event|{event.stop_propagation();props.on_pointer.call((pointer_id.clone(),event));},
-        onresize:move |event|{if let Some(size)=node_border_box(&event){props.on_measure.call((measure_id.clone(),size));}},
-        onkeydown:move |event|match keyboard_action(&event.key().to_string()){Some(KeyboardAction::Activate)=>{event.stop_propagation();event.prevent_default();props.on_activate.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},Some(KeyboardAction::Select)=>{event.stop_propagation();event.prevent_default();props.on_select.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},_=>{}},
-        {content}
-    }}
+    let on_pointer_down = move |event: PointerEvent| {
+        event.stop_propagation();
+        props.on_pointer.call((pointer_id.clone(), event));
+    };
+    let on_resize = move |event: ResizeEvent| {
+        if let Some(size) = node_border_box(&event) {
+            props
+                .on_measure
+                .call((measure_id.clone(), size, props.detail));
+        }
+    };
+    let on_key_down = move |event: KeyboardEvent| {
+        let callback = match keyboard_action(&event.key().to_string()) {
+            Some(KeyboardAction::Activate) => props.on_activate,
+            Some(KeyboardAction::Select) => props.on_select,
+            _ => return,
+        };
+        event.stop_propagation();
+        event.prevent_default();
+        callback.call(NodeEvent {
+            id: key_id.clone(),
+            shift: event.modifiers().shift(),
+        });
+    };
+    let style = format!(
+        "transform:translate({}px,{}px);visibility:{}",
+        props.position.x,
+        props.position.y,
+        if props.hidden { "hidden" } else { "visible" }
+    );
+    rsx! {
+        div {
+            class: "dxgraph-node",
+            "data-dxgraph-node": props.id.to_string(),
+            "data-selected": props.selected.to_string(),
+            tabindex: 0,
+            role: "button",
+            aria_label: props.label,
+            style,
+            onpointerdown: on_pointer_down,
+            onresize: on_resize,
+            onkeydown: on_key_down,
+            {content}
+        }
+    }
 }
 
 #[cfg(test)]

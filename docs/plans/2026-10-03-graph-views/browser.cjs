@@ -1,3 +1,4 @@
+// One-off verification artifact: isolated fixture ids and hard-coded local ports.
 // nix develop -c node docs/plans/2026-10-03-graph-views/browser.cjs
 // Only writes its generated fixture to the isolated test server at port 8888.
 const { chromium } = require('../../../crates/dxeditor/web/node_modules/playwright');
@@ -27,7 +28,10 @@ async function insert(id, title, parent) {
 async function relation(id, source, target) {
   await rpc('semantic.db.insert', { id: str(id), object: obj({ id: str(id), type: str('semantic:base:entity_label'), 'semantic:relation:relation': str('semantic:base:entity_label'), 'semantic:relation:from': str(source), 'semantic:relation:to': str(target), 'semantic:base:entity_label:collection': str('entities') }) });
 }
-function node(page, id) { return page.locator(`[data-dxgraph-node="entities/${id}"]`); }
+function ambiguous(page, id) {
+  return page.locator(`[data-dxgraph-node="ambiguous:${id.length}:${id}:[]"]`);
+}
+function node(page, id) { return page.locator(`[data-dxgraph-node="entity:8:entities${id}"]`); }
 async function world(page) { return page.locator('.dxgraph-world').getAttribute('style'); }
 async function assertNoOverlap(page) {
   const boxes = await page.locator('[data-dxgraph-node]').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).visibility !== 'hidden').map(node => { const r = node.getBoundingClientRect(); return { id: node.dataset.dxgraphNode, x: r.x, y: r.y, width: r.width, height: r.height }; }));
@@ -72,6 +76,39 @@ async function drag(page, from, delta) {
     const canvas = page.locator('.dxgraph'); const canvasBox = await canvas.boundingBox();
     for (const box of result.checks.initialBounds) assert(box.x >= canvasBox.x && box.y >= canvasBox.y && box.x + box.width <= canvasBox.x + canvasBox.width + 1 && box.y + box.height <= canvasBox.y + canvasBox.height + 1, `initial node outside canvas: ${box.id}`);
     result.checks.initialNeighborhoodFits = true;
+    const positions = () => page.locator('[data-dxgraph-node]').evaluateAll(nodes => Object.fromEntries(nodes.map(node=>[node.dataset.dxgraphNode,node.style.transform])));
+    const viewportState = async () => {
+      const style = await world(page);
+      const values = style.match(/translate\(([-.\d]+)px,\s*([-.\d]+)px\)\s*scale\(([-.\d]+)\)/);
+      assert(values,style); return {x:Number(values[1]),y:Number(values[2]),zoom:Number(values[3])};
+    };
+    const lodPositions = await positions();
+    await page.mouse.move(canvasBox.x+canvasBox.width/2,canvasBox.y+canvasBox.height/2);
+    for(let step=0;step<10 && (await viewportState()).zoom>0.2;step++) {
+      await page.mouse.wheel(0,250); await page.waitForTimeout(100);
+      assert.deepEqual(await positions(),lodPositions,'LOD zoom-out moved nodes');
+    }
+    assert((await viewportState()).zoom<0.25,'did not cross Minimal LOD threshold');
+    for(let step=0;step<10 && (await viewportState()).zoom<0.9;step++) {
+      await page.mouse.wheel(0,-250); await page.waitForTimeout(100);
+      assert.deepEqual(await positions(),lodPositions,'LOD zoom-in moved nodes');
+    }
+    result.checks.lodZoomKeepsNodePositions = true;
+    await page.getByRole('button',{name:'Fit',exact:true}).click(); await page.waitForTimeout(100);
+    // Change the canvas client origin without resizing it or clicking inside it.
+    await page.locator('.semantic-graph-page').evaluate(element=>{element.style.marginTop='80px';});
+    await page.waitForTimeout(100);
+    const shiftedBox = await canvas.boundingBox();
+    const local = {x:shiftedBox.width/2,y:shiftedBox.height/2};
+    const oldView = await viewportState();
+    const anchoredWorld = {x:(local.x-oldView.x)/oldView.zoom,y:(local.y-oldView.y)/oldView.zoom};
+    await page.mouse.move(shiftedBox.x+local.x,shiftedBox.y+local.y); await page.mouse.wheel(0,120); await page.waitForTimeout(100);
+    const newView = await viewportState();
+    assert(Math.abs((local.x-newView.x)/newView.zoom-anchoredWorld.x)<1,'shifted wheel x anchor');
+    assert(Math.abs((local.y-newView.y)/newView.zoom-anchoredWorld.y)<1,'shifted wheel y anchor');
+    result.checks.shiftedContainerWheelAnchor = true;
+    await page.locator('.semantic-graph-page').evaluate(element=>{element.style.marginTop='';});
+    await page.getByRole('button',{name:'Fit',exact:true}).click(); await page.waitForTimeout(100);
     let before = await world(page); await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2); await page.mouse.wheel(0, 120);
     await page.waitForTimeout(100); assert.notEqual(await world(page), before); result.checks.wheelZoom = true; console.log('Passed wheel zoom');
     before = await world(page); await drag(page, { x: canvasBox.x + 24, y: canvasBox.y + 24 }, { x: 90, y: 50 });
@@ -91,10 +128,11 @@ async function drag(page, from, delta) {
     result.checks.expandedBounds = await assertNoOverlap(page);
     const treePosition = await node(page, children[0]).getAttribute('style');
     await page.locator('.dx-select-trigger').click(); await page.getByRole('option', { name: 'Radial', exact: true }).click(); await page.waitForURL(/layout=radial/);
-    await page.waitForFunction(({ id, style }) => document.querySelector(`[data-dxgraph-node=\"${id}\"]`)?.getAttribute('style') !== style, { id: `entities/${children[0]}`, style: treePosition });
+    await page.waitForFunction(({ id, style }) => document.querySelector(`[data-dxgraph-node=\"${id}\"]`)?.getAttribute('style') !== style, { id: `entity:8:entities${children[0]}`, style: treePosition });
     await page.keyboard.press('Escape'); await page.getByRole('button', { name: 'Fit', exact: true }).click(); await page.waitForTimeout(100);
     result.checks.radialLayout = true; await page.screenshot({ path: `${out}/radial.png`, fullPage: true });
-    await page.getByRole('button', { name: 'Relations', exact: true }).click(); await page.waitForURL(/mode=relations/); await node(page, label).waitFor();
+    await page.getByRole('button', { name: 'Relations', exact: true }).click(); await page.waitForURL(/mode=relations/); await ambiguous(page, label).waitFor();
+    console.log('Relation viewport', await viewportState());
     assert(await page.locator('.dxgraph-edge-label').count()); result.checks.relations = true;
     await page.waitForFunction(() => document.querySelector('.dx-select-trigger')?.textContent.includes('Force')); result.checks.modeLayoutControlSync = true;
     await page.getByRole('button', { name: 'Fit', exact: true }).click(); result.checks.relationBounds = await assertNoOverlap(page);
@@ -105,9 +143,16 @@ async function drag(page, from, delta) {
     await summary.click(); await node(page, root).locator('strong').click();
     await page.getByRole('button', { name: 'Focus here', exact: true }).click();
     await node(page, root).waitFor({ state: 'visible' }); result.checks.focusHere = true;
-    await node(page, label).locator('strong').click(); await page.getByRole('button', { name: 'Focus here', exact: true }).click();
-    await page.waitForURL(new RegExp(`root=${label}`)); await node(page, label).waitFor({ state: 'visible' });
-    const focused = await node(page, label).boundingBox(), viewport = await canvas.boundingBox();
+    await ambiguous(page, label).click();
+    const unresolvedPanel = page.getByRole('complementary', { name: 'Selected entity' });
+    await unresolvedPanel.getByText('The relationship index does not identify a unique collection for this entity.').waitFor();
+    assert.equal(await unresolvedPanel.getByRole('button', {name:'Focus here',exact:true}).count(),0);
+    assert.equal(await unresolvedPanel.getByRole('button', {name:'Open',exact:true}).count(),0);
+    result.checks.unknownCollectionCannotNavigate = true;
+    await page.getByRole('button', {name:'Close',exact:true}).click();
+    await node(page, children[0]).click(); await page.getByRole('button', { name: 'Focus here', exact: true }).click();
+    await page.waitForURL(new RegExp(`root=${children[0]}`)); await node(page, children[0]).waitFor({ state: 'visible' });
+    const focused = await node(page, children[0]).boundingBox(), viewport = await canvas.boundingBox();
     assert(focused.x >= viewport.x && focused.x < viewport.x + viewport.width); result.checks.rerootFits = true;
     const currentCanvas = await canvas.boundingBox(); await drag(page, {x:currentCanvas.x + 24,y:currentCanvas.y + 24}, {x:450,y:80});
     const rootPicker = page.getByRole('combobox', {name:'Graph root'}); await rootPicker.fill('Graph browser root');
