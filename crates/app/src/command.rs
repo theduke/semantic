@@ -337,6 +337,7 @@ impl SemanticAppBuilder {
         self.registry.register(FileAnalyzeCommand)?;
         crate::jobs::register_commands(&mut self.registry)?;
         crate::import_commands::register(&mut self.registry)?;
+        crate::vdb_commands::register(&mut self.registry)?;
         crate::command_introspection::register(&mut self.registry)?;
         crate::capabilities::register(&mut self.registry)?;
         Ok(self)
@@ -675,7 +676,7 @@ impl<T: FromValue> FromValue for CommandDictionary<T> {
 }
 
 /// An untagged query AST or the existing query text input.
-enum QueryArgument {
+pub(crate) enum QueryArgument {
     Ast(semantic_data::query::Query),
     Text(String),
 }

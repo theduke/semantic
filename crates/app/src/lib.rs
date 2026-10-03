@@ -27,6 +27,7 @@ mod task_comment_tests;
 mod task_comments;
 pub mod transfer;
 mod vdb;
+mod vdb_commands;
 
 pub use auth::{Principal, PrincipalId, PrincipalKind};
 pub use command::{SemanticApp, SemanticAppBuilder, SemanticAppInner};
