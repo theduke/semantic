@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use crate::query_ast::{QueryRequest, combine, order};
 use dioxus::prelude::*;
@@ -69,6 +68,9 @@ pub fn BrowsePage(
     let page = clamp_page(page.unwrap_or(0));
     let page_size = clamp_page_size(page_size.unwrap_or(DEFAULT_PAGE_SIZE));
     let custom_sql = sql.is_some();
+    let read_only = crate::virtual_collections::use_virtual_collections()
+        .iter()
+        .any(|entry| entry.name == collection_name);
     let decoded_filters = filters.as_deref().map(decode_structured_query).transpose();
     let route_filter_error = decoded_filters.as_ref().err().cloned();
     let applied_filters = decoded_filters
@@ -76,19 +78,7 @@ pub fn BrowsePage(
         .ok()
         .and_then(|query| query.clone())
         .unwrap_or_default();
-    let collections = use_memo(move || -> Rc<[String]> {
-        catalog_signal
-            .read()
-            .as_ref()
-            .map(|catalog| {
-                catalog
-                    .collections()
-                    .map(|collection| collection.name.clone())
-                    .collect::<Vec<_>>()
-                    .into()
-            })
-            .unwrap_or_default()
-    });
+    let collections = crate::virtual_collections::use_collection_names();
     let query_fields = use_memo({
         let collection_name = collection_name.clone();
         move || {
@@ -238,7 +228,9 @@ pub fn BrowsePage(
                     span { "Browse" }
                 },
                 actions: rsx! {
-                    Link { class: "semantic-button-link", to: Route::CreateEntityPage, "New entity" }
+                    if !read_only {
+                        Link { class: "semantic-button-link", to: Route::CreateEntityPage, "New entity" }
+                    }
                 }
             }
 
@@ -247,7 +239,7 @@ pub fn BrowsePage(
                 toolbar: rsx! {
                     DataToolbar {
                         collection: collection_name.clone(),
-                        collections: collections(),
+                        collections: collections.clone(),
                         display_mode,
                         renderer: renderer_mode,
                         grid_columns: *grid_columns.read(),
@@ -463,6 +455,11 @@ pub fn BrowsePage(
                             description: "Edit or clear the visual filters to broaden the result set.",
                             action_label: "Edit filters",
                             on_action: move |_| filters_open.set(true),
+                        }
+                    } else if read_only {
+                        EmptyState {
+                            title: "This virtual collection is empty",
+                            description: "Choose another collection or change the query to explore more records.",
                         }
                     } else {
                         EmptyState {

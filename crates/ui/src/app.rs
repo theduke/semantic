@@ -138,7 +138,9 @@ pub fn AppRoot(props: AppRootProps) -> Element {
             render_settings,
             configure_catalog: configure_ui_catalog,
             ToastProvider {
-                Router::<Route> {}
+                crate::virtual_collections::VirtualCollectionsProvider {
+                    Router::<Route> {}
+                }
             }
         }
     }

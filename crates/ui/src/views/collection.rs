@@ -49,19 +49,10 @@ pub fn CollectionPage(collection: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog_signal = use_ui_catalog_context().catalog_signal();
-    let collections = use_memo(move || -> Rc<[String]> {
-        catalog_signal
-            .read()
-            .as_ref()
-            .map(|catalog| {
-                catalog
-                    .collections()
-                    .map(|collection| collection.name.clone())
-                    .collect::<Vec<_>>()
-                    .into()
-            })
-            .unwrap_or_default()
-    });
+    let collections = crate::virtual_collections::use_collection_names();
+    let read_only = crate::virtual_collections::use_virtual_collections()
+        .iter()
+        .any(|entry| entry.name == collection);
 
     // Route currently owns only collection identity. These view preferences stay
     // local until Collection gains query parameters without changing Route shape.
@@ -158,7 +149,7 @@ pub fn CollectionPage(collection: String) -> Element {
                     span { "{collection}" }
                 },
                 actions: rsx! {
-                    Link {
+                    if !read_only { Link {
                         class: "semantic-button-link",
                         to: Route::CreateEntityPage,
                         "Create entity (choose collection)"
@@ -167,7 +158,7 @@ pub fn CollectionPage(collection: String) -> Element {
                         class: "semantic-button-link semantic-button-link--secondary",
                         to: Route::UploadPage,
                         "Upload files"
-                    }
+                    } }
                     Link {
                         class: "semantic-button-link semantic-button-link--secondary",
                         to: advanced_browse_route(collection.clone(), current_page_size),
@@ -181,7 +172,7 @@ pub fn CollectionPage(collection: String) -> Element {
                 toolbar: rsx! {
                     DataToolbar {
                         collection: collection.clone(),
-                        collections: collections(),
+                        collections: collections.clone(),
                         display_mode: current_display_mode,
                         renderer: current_renderer,
                         grid_columns: *grid_columns.read(),
@@ -222,7 +213,12 @@ pub fn CollectionPage(collection: String) -> Element {
                 }
 
                 if successful_empty {
-                    if current_page == 0 {
+                    if read_only && current_page == 0 {
+                        EmptyState {
+                            title: "This virtual collection is empty",
+                            description: "Choose another collection or change the query to explore more records.",
+                        }
+                    } else if current_page == 0 {
                         EmptyState {
                             title: "This collection is empty",
                             description: "Create an entity or upload files to add the first record.",

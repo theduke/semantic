@@ -72,6 +72,11 @@ pub fn DataToolbar(
     #[props(default)] on_filters_open_change: Option<EventHandler<bool>>,
 ) -> Element {
     let collection_in_catalog = collections.iter().any(|candidate| candidate == &collection);
+    let virtual_collections = crate::virtual_collections::use_virtual_collections();
+    let reload_virtual = crate::virtual_collections::use_virtual_collection_reload();
+    let read_only = virtual_collections
+        .iter()
+        .any(|entry| entry.name == collection);
 
     rsx! {
         div { class: "semantic-data-toolbar", role: "toolbar", aria_label: toolbar_label,
@@ -84,11 +89,23 @@ pub fn DataToolbar(
                         option { value: "{collection}", "{collection} (not in catalog)" }
                     }
                     for candidate in collections.iter() {
-                        option { key: "{candidate}", value: "{candidate}", "{candidate}" }
+                        option { key: "{candidate}", value: "{candidate}",
+                            if virtual_collections.iter().any(|entry| &entry.name == candidate) {
+                                "{candidate} (virtual, read-only)"
+                            } else { "{candidate}" }
+                        }
                     }
                 }
             }
 
+            if read_only {
+                span { class: "semantic-catalog__badge", "Virtual · read-only" }
+                button {
+                    class: "semantic-button-link semantic-button-link--secondary",
+                    onclick: move |_| reload_virtual.call(()),
+                    "Refresh virtual schema"
+                }
+            }
             div { class: "semantic-data-toolbar__group", role: "group", aria_label: "Result view",
                 dxcomp::Button {
                     size: dxcomp::ButtonSize::Sm,
@@ -200,6 +217,27 @@ pub fn EntityResults(
     density: ResultDensity,
     #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
 ) -> Element {
+    rsx! {
+        crate::virtual_collections::VirtualEntityCatalog {
+            collection: collection.clone(),
+            EntityResultsBody { rows, display_mode, renderer, collection, grid_columns, density, on_delete }
+        }
+    }
+}
+
+#[component]
+fn EntityResultsBody(
+    rows: Vec<Object>,
+    display_mode: EntityDisplayMode,
+    renderer: EntityDisplayRenderer,
+    collection: Option<String>,
+    grid_columns: usize,
+    density: ResultDensity,
+    #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
+) -> Element {
+    let read_only = crate::virtual_collections::use_virtual_collections()
+        .iter()
+        .any(|entry| collection.as_deref() == Some(entry.name.as_str()));
     let grid_columns = grid_columns.clamp(1, 3);
     let density_class = density.class();
 
@@ -216,7 +254,7 @@ pub fn EntityResults(
                             id: None,
                             renderer,
                             preview: true,
-                            actions: true,
+                            actions: !read_only,
                         },
                         compact_preview: true,
                         on_delete,
