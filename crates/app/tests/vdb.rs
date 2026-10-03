@@ -6,7 +6,7 @@ use std::{
 
 use semantic_app::{AppRequestContext, DbScopeId, Principal, SemanticApp, SemanticDb};
 use semantic_data::{
-    Object, Value,
+    FromValue, Object, Value,
     query::{self as q, QueryInput},
     schema::{AttributeRef, AttributeType, ClassAttribute, DbOpenMode, Type},
 };
@@ -305,6 +305,9 @@ async fn stored_local_oracle_matches_four_plugin_modes_and_runtime_lifecycle() {
     let slow = FixtureVdb::new(data.clone(), NegotiationMode::AllUnsupported)
         .with_schema(schema(), "1")
         .with_scan_delay(Duration::from_secs(30));
+    let requires_id = FixtureVdb::new(data.clone(), NegotiationMode::AllExact)
+        .with_schema(schema(), "1")
+        .with_reject_without("id");
     // Resolve the interface catalog once; configuration selects the honest
     // fixture implementation for each activation/generation.
     let manifest = fixture_plugin_with_vdb("fx", fixtures[0].clone())
@@ -314,7 +317,7 @@ async fn stored_local_oracle_matches_four_plugin_modes_and_runtime_lifecycle() {
         fixtures
             .iter()
             .cloned()
-            .chain([reject.clone(), broken, slow.clone()])
+            .chain([reject.clone(), broken, slow.clone(), requires_id.clone()])
             .collect::<Vec<_>>(),
     );
     let plugin = semantic_vdb::VirtualDatabasePlugin::new(
@@ -434,7 +437,7 @@ async fn stored_local_oracle_matches_four_plugin_modes_and_runtime_lifecycle() {
             .unwrap()
             .is_some()
     );
-    for (index, name) in [(4, "reject"), (5, "broken"), (6, "slow")] {
+    for (index, name) in [(4, "reject"), (5, "broken"), (6, "slow"), (7, "bound")] {
         let mut activation = activations
             .iter()
             .find(|activation| activation.id == "fx")
@@ -444,6 +447,7 @@ async fn stored_local_oracle_matches_four_plugin_modes_and_runtime_lifecycle() {
         activation.configuration = Value::U64(index);
         plugins.configure(activation).await.unwrap();
     }
+    assert_sdk_bind_join(ctx.clone(), federated.clone(), requires_id).await;
     assert!(
         federated
             .query_data(QueryInput::sql("SELECT id FROM reject"))
@@ -490,6 +494,81 @@ async fn stored_local_oracle_matches_four_plugin_modes_and_runtime_lifecycle() {
     .await;
     app.shutdown().await.unwrap();
     oracle_app.shutdown().await.unwrap();
+}
+
+async fn assert_sdk_bind_join(
+    ctx: AppRequestContext,
+    federated: Arc<dyn SemanticDb>,
+    fixture: FixtureVdb,
+) {
+    let scans = fixture.scans.load(Ordering::SeqCst);
+    assert!(
+        federated
+            .query_data(QueryInput::sql("SELECT id FROM bound"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("requires a filter on 'id'")
+    );
+    assert_eq!(fixture.scans.load(Ordering::SeqCst), scans);
+
+    const SQL: &str = "SELECT l.id AS left_id, r.id AS right_id FROM peers l JOIN bound r ON l.id = r.id ORDER BY l.id";
+    let mut payload = Object::new();
+    payload.insert("query", SQL.to_owned());
+    let explanation = ctx
+        .app
+        .call(ctx.clone(), "semantic.vdb.explain", Value::Object(payload))
+        .await
+        .unwrap();
+    assert!(
+        explanation
+            .get_field("physical")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("IndexNestedLoopJoin")
+    );
+    let Value::List(leaves) = explanation.get_field("leaves").unwrap() else {
+        panic!("explain leaves")
+    };
+    let leaf = leaves
+        .iter()
+        .find(|leaf| leaf.get_field("collection").and_then(Value::as_str) == Some("bound"))
+        .unwrap();
+    let Value::List(filters) = leaf.get_field("filters").unwrap() else {
+        panic!("bound filters")
+    };
+    assert_eq!(filters.len(), 1);
+    assert_eq!(
+        q::Expr::from_value(filters[0].get_field("expression").unwrap().clone()).unwrap(),
+        q::Expr::Binary {
+            op: q::BinaryOp::In,
+            left: Box::new(q::Expr::Operand(q::Operand::Field(
+                semantic_data::value::FieldPath::from_fields(["id"]),
+            ))),
+            right: Box::new(q::Expr::parameter("__keys")),
+        }
+    );
+    assert_eq!(
+        semantic_vdb::FilterSupport::from_value(filters[0].get_field("support").unwrap().clone())
+            .unwrap(),
+        semantic_vdb::FilterSupport::Exact
+    );
+    // Explain negotiates the lookup but never scans. With batching enabled,
+    // these four distinct peer keys must travel through the SDK in one list.
+    assert_eq!(leaf.get_field("batch_size"), Some(&Value::U64(64)));
+    assert_eq!(fixture.scans.load(Ordering::SeqCst), scans);
+    let expected = ["a", "b", "c", "d"]
+        .into_iter()
+        .map(|id| {
+            let mut row = Object::new();
+            row.insert("left_id", id.to_owned());
+            row.insert("right_id", id.to_owned());
+            row
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows(&federated, SQL).await, expected);
+    assert_eq!(fixture.scans.load(Ordering::SeqCst) - scans, 1);
+    eprintln!("Native SDK selected bind join passed with one scan");
 }
 
 async fn assert_runtime_schema_lifecycle(
