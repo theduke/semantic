@@ -52,28 +52,18 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
                 .root
                 .attributes
                 .remove(semantic_base::content::ATTR_MAIN_CONTENT);
-            let old_note_class = legacy.migrations[2]
-                .operations
-                .iter()
-                .find_map(|operation| match operation {
-                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class })
-                        if class.id == semantic_base::schema::notes::CLASS_ID =>
-                    {
-                        Some(class.clone())
-                    }
-                    _ => None,
-                })
-                .expect("legacy Note migration defines the Note class");
-            legacy
-                .root
-                .classes
-                .insert(old_note_class.id.clone(), old_note_class);
         }
         for operation in legacy
             .migrations
             .iter()
             .flat_map(|migration| &migration.operations)
         {
+            // Reconstruct the historical snapshot from retained migrations;
+            // current class metadata may include later forward migrations.
+            if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }) = operation
+            {
+                legacy.root.classes.insert(class.id.clone(), class.clone());
+            }
             if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }) =
                 operation
                 && semantic_data::bundles::shared::ATTRIBUTE_IDS.contains(&attribute.id.as_str())
@@ -90,18 +80,7 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
     let mut db = EmbeddedDb::open(storage).unwrap();
     for current in &packages {
         let outcome = db.upsert_package(current.clone()).unwrap();
-        let mut expected = vec![semantic_data::bundles::shared::migration_v1()];
-        if current.name == semantic_base::PACKAGE_NAME {
-            expected.push(semantic_base::migrations::note_markdown_default_migration());
-            expected.push(
-                current
-                    .migrations
-                    .iter()
-                    .find(|migration| migration.name == "012_main_content")
-                    .unwrap()
-                    .clone(),
-            );
-        }
+        let expected = current.migrations[9..].to_vec();
         assert_eq!(
             outcome
                 .executed_migrations

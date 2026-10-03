@@ -144,6 +144,8 @@ mod tests {
                     || package.name == semantic_data::filestore::PACKAGE_NAME
                     || package.name == semantic_data::import::PACKAGE_NAME
                     || package.name == semantic_data::plugin::PACKAGE_NAME
+                    || package.name == semantic_data::bundles::query::PACKAGE_NAME
+                    || package.name == semantic_data::vdb::PACKAGE_NAME
                     || package.name == semantic_data::jobs::PACKAGE_NAME
                     || package.name == "semantic.comments"
                     || package.name == "semantic.tasks"
