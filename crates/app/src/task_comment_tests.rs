@@ -503,6 +503,7 @@ async fn default_scope_initializes_the_expected_packages_once() {
             semantic_data::filestore::PACKAGE_NAME,
             semantic_data::import::PACKAGE_NAME,
             semantic_data::bundles::query::PACKAGE_NAME,
+            semantic_data::vdb::PACKAGE_NAME,
         ]
         .into_iter()
         .map(str::to_owned)

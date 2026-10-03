@@ -385,6 +385,7 @@ impl SemanticAppBuilder {
         self.packages.push(semantic_data::filestore::package());
         self.packages.push(import_package);
         self.packages.push(semantic_data::bundles::query::package());
+        self.packages.push(semantic_data::vdb::package());
         self.packages.extend(packages);
         let scopes = ScopeManager::with_packages(self.providers, self.idle_ttl, self.packages);
         let object_stores = ObjectStoreManager::new(Vec::new());

@@ -123,7 +123,7 @@ mod tests {
             assert_eq!(response.result, RpcResult::Ok(Value::U8(42)));
         }
         #[cfg(feature = "base")]
-        assert_eq!(db.package_count.load(Ordering::Relaxed), 7);
+        assert_eq!(db.package_count.load(Ordering::Relaxed), 8);
     }
 
     #[test]
@@ -383,6 +383,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_scope_registers_virtual_database_interface() {
+        let temp = tempfile::tempdir().unwrap();
+        let db: Arc<dyn SemanticDb> = Arc::new(semantic_db_core::Db::new(
+            semantic_db_redb::open_backend(
+                temp.path().join("db.redb"),
+                semantic_data::schema::DbOpenMode::AutoCreate,
+            )
+            .unwrap(),
+        ));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), db)
+            .build()
+            .unwrap();
+        let db = ctx(&app, Principal::system())
+            .resolve_db(None)
+            .await
+            .unwrap();
+        let catalog = db.catalog().await.unwrap();
+        let interface = catalog
+            .resolve_interface(
+                semantic_data::vdb::PACKAGE_NAME,
+                semantic_data::vdb::MODULE_NAME,
+                None,
+                semantic_data::vdb::INTERFACE_NAME,
+            )
+            .unwrap();
+        assert!(!interface.fingerprint.is_empty());
+    }
+
+    #[tokio::test]
     async fn no_auth_default_scope_resolves() {
         #[cfg(feature = "base")]
         let package_count = Arc::new(AtomicUsize::new(0));
@@ -412,7 +442,7 @@ mod tests {
 
         assert_eq!(select_db_name(response), "default");
         #[cfg(feature = "base")]
-        assert_eq!(package_count.load(Ordering::Relaxed), 6);
+        assert_eq!(package_count.load(Ordering::Relaxed), 7);
     }
 
     #[cfg(feature = "base")]
@@ -493,7 +523,7 @@ mod tests {
             .await;
 
         assert_eq!(select_db_name(response), "mock://default");
-        assert_eq!(package_count.load(Ordering::Relaxed), 6);
+        assert_eq!(package_count.load(Ordering::Relaxed), 7);
     }
 
     #[tokio::test]
