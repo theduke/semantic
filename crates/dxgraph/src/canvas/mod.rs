@@ -1,6 +1,7 @@
 mod background;
 mod controls;
 mod edges;
+pub mod keyboard;
 mod node;
 pub mod state;
 pub use background::GraphBackground;
@@ -17,6 +18,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use indexmap::{IndexMap, IndexSet};
+use keyboard::{KeyboardAction, keyboard_action};
 use state::{CanvasState, SelectionEvent, reduce_selection};
 use std::rc::Rc;
 
@@ -131,12 +133,18 @@ fn calculate_layout<N, E>(
                 fixed: if node.pinned {
                     node.position
                         .or_else(|| state.positions.get(&node.id).copied())
-                } else if state.moved.contains(&node.id) || preserve {
+                } else if state.moved.contains(&node.id)
+                    || (preserve && state.stable.contains(&node.id))
+                {
                     state.positions.get(&node.id).copied()
                 } else {
                     None
                 },
-                previous: state.positions.get(&node.id).copied().or(node.position),
+                previous: if state.stable.contains(&node.id) || state.moved.contains(&node.id) {
+                    state.positions.get(&node.id).copied().or(node.position)
+                } else {
+                    node.position
+                },
                 layout_parent: node.layout_parent.clone(),
                 order_key: node.order_key.clone(),
             })
@@ -192,6 +200,11 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
         let forced = *layout_key.peek() != key;
         if changed || forced {
             let mut s = state.write();
+            s.stable = if forced {
+                IndexSet::new()
+            } else {
+                s.positions.keys().cloned().collect()
+            };
             s.pending = current
                 .nodes()
                 .filter(|node| !s.measured.contains_key(&node.id))
@@ -218,15 +231,30 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
         geometry.set(value);
     }));
     // A hint is enough for initial rendering; reveal stragglers after a bounded wait.
+    let timeout_layout = props.layout.clone();
     use_effect(move || {
         let batch = measurement_batch();
         if state.peek().pending.is_empty() {
             return;
         }
+        let layout = timeout_layout.clone();
         spawn(async move {
             dioxus_sdk_time::sleep(std::time::Duration::from_millis(100)).await;
             if *measurement_batch.peek() == batch {
-                state.write().pending.clear();
+                let mut s = state.write();
+                let current = model.peek();
+                calculate_layout(&current, &mut s, &layout, *measured_once.peek());
+                s.pending.clear();
+                s.stable = s.positions.keys().cloned().collect();
+                let rects = rects(&current, &s);
+                drop(current);
+                drop(s);
+                measured_once.set(true);
+                {
+                    let mut geometry = controller.geometry.write();
+                    geometry.rects = rects;
+                    geometry.revision += 1;
+                }
                 if !*fitted.peek() && mounted.peek().is_some() {
                     controller.fit_view();
                     fitted.set(true);
@@ -376,6 +404,14 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
             callback.call(event);
         }
     });
+    let node_pointer = use_callback(move |(id, event): (NodeId, PointerEvent)| {
+        refresh_origin.call(());
+        dispatch.call(input::pointer_down(
+            &event,
+            GestureTarget::Node(id),
+            platform::timestamp_ms(),
+        ));
+    });
     let select = use_callback(move |event: NodeEvent| {
         let mut s = state.write();
         s.selection = reduce_selection(
@@ -406,6 +442,7 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
                 was_pending && *measured_once.peek(),
             );
             measured_once.set(true);
+            s.stable = s.positions.keys().cloned().collect();
         }
         let current = model.peek();
         let r = rects(&current, &s);
@@ -435,7 +472,7 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
             }
         }
         for graph_node in current.nodes().filter(|node|shown.contains(&node.id)||s.pending.contains(&node.id)) {
-            node::NodeView {key:"{graph_node.id}",id:graph_node.id.clone(),data:graph_node.data.clone(),position:all_rects.get(&graph_node.id).map(|r|r.origin).unwrap_or_default(),size:s.measured.get(&graph_node.id).copied().unwrap_or(graph_node.size_hint),selected:s.selection.contains(&graph_node.id),hidden:s.pending.contains(&graph_node.id),detail,label:props.node_label.call(graph_node.id.clone()),render_node:props.render_node,render_minimal:props.render_minimal,on_pointer:move |(id,event):(NodeId,PointerEvent)|{refresh_origin.call(());dispatch.call(input::pointer_down(&event,GestureTarget::Node(id),platform::timestamp_ms()));},on_measure:measure,on_activate:activate,on_select:select}
+            node::NodeView {key:"{graph_node.id}",id:graph_node.id.clone(),data:graph_node.data.clone(),position:all_rects.get(&graph_node.id).map(|r|r.origin).unwrap_or_default(),size:s.measured.get(&graph_node.id).copied().unwrap_or(graph_node.size_hint),selected:s.selection.contains(&graph_node.id),hidden:s.pending.contains(&graph_node.id),detail,label:props.node_label.call(graph_node.id.clone()),render_node:props.render_node,render_minimal:props.render_minimal,on_pointer:node_pointer,on_measure:measure,on_activate:activate,on_select:select}
         }
     };
     rsx! {div {
@@ -447,9 +484,85 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
         onpointercancel:move |event|dispatch.call(GestureInput::PointerCancel{pointer:event.pointer_id()}),
         onpointerleave:move |event|{#[cfg(not(all(feature="web",target_arch="wasm32")))] dispatch.call(GestureInput::PointerCancel{pointer:event.pointer_id()});#[cfg(all(feature="web",target_arch="wasm32"))] let _=event;},
         onwheel:move |event|{event.prevent_default();dispatch.call(input::wheel(&event,controller.geometry.peek().container));},
-        onkeydown:move |event|{let mut viewport=controller.viewport();let handled=match event.key(){Key::Escape=>{state.write().selection.clear();if let Some(callback)=props.on_selection_change{callback.call(Vec::new());}true},Key::Character(key) if key=="+"||key=="="=>{controller.zoom_by(1.2);true},Key::Character(key) if key=="-"=>{controller.zoom_by(1.0/1.2);true},Key::Character(key) if key=="0"=>{controller.fit_view();true},Key::ArrowLeft=>{viewport.x+=50.0;controller.set_viewport(viewport);true},Key::ArrowRight=>{viewport.x-=50.0;controller.set_viewport(viewport);true},Key::ArrowUp=>{viewport.y+=50.0;controller.set_viewport(viewport);true},Key::ArrowDown=>{viewport.y-=50.0;controller.set_viewport(viewport);true},_=>false};if handled{event.prevent_default();}},
+        onkeydown:move |event|{let handled=match keyboard_action(&event.key().to_string()){Some(KeyboardAction::ClearSelection)=>{state.write().selection.clear();if let Some(callback)=props.on_selection_change{callback.call(Vec::new());}true},Some(KeyboardAction::ZoomBy(factor))=>{controller.zoom_by(factor);true},Some(KeyboardAction::Fit)=>{controller.fit_view();true},Some(KeyboardAction::Pan(delta))=>{let mut viewport=controller.viewport();viewport.x+=delta.x;viewport.y+=delta.y;controller.set_viewport(viewport);true},_=>false};if handled{event.prevent_default();}},
         GraphBackground{viewport:controller.viewport}
         background::GraphWorld{viewport:controller.viewport,children:world}
         div{class:"dxgraph-overlay",{props.children}}
     }}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::GraphNode;
+
+    #[test]
+    fn measured_expansion_keeps_old_nodes_and_places_new_nodes_without_overlap() {
+        let mut model = GraphModel::<(), ()>::default();
+        model.insert_node(GraphNode::new("root", ())).unwrap();
+        let mut first = GraphNode::new("first", ());
+        first.layout_parent = Some("root".into());
+        model.insert_node(first).unwrap();
+        let mut state = CanvasState::default();
+        state.measured.insert(
+            "root".into(),
+            Size {
+                width: 240.0,
+                height: 70.0,
+            },
+        );
+        state.measured.insert(
+            "first".into(),
+            Size {
+                width: 240.0,
+                height: 90.0,
+            },
+        );
+        calculate_layout(&model, &mut state, &LayoutConfig::default(), false);
+        let previous = state.positions.clone();
+        state.stable = previous.keys().cloned().collect();
+        let mut second = GraphNode::new("second", ());
+        second.layout_parent = Some("root".into());
+        model.insert_node(second).unwrap();
+        calculate_layout(&model, &mut state, &LayoutConfig::default(), true);
+        state.measured.insert(
+            "second".into(),
+            Size {
+                width: 400.0,
+                height: 130.0,
+            },
+        );
+        calculate_layout(&model, &mut state, &LayoutConfig::default(), true);
+        for (id, point) in previous {
+            assert_eq!(state.positions[&id], point);
+        }
+        let rects = rects(&model, &state);
+        let new = rects[&NodeId::from("second")];
+        for id in ["root", "first"] {
+            assert!(!new.intersects(rects[&NodeId::from(id)]));
+        }
+    }
+
+    #[test]
+    fn partial_measurements_use_received_sizes_and_hints_together() {
+        let mut model = GraphModel::<(), ()>::default();
+        model.insert_node(GraphNode::new("a", ())).unwrap();
+        model.insert_node(GraphNode::new("b", ())).unwrap();
+        let mut state = CanvasState::default();
+        state.measured.insert(
+            "a".into(),
+            Size {
+                width: 400.0,
+                height: 200.0,
+            },
+        );
+        calculate_layout(&model, &mut state, &LayoutConfig::default(), false);
+        let rects = rects(&model, &state);
+        assert_eq!(rects[&NodeId::from("a")].size.width, 400.0);
+        assert_eq!(
+            rects[&NodeId::from("b")].size,
+            model.node(&"b".into()).unwrap().size_hint
+        );
+        assert!(!rects[&NodeId::from("a")].intersects(rects[&NodeId::from("b")]));
+    }
 }

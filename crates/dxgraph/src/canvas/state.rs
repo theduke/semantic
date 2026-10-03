@@ -9,6 +9,8 @@ pub struct CanvasState {
     pub positions: IndexMap<NodeId, Point>,
     pub selection: IndexSet<NodeId>,
     pub moved: IndexSet<NodeId>,
+    /// Nodes placed before the current measurement batch began.
+    pub stable: IndexSet<NodeId>,
     pub dragging: Option<NodeId>,
     pub pending: IndexSet<NodeId>,
 }
@@ -20,6 +22,7 @@ impl Default for CanvasState {
             positions: IndexMap::new(),
             selection: IndexSet::new(),
             moved: IndexSet::new(),
+            stable: IndexSet::new(),
             dragging: None,
             pending: IndexSet::new(),
         }
@@ -95,6 +98,7 @@ impl CanvasState {
         self.selection.retain(|id| model.node(id).is_some());
         self.measured.retain(|id, _| model.node(id).is_some());
         self.moved.retain(|id| model.node(id).is_some());
+        self.stable.retain(|id| model.node(id).is_some());
     }
 }
 

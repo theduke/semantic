@@ -1,4 +1,7 @@
-use super::{NodeDetail, NodeEvent, NodeRenderContext};
+use super::{
+    NodeDetail, NodeEvent, NodeRenderContext,
+    keyboard::{KeyboardAction, keyboard_action},
+};
 use crate::{NodeId, Point, Size};
 use dioxus::prelude::*;
 
@@ -45,7 +48,7 @@ pub(crate) fn NodeView<N: Clone + PartialEq + 'static>(props: NodeViewProps<N>) 
         style:format!("transform:translate({}px,{}px);visibility:{}",props.position.x,props.position.y,if props.hidden {"hidden"} else {"visible"}),
         onpointerdown:move |event|{event.stop_propagation();props.on_pointer.call((pointer_id.clone(),event));},
         onresize:move |event|if let Ok(size)=event.get_border_box_size(){props.on_measure.call((measure_id.clone(),Size{width:size.width,height:size.height}));},
-        onkeydown:move |event|match event.key(){Key::Enter=>{event.stop_propagation();event.prevent_default();props.on_activate.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},Key::Character(value) if value==" "=>{event.stop_propagation();event.prevent_default();props.on_select.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},_=>{}},
+        onkeydown:move |event|match keyboard_action(&event.key().to_string()){Some(KeyboardAction::Activate)=>{event.stop_propagation();event.prevent_default();props.on_activate.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},Some(KeyboardAction::Select)=>{event.stop_propagation();event.prevent_default();props.on_select.call(NodeEvent{id:key_id.clone(),shift:event.modifiers().shift()});},_=>{}},
         {content}
     }}
 }
