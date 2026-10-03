@@ -138,7 +138,11 @@ pub(crate) async fn negotiate_leaves(
             let request = ScanRequest {
                 filters: filters.iter().cloned().map(Into::into).collect(),
                 order_by: order.into_iter().map(Into::into).collect(),
-                limit: can_limit.then_some(limit).flatten(),
+                // Include the prefix in case the source applies limit but leaves
+                // offset to the host. The host retains its original limit.
+                limit: can_limit
+                    .then(|| limit.and_then(|limit| offset.checked_add(limit)))
+                    .flatten(),
                 offset: if can_limit { offset } else { 0 },
                 projection: None,
                 parameters: Vec::new(),
@@ -211,9 +215,11 @@ pub(crate) fn apply_offset_rewrites(
             LogicalPlan::Limit { input, offset, .. } => {
                 let leaves = collect_leaves(input);
                 if leaves.len() == 1
-                    && fragments
-                        .get(&leaves[0].key)
-                        .is_some_and(|fragment| fragment.sole_input && fragment.plan.offset_applied)
+                    && fragments.get(&leaves[0].key).is_some_and(|fragment| {
+                        fragment.sole_input
+                            && fragment.request.offset != 0
+                            && fragment.plan.offset_applied
+                    })
                 {
                     *offset = Expr::from(0usize);
                 }
@@ -310,7 +316,7 @@ mod tests {
         let fragments = run(negotiate_leaves(&mut planned, &order, Some(3), 2, &sources)).unwrap();
         let fragment = fragments.values().next().unwrap();
         assert!(fragment.residual.is_none());
-        assert_eq!(fragment.request.limit, Some(3));
+        assert_eq!(fragment.request.limit, Some(5));
         assert_eq!(fragment.request.offset, 2);
         assert_eq!(fragment.request.order_by.len(), 1);
         assert!(format!("{:?}", fragment.request.filters).contains("virtual:title"));

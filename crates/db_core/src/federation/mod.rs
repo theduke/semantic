@@ -1,4 +1,7 @@
 mod backend;
+mod composite;
+mod engine;
+mod explain;
 mod planner;
 mod pushdown;
 mod references;
@@ -8,6 +11,8 @@ mod source;
 mod test_support;
 
 pub use backend::*;
+pub use engine::FederatedEngine;
+pub use explain::{FederatedExplain, LeafExplain};
 pub use planner::{validate_virtual_schema, validate_virtual_schema_for_collection};
 pub use references::{
     normalize_virtual_joins, referenced_collections, unresolved_join_collections,
