@@ -5,6 +5,81 @@ use semantic_data::query::{
     Expr, FunctionArg, InsertSource, JoinCondition, Query, QueryField, SelectQuery,
 };
 
+use crate::catalog::Catalog;
+
+fn join_collection_candidate(
+    source: &semantic_data::query::JoinSource,
+    local: &Catalog,
+) -> Option<String> {
+    match (&source.collection, &source.class) {
+        (None, Some(class)) if local.class_ids(class).is_empty() => Some(class.clone()),
+        (Some(collection), Some(class)) if local.collection_by_name(collection).is_none() => {
+            Some(format!("{collection}.{class}"))
+        }
+        _ => None,
+    }
+}
+
+fn visit_select_queries(query: &mut Query, visit: &mut impl FnMut(&mut SelectQuery)) {
+    match query {
+        Query::Select(select) => visit(select),
+        Query::Insert(insert) => {
+            if let InsertSource::Select(select) = &mut insert.source {
+                visit(select);
+            }
+        }
+        Query::Update(_) | Query::Delete(_) | Query::Ddl(_) => {}
+    }
+    let result = query.visit_expressions_mut(&mut |expr| {
+        if let Expr::Subquery(select) | Expr::Exists { query: select, .. } = expr {
+            visit(select);
+        }
+        Ok::<(), std::convert::Infallible>(())
+    });
+    match result {
+        Ok(()) => {}
+        Err(impossible) => match impossible {},
+    }
+}
+
+/// SQL JOIN names may denote classes or collections. Return only names that
+/// cannot already be resolved using the original local class/collection rules.
+pub fn unresolved_join_collections(query: &Query, local: &Catalog) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    visit_select_queries(&mut query.clone(), &mut |select| {
+        for join in &select.joins {
+            if let Some(candidate) = join_collection_candidate(&join.source, local) {
+                candidates.insert(candidate);
+            }
+        }
+    });
+    candidates
+}
+
+/// Resolve otherwise unresolved SQL JOIN names against available VDBs.
+/// Registered local classes and explicit local collections retain precedence.
+pub fn normalize_virtual_joins(
+    query: &mut Query,
+    local: &Catalog,
+    virtual_names: &BTreeSet<String>,
+) {
+    visit_select_queries(query, &mut |select| {
+        for join in &mut select.joins {
+            if let Some(candidate) = join_collection_candidate(&join.source, local)
+                && virtual_names.contains(&candidate)
+            {
+                // Keep the SQL binding (the class/export token) when a dotted
+                // collection replaces a class-shaped source without an alias.
+                if join.alias.is_none() {
+                    join.alias = join.source.class.clone();
+                }
+                join.source.collection = Some(candidate);
+                join.source.class = None;
+            }
+        }
+    });
+}
+
 /// Every collection read or mutated by a query, including nested SELECTs.
 /// Schema operations have no row sources and are routed separately.
 pub fn referenced_collections(query: &Query) -> BTreeSet<String> {
@@ -337,5 +412,70 @@ mod tests {
                 "{sql}"
             );
         }
+    }
+
+    #[cfg(feature = "sql")]
+    #[test]
+    fn virtual_join_candidates_preserve_local_class_and_collection_precedence() {
+        let (local, _) = crate::federation::planner::tests::setup();
+        let virtual_names = ["fx", "activation.export", "Item", "local.Item"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let parse = |sql| {
+            crate::sql::parse_sql_query_unbound(sql, crate::sql::SqlDialectKind::Generic).unwrap()
+        };
+        for sql in [
+            "SELECT a.id FROM local a JOIN Item b ON a.id = b.id",
+            "SELECT a.id FROM local a JOIN local.Item b ON a.id = b.id",
+        ] {
+            let mut query = parse(sql);
+            assert!(
+                unresolved_join_collections(&query, &local).is_empty(),
+                "{sql}"
+            );
+            let original = query.clone();
+            normalize_virtual_joins(&mut query, &local, &virtual_names);
+            assert_eq!(query, original, "{sql}");
+        }
+        for (sql, name, binding) in [
+            (
+                "SELECT a.id FROM local a JOIN fx b ON a.id = b.id",
+                "fx",
+                "b",
+            ),
+            (
+                "SELECT a.id FROM local a JOIN activation.export b ON a.id = b.id",
+                "activation.export",
+                "b",
+            ),
+            (
+                "SELECT a.id FROM local a JOIN activation.export ON a.id = export.id",
+                "activation.export",
+                "export",
+            ),
+        ] {
+            let mut query = parse(sql);
+            assert_eq!(
+                unresolved_join_collections(&query, &local),
+                BTreeSet::from([name.into()])
+            );
+            normalize_virtual_joins(&mut query, &local, &virtual_names);
+            let Query::Select(select) = query else {
+                panic!("select")
+            };
+            assert_eq!(select.joins[0].source.collection.as_deref(), Some(name));
+            assert!(select.joins[0].source.class.is_none());
+            assert_eq!(select.joins[0].alias.as_deref(), Some(binding));
+        }
+        let mut query = parse(
+            "SELECT o.id FROM local o WHERE EXISTS (SELECT a.id FROM local a JOIN fx b ON a.id = b.id)",
+        );
+        assert_eq!(
+            unresolved_join_collections(&query, &local),
+            BTreeSet::from(["fx".into()])
+        );
+        normalize_virtual_joins(&mut query, &local, &virtual_names);
+        assert!(referenced_collections(&query).contains("fx"));
     }
 }
