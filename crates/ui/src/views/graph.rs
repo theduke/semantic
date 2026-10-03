@@ -26,18 +26,10 @@ fn layout_name(layout: &LayoutConfig) -> &'static str {
         _ => "force",
     }
 }
-fn graph_route(
-    root: Option<String>,
-    collection: Option<String>,
-    mode: GraphMode,
-    layout: Option<String>,
-) -> Route {
+fn graph_route(root: Option<String>, mode: GraphMode, layout: Option<String>) -> Route {
     Route::GraphPage {
         root: root
             .filter(|id| !id.trim().is_empty())
-            .map(encode_graph_param),
-        collection: collection
-            .filter(|name| !name.trim().is_empty())
             .map(encode_graph_param),
         mode: Some(mode.as_str().into()),
         layout,
@@ -66,24 +58,15 @@ fn decode_graph_param(value: String) -> String {
 }
 
 #[component]
-pub fn GraphPage(
-    root: Option<String>,
-    collection: Option<String>,
-    mode: Option<String>,
-    layout: Option<String>,
-) -> Element {
+pub fn GraphPage(root: Option<String>, mode: Option<String>, layout: Option<String>) -> Element {
     let root = root.map(decode_graph_param);
-    let collection = collection.map(decode_graph_param);
     let mode = GraphMode::parse(mode.as_deref());
     let layout_config = graph_layout(mode, layout.as_deref());
     let controller = use_graph_controller();
     let nav = navigator();
-    let picker_collection = collection.clone();
     let picker_layout = layout.clone();
     let mode_root = root.clone();
-    let mode_collection = collection.clone();
     let layout_root = root.clone();
-    let layout_collection = collection.clone();
     let selected_mode: usize = match mode {
         GraphMode::Hierarchy => 0,
         GraphMode::Relations => 1,
@@ -102,13 +85,12 @@ pub fn GraphPage(
             div { class: "semantic-graph-toolbar", aria_label: "Graph options",
                 EntityAutocomplete {
                     value: root.clone(),
-                    collection: collection.clone(),
                     search_fields: Some(vec!["id".into(), "semantic:title".into()]),
                     aria_label: "Graph root",
                     placeholder: "Choose a root entity",
                     on_value_change: move |root| {
                         nav.replace(
-                            graph_route(root, picker_collection.clone(), mode, picker_layout.clone()),
+                            graph_route(root, mode, picker_layout.clone()),
                         );
                     },
                 }
@@ -123,7 +105,7 @@ pub fn GraphPage(
                                 _ => GraphMode::Hierarchy,
                             };
                             nav.replace(
-                                graph_route(mode_root.clone(), mode_collection.clone(), mode, None),
+                                graph_route(mode_root.clone(), mode, None),
                             );
                         }
                     },
@@ -136,7 +118,7 @@ pub fn GraphPage(
                     aria_label: "Graph layout",
                     on_value_change: move |layout| {
                         nav.replace(
-                            graph_route(layout_root.clone(), layout_collection.clone(), mode, layout),
+                            graph_route(layout_root.clone(), mode, layout),
                         );
                     },
                     for (index, (value, label)) in [("tree", "Tree"), ("mindmap", "Mind map"), ("force", "Force"), ("radial", "Radial")]
@@ -159,7 +141,7 @@ pub fn GraphPage(
                 dxcomp::button::Button { onclick: move |_| controller.fit_view(), "Fit" }
                 Link {
                     to: Route::BrowsePage {
-                        collection: collection.clone(),
+                        collection: None,
                         view: Some("table".into()),
                         renderer: None,
                         page: None,
@@ -172,13 +154,13 @@ pub fn GraphPage(
             }
             if let Some(root) = root.filter(|id| !id.trim().is_empty()) {
                 EntityGraphView {
-                    root: EntityTarget::new(collection, root),
+                    root,
                     mode,
                     layout: layout_config,
                     controller,
                     on_focus: move |target: EntityTarget| {
                         nav.replace(
-                            graph_route(Some(target.id), target.collection, mode, focus_layout.clone()),
+                            graph_route(Some(target.id), mode, focus_layout.clone()),
                         );
                     },
                 }
@@ -212,10 +194,9 @@ mod tests {
             );
         }
         assert_eq!(
-            graph_route(Some(" ".into()), None, GraphMode::Hierarchy, None),
+            graph_route(Some(" ".into()), GraphMode::Hierarchy, None),
             Route::GraphPage {
                 root: None,
-                collection: None,
                 mode: Some("hierarchy".into()),
                 layout: None
             }
@@ -225,23 +206,31 @@ mod tests {
     fn graph_route_urls_round_trip_encoded_query_parameters() {
         let route = graph_route(
             Some("root / &?#".into()),
-            Some("custom collection".into()),
             GraphMode::Both,
             Some("radial".into()),
         );
         let url = route.to_string();
         assert!(url.starts_with("/graph?"));
+        assert!(!url.contains("collection="));
         assert_eq!(url.parse::<Route>().unwrap(), route);
-        let Route::GraphPage {
-            root, collection, ..
-        } = route
-        else {
+        let Route::GraphPage { root, .. } = route else {
             panic!("graph route")
         };
         assert_eq!(root.map(decode_graph_param).as_deref(), Some("root / &?#"));
+    }
+    #[test]
+    fn legacy_collection_parameters_are_ignored_and_not_emitted() {
+        let route = "/graph?root=root&collection=custom&mode=relations&layout=radial"
+            .parse::<Route>()
+            .unwrap();
         assert_eq!(
-            collection.map(decode_graph_param).as_deref(),
-            Some("custom collection")
+            route,
+            graph_route(
+                Some("root".into()),
+                GraphMode::Relations,
+                Some("radial".into())
+            )
         );
+        assert!(!route.to_string().contains("collection="));
     }
 }

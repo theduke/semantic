@@ -4,7 +4,7 @@
 const { chromium } = require('../../../crates/dxeditor/web/node_modules/playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const out = require('node:path').resolve(__dirname, '../../../target/graph-views-browser/review3');
+const out = require('node:path').resolve(__dirname, '../../../target/graph-views-browser/review4');
 fs.mkdirSync(out, { recursive: true });
 const str = string => ({ string });
 const obj = object => ({ object });
@@ -61,9 +61,15 @@ async function drag(page, from, delta) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(60000);
   let missingRowsInjected = 0;
+  const pickerQueries = [];
   await page.route('**/api/v1/rpc', async route => {
     const request = route.request().postDataJSON();
     const payload = decode(request.payload);
+    const query = JSON.stringify(payload.query);
+    if (request.command === 'semantic.db.query' && typeof payload.query === 'object'
+        && query.includes('semantic:title') && query.includes(root)) {
+      pickerQueries.push(payload.query);
+    }
     if (request.command !== 'semantic.db.query'
         || !JSON.stringify(payload.query).includes('__semantic.relationship_edges')
         || !payload.params?.ids?.includes(root)) {
@@ -80,10 +86,15 @@ async function drag(page, from, delta) {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const result = { fixture, checks: {}, errors };
+  const assertEntityOnlyUrl = () => assert.equal(new URL(page.url()).searchParams.has('collection'), false);
   try {
-    for (let attempt = 0; attempt < 30; attempt++) { await page.goto('http://localhost:8080/graph'); try { await page.getByRole('combobox', {name:'Graph root'}).waitFor({state:'visible',timeout:3000}); break; } catch { await page.waitForTimeout(1000); } }
+    for (let attempt = 0; attempt < 30; attempt++) { await page.goto('http://localhost:8080/graph?collection=legacy-custom'); try { await page.getByRole('combobox', {name:'Graph root'}).waitFor({state:'visible',timeout:3000}); break; } catch { await page.waitForTimeout(1000); } }
     await page.getByRole('combobox', {name:'Graph root'}).fill(root);
     await page.getByRole('option').filter({hasText:root}).click(); await page.waitForURL(new RegExp(`root=${root}`)); result.checks.emptyRoutePickerSearch = true; console.log('Passed empty-route picker search');
+    assertEntityOnlyUrl(); result.checks.legacyCollectionIgnoredByPicker = true;
+    assert(pickerQueries.length, 'root picker query was not observed');
+    for (const query of pickerQueries) assert(JSON.stringify(query).includes('"collection":"entities"'), JSON.stringify(query));
+    result.checks.rootPickerQueriesDefaultEntities = true;
     await page.locator('.semantic-graph-list summary').waitFor({state:'visible'}); await node(page, children[0]).waitFor({ state: 'visible' });
     await page.locator('.dxgraph-node[style*="hidden"]').waitFor({ state: 'detached' });
     result.checks.initialNodes = await page.locator('[data-dxgraph-node]').count(); assert.equal(result.checks.initialNodes, 5);
@@ -166,10 +177,12 @@ async function drag(page, from, delta) {
     result.checks.expandedBounds = await assertNoOverlap(page);
     const treePosition = await node(page, children[0]).getAttribute('style');
     await page.locator('.dx-select-trigger').click(); await page.getByRole('option', { name: 'Radial', exact: true }).click(); await page.waitForURL(/layout=radial/);
+    assertEntityOnlyUrl(); result.checks.layoutUrlEntityOnly = true;
     await page.waitForFunction(({ id, style }) => document.querySelector(`[data-dxgraph-node=\"${id}\"]`)?.getAttribute('style') !== style, { id: `entity:8:entities${children[0]}`, style: treePosition });
     await page.keyboard.press('Escape'); await page.getByRole('button', { name: 'Fit', exact: true }).click(); await page.waitForTimeout(100);
     result.checks.radialLayout = true; await page.screenshot({ path: `${out}/radial.png`, fullPage: true });
     await page.getByRole('button', { name: 'Relations', exact: true }).click(); await page.waitForURL(/mode=relations/); await node(page, label).waitFor(); await node(page, children[0]).waitFor(); await node(page, missing).waitFor();
+    assertEntityOnlyUrl(); result.checks.modeUrlEntityOnly = true;
     assert.equal(await node(page, missing).locator('[data-entity-kind="unresolved"]').count(), 1);
     assert.equal(await node(page, children[0]).locator('[data-entity-kind="entity"]').count(), 1);
     result.checks.defaultEntityIncomingAndMissing = true;
@@ -194,6 +207,7 @@ async function drag(page, from, delta) {
     await page.locator('.semantic-graph-list summary').click();
     await page.getByRole('list', {name:'Loaded graph entities'}).getByRole('listitem').filter({hasText:'Related label'}).getByRole('button', {name:'Related label',exact:true}).click();
     await page.getByRole('button', {name:'Focus here',exact:true}).click(); await page.waitForURL(new RegExp(`root=${label}`));
+    assertEntityOnlyUrl(); result.checks.focusUrlEntityOnly = true;
     await node(page,label).waitFor(); result.checks.outgoingTargetFocuses = true;
     await page.goto(`${fixture.url}&mode=relations`); await node(page,label).waitFor();
     await page.locator('.semantic-graph-list summary').click();
@@ -213,6 +227,7 @@ async function drag(page, from, delta) {
     const currentCanvas = await canvas.boundingBox(); await drag(page, {x:currentCanvas.x + 24,y:currentCanvas.y + 24}, {x:450,y:80});
     const rootPicker = page.getByRole('combobox', {name:'Graph root'}); await rootPicker.fill('Graph browser root');
     await page.getByRole('option').filter({hasText:root}).click(); await page.waitForURL(new RegExp(`root=${root}`));
+    assertEntityOnlyUrl(); result.checks.pickerUrlEntityOnly = true;
     await page.waitForFunction(() => document.querySelector('.dx-combobox-input')?.value === 'Graph browser root');
     await node(page, root).waitFor({state:'visible'}); result.checks.rootPicker = true;
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto('http://localhost:8080/graph'); await page.getByText('Choose an entity above to explore its hierarchy and relationships.').waitFor();

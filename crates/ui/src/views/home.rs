@@ -35,7 +35,7 @@ pub fn HomePage() -> Element {
                     span { aria_hidden: "true", "Open tree →" }
                 }
                 Link {
-                    to: Route::GraphPage { root: None, collection: None, mode: None, layout: None },
+                    to: Route::GraphPage { root: None, mode: None, layout: None },
                     class: "semantic-route-panel semantic-surface",
                     h2 { "Graph" }
                     p { "Explore entity hierarchies and relationship neighborhoods." }

@@ -44,8 +44,9 @@ delegate app behavior to `semantic_app`.
 `dxgraph` provides a content-agnostic Dioxus graph canvas with HTML nodes,
 SVG edges, pure Rust layouts and pointer gestures. `semantic_ui_core::graph`
 adapts query RPC data into a bounded entity explorer with hierarchy and relation
-expansion. `semantic_ui` exposes it at `/graph`, with URL-backed root, mode and
-layout controls. View state is ephemeral; no database schema changes are needed.
+expansion from the default `entities` collection. `semantic_ui` exposes it at
+`/graph`, with URL-backed root entity ID, mode and layout controls. View state is
+ephemeral; no database schema changes are needed.
 
 `semantic_ui_core` defines reusable Dioxus UI foundations: Dioxus context
 helpers for the shared `semantic_rpc::RpcClient`, active scope context, a

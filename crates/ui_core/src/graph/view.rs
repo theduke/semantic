@@ -18,7 +18,7 @@ use dxgraph::{
 /// Root, mode and active scope own the lifetime of the explorer and its requests.
 #[component]
 pub fn EntityGraphView(
-    root: EntityTarget,
+    root: String,
     mode: GraphMode,
     layout: LayoutConfig,
     #[props(default)] controller: Option<GraphController>,
@@ -44,8 +44,8 @@ pub fn EntityGraphView(
     }
 }
 
-pub(super) fn session_key(root: &EntityTarget, mode: GraphMode, scope: Option<&str>) -> String {
-    format!("{:?}/{scope:?}/{mode:?}", node_id(root))
+pub(super) fn session_key(root: &str, mode: GraphMode, scope: Option<&str>) -> String {
+    format!("{root:?}/{scope:?}/{mode:?}")
 }
 
 #[derive(Clone)]
@@ -74,18 +74,19 @@ impl GraphLoadContext {
             }
         }
     }
-    async fn start(&self, root: EntityTarget) {
+    async fn start(&self, root: String) {
         match load_nodes(&self.source, std::slice::from_ref(&root)).await {
             Ok(nodes) => {
+                let target = EntityTarget::default_collection(root);
                 if let Some(object) = nodes
                     .into_iter()
                     .next()
                     .and_then(|node| node.object().cloned())
                 {
                     let mut explorer = self.explorer;
-                    explorer.write().set_object(&root, object);
+                    explorer.write().set_object(&target, object);
                 }
-                self.expand(node_id(&root)).await;
+                self.expand(node_id(&target)).await;
             }
             Err(error) => {
                 self.toast.show(Toast::error(error));
@@ -136,7 +137,7 @@ fn node_title(data: &EntityNodeData, catalog: &UiCatalog) -> String {
 
 #[component]
 fn EntityGraphSession(
-    root: EntityTarget,
+    root: String,
     mode: GraphMode,
     layout: LayoutConfig,
     controller: Option<GraphController>,
@@ -205,7 +206,7 @@ fn EntityGraphSession(
         };
         let load = load.clone();
         spawn(async move {
-            match load_nodes(&load.source, &[target]).await {
+            match load_nodes(&load.source, &[target.id]).await {
                 Ok(nodes) => {
                     if let Some(data) = nodes.into_iter().next() {
                         explorer.write().apply_ancestor(&id, data);
@@ -444,8 +445,8 @@ mod tests {
                 semantic_data::value::Value::String("Example entity".into()),
             );
             rsx! {
-                EntityGraphNode { data: super::super::entity_data(EntityTarget::default_collection("a"), Some(object)) }
-                EntityGraphNode { data: super::super::entity_data(EntityTarget::default_collection("missing"), None) }
+                EntityGraphNode { data: super::super::entity_data("a", Some(object)) }
+                EntityGraphNode { data: super::super::entity_data("missing", None) }
                 EntityGraphNode {
                     data: EntityNodeData::Overflow {
                         parent: NodeId::from("a"),
@@ -473,17 +474,16 @@ mod tests {
         let root = EntityTarget::default_collection("root");
         let child = EntityTarget::default_collection("child");
         let mut graph =
-            EntityGraphExplorer::new(root.clone(), GraphMode::Both, ExplorerLimits::default());
+            EntityGraphExplorer::new(root.id.clone(), GraphMode::Both, ExplorerLimits::default());
         graph.apply_expansion(
             &node_id(&root),
             super::super::ExpansionResult {
-                nodes: vec![super::super::entity_data(child.clone(), None)],
+                nodes: vec![super::super::entity_data(child.id.clone(), None)],
                 edges: vec![super::super::ExpansionEdge {
                     source: node_id(&root),
                     target: node_id(&child),
                     kind: EntityEdgeKind::Parent,
                 }],
-                ..Default::default()
             },
         );
         assert_eq!(

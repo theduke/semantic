@@ -1,19 +1,26 @@
 # Graph explorer browser verification
 
-Current review3 verification uses the default `entities` endpoint contract and
-canvas-owned transient drag positions. See
-[review3-disposition.md](review3-disposition.md) for the complete disposition.
-The fresh run completed all 33 recorded checks at 1440×1000 and 390×844 with
-zero page or console errors. Desktop relation and mobile graph screenshots
-were visually inspected.
+Current review4 verification uses entity IDs throughout the graph route and
+loading API. The root picker uses its default `entities` collection, and graph
+URLs contain only root, mode and layout parameters. Legacy `collection` input
+is ignored and disappears when the picker or another graph control navigates.
+See [review4-disposition.md](review4-disposition.md) for the complete disposition.
+The fresh run completed all 39 recorded checks at 1440×1000 and 390×844 with
+zero page or console errors. Desktop relation and mobile graph screenshots were
+visually inspected. The added checks observe the picker's actual default entity
+query and assert collection-free URLs after picker, mode, layout and focus actions.
 
 ```sh
-nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-review3-20261003 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'
+nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-review4-20261003-425877 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'
 nix develop -c dx serve --web --package semantic_ui --no-default-features --features web --port 8080 --open false --watch false --hot-reload false
 nix develop -c node docs/plans/2026-10-03-graph-views/browser.cjs
 ```
 
-Current artifacts are under `target/graph-views-browser/review3/`. The script
+The review4 run discovered the T3 preview tools, but status/open reported no
+available automation host. Verification therefore used the retained Playwright
+script, an owned local UI server, and a fresh isolated fixture database.
+
+Current artifacts are under `target/graph-views-browser/review4/`. The script
 uses live typed Label and EntityLabel fixtures for outgoing and incoming
 entities. The database rejects dangling typed references, so the script adds
 one missing-endpoint relationship row to the browser's RPC response. Its
@@ -37,7 +44,7 @@ targets, actual cross-collection collisions, and Reset positions.
 
 Verified on 2026-10-03 with Chromium through Nix, using an isolated server database at `/tmp/semantic-graph-browser-20261003`. Preview status/open both returned `PreviewAutomationNoAvailableHostError`, so the retained Playwright script uses the locally installed Chromium and Playwright module.
 
-Original commands (historical configuration; use the review3 commands above):
+Original commands (historical configuration; use the review4 commands above):
 
 ```sh
 nix develop -c bash -c 'SEMANTIC_DATA_DIR=/tmp/semantic-graph-browser-20261003 SEMANTIC_INTERFACE=127.0.0.1 SEMANTIC_PORT=8888 cargo run --quiet --package semantic_server'

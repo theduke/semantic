@@ -190,7 +190,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
-                    to: Route::GraphPage { root: None, collection: None, mode: None, layout: None },
+                    to: Route::GraphPage { root: None, mode: None, layout: None },
                     label: "Graph",
                     icon: rsx! { Network { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Graph),

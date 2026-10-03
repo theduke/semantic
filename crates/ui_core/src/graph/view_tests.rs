@@ -1,7 +1,7 @@
 //! Exercise the actual view boundary and its pending initial load through Dioxus.
 use super::{EntityGraphView, GraphMode};
 use crate::{
-    EntityTarget, UiCatalog, UiCatalogContext, UiScopeContext,
+    UiCatalog, UiCatalogContext, UiScopeContext,
     context::{provide_rpc_client, provide_toast_dispatcher},
 };
 use dioxus::prelude::*;
@@ -76,7 +76,7 @@ impl RpcClientDyn for PendingClient {
 
 #[derive(Clone)]
 struct SessionInputs {
-    root: EntityTarget,
+    root: String,
     mode: GraphMode,
     layout: LayoutConfig,
 }
@@ -92,7 +92,7 @@ struct HarnessProps {
 
 fn view_harness(props: HarnessProps) -> Element {
     let inputs = use_signal(|| SessionInputs {
-        root: EntityTarget::default_collection("root-a"),
+        root: "root-a".into(),
         mode: GraphMode::Hierarchy,
         layout: LayoutConfig::Manual,
     });
@@ -185,7 +185,7 @@ fn mode_change_remounts_the_entity_graph_session() {
 #[test]
 fn root_change_remounts_the_entity_graph_session() {
     let mut harness = Harness::new();
-    harness.inputs().write().root = EntityTarget::default_collection("root-b");
+    harness.inputs().write().root = "root-b".into();
     harness.flush();
     harness.assert_remounted();
     let html = dioxus_ssr::render(&harness.dom);
@@ -251,7 +251,7 @@ async fn loaded_fallback_controller_preserves_layout_updates_and_remounts_with_r
     harness.flush();
     assert_eq!(harness.request_count(), 2);
     assert!(dioxus_ssr::render(&harness.dom).contains("root-a"));
-    harness.inputs().write().root = EntityTarget::default_collection("root-b");
+    harness.inputs().write().root = "root-b".into();
     harness.flush();
     assert_eq!(harness.request_count(), 4);
     let html = dioxus_ssr::render(&harness.dom);

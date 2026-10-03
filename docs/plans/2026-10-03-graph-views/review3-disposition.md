@@ -1,5 +1,9 @@
 # Graph views review 3 disposition
 
+Historical record: [review 4](review4-disposition.md) makes graph roots and
+query APIs entity-only. The nondefault root routes and identity guards described
+below have been removed; these verification results remain historical evidence.
+
 This records the review2 and review3 changes since review1 commit `fbd0157a`. The
 project owner's endpoint decision supersedes the collection assumptions in
 review1 M4/M5/M13 and review2 H2/M1. Historical verification remains in the

@@ -92,10 +92,9 @@ pub enum Route {
         hierarchy: Option<bool>,
         kind: Option<String>,
     },
-    #[route("/graph?:root&:collection&:mode&:layout")]
+    #[route("/graph?:root&:mode&:layout")]
     GraphPage {
         root: Option<String>,
-        collection: Option<String>,
         mode: Option<String>,
         layout: Option<String>,
     },

@@ -4,7 +4,6 @@ use crate::EntityTarget;
 use dxgraph::{EdgeId, EdgePathStyle, EdgeStyle, GraphEdge, GraphModel, GraphNode, NodeId, Size};
 use semantic_data::{
     attr::ATTR_PARENT,
-    builtin::DEFAULT_COLLECTION,
     value::{Object, Value},
 };
 
@@ -104,7 +103,7 @@ pub enum EntityEdgeKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExpansionRequest {
     pub node: NodeId,
-    pub target: EntityTarget,
+    pub target: String,
     pub mode: GraphMode,
     pub limit: usize,
 }
@@ -138,9 +137,9 @@ fn entity_edge_id(kind: &EntityEdgeKind, source: &NodeId, target: &NodeId) -> Ed
     }
 }
 
-pub fn entity_data(target: EntityTarget, object: Option<Object>) -> EntityNodeData {
+pub fn entity_data(id: impl Into<String>, object: Option<Object>) -> EntityNodeData {
     EntityNodeData::Entity {
-        target,
+        target: EntityTarget::default_collection(id),
         object,
         loading: false,
         expanded: false,
@@ -159,7 +158,8 @@ pub struct EntityGraphExplorer {
 }
 
 impl EntityGraphExplorer {
-    pub fn new(root: EntityTarget, mode: GraphMode, limits: ExplorerLimits) -> Self {
+    pub fn new(root: impl Into<String>, mode: GraphMode, limits: ExplorerLimits) -> Self {
+        let root = EntityTarget::default_collection(root);
         let mut this = Self {
             model: GraphModel::default(),
             mode,
@@ -169,7 +169,7 @@ impl EntityGraphExplorer {
             expansion_edges: BTreeMap::new(),
         };
         this.model
-            .upsert_node(make_node(entity_data(root, None), None));
+            .upsert_node(make_node(entity_data(root.id, None), None));
         this
     }
     pub fn model(&self) -> &GraphModel<EntityNodeData, EntityEdgeData> {
@@ -214,7 +214,7 @@ impl EntityGraphExplorer {
         let node = self.model.node(id)?;
         let request = ExpansionRequest {
             node: id.clone(),
-            target: node.data.target()?.clone(),
+            target: node.data.target()?.id.clone(),
             mode: self.mode,
             limit: self.limits.fan_out.saturating_add(1),
         };
@@ -388,9 +388,6 @@ impl EntityGraphExplorer {
     /// Parent references identify entities in the default collection.
     pub fn ancestors_request(&self, id: &NodeId) -> Option<EntityTarget> {
         let node = self.model.node(id)?;
-        if node.data.target()?.collection_or_default() != DEFAULT_COLLECTION {
-            return None;
-        }
         let parent = node.data.object()?.get(ATTR_PARENT)?.as_str()?;
         let target = EntityTarget::default_collection(parent);
         (self.model.node(&node_id(&target)).is_none()).then_some(target)
@@ -476,7 +473,7 @@ mod tests {
         ExpansionResult {
             nodes: nodes
                 .iter()
-                .map(|node| entity_data(target(node), Some(Object::new())))
+                .map(|node| entity_data(*node, Some(Object::new())))
                 .collect(),
             edges: nodes
                 .iter()
@@ -490,11 +487,8 @@ mod tests {
     }
     #[test]
     fn seed_expand_deduplicate() {
-        let mut graph = EntityGraphExplorer::new(
-            target("root"),
-            GraphMode::Hierarchy,
-            ExplorerLimits::default(),
-        );
+        let mut graph =
+            EntityGraphExplorer::new("root", GraphMode::Hierarchy, ExplorerLimits::default());
         assert_eq!(graph.model.nodes().count(), 1);
         assert!(graph.begin_expand(&id("root")).is_some());
         assert!(graph.begin_expand(&id("root")).is_none());
@@ -515,7 +509,7 @@ mod tests {
                 fan_out: 50,
             },
         ] {
-            let mut graph = EntityGraphExplorer::new(target("root"), GraphMode::Both, limits);
+            let mut graph = EntityGraphExplorer::new("root", GraphMode::Both, limits);
             graph.apply_expansion(&id("root"), fixture(&["a", "b", "c", "d"], "root"));
             assert!(graph.model.nodes().count() <= limits.max_nodes);
             assert!(
@@ -528,11 +522,8 @@ mod tests {
     }
     #[test]
     fn collapse_keeps_shared_nodes_and_cyclic_relation_nodes() {
-        let mut graph = EntityGraphExplorer::new(
-            target("root"),
-            GraphMode::Relations,
-            ExplorerLimits::default(),
-        );
+        let mut graph =
+            EntityGraphExplorer::new("root", GraphMode::Relations, ExplorerLimits::default());
         graph.apply_expansion(&id("root"), fixture(&["a", "b"], "root"));
         graph.apply_expansion(&id("a"), fixture(&["shared", "root"], "a"));
         graph.apply_expansion(&id("b"), fixture(&["shared"], "b"));
@@ -545,12 +536,13 @@ mod tests {
     #[test]
     fn unresolved_endpoints_remain_and_parent_reroots_layout() {
         let mut graph =
-            EntityGraphExplorer::new(target("root"), GraphMode::Both, ExplorerLimits::default());
+            EntityGraphExplorer::new("root", GraphMode::Both, ExplorerLimits::default());
         let mut root = Object::new();
         root.insert(ATTR_PARENT, Value::String("parent".into()));
         graph.set_object(&target("root"), root);
         let parent = graph.ancestors_request(&id("root")).unwrap();
-        graph.apply_ancestor(&id("root"), entity_data(parent, None));
+        assert_eq!(parent, target("parent"));
+        graph.apply_ancestor(&id("root"), entity_data(parent.id, None));
         assert_eq!(
             graph.model.node(&id("root")).unwrap().layout_parent,
             Some(id("parent"))
@@ -567,23 +559,9 @@ mod tests {
     }
 
     #[test]
-    fn nondefault_root_does_not_load_a_default_ancestor_for_another_entity() {
-        let root = EntityTarget::new(Some("other_collection".into()), "root");
-        let mut graph = EntityGraphExplorer::new(
-            root.clone(),
-            GraphMode::Hierarchy,
-            ExplorerLimits::default(),
-        );
-        let mut object = Object::new();
-        object.insert(ATTR_PARENT, Value::String("parent".into()));
-        graph.set_object(&root, object);
-        assert_eq!(graph.ancestors_request(&node_id(&root)), None);
-    }
-
-    #[test]
     fn collapse_reparents_shared_survivors_after_parent_removal() {
         let mut graph =
-            EntityGraphExplorer::new(target("root"), GraphMode::Both, ExplorerLimits::default());
+            EntityGraphExplorer::new("root", GraphMode::Both, ExplorerLimits::default());
         graph.apply_expansion(&id("root"), fixture(&["a", "b"], "root"));
         graph.apply_expansion(&id("a"), fixture(&["branch"], "a"));
         graph.apply_expansion(&id("branch"), fixture(&["shared"], "branch"));
@@ -599,7 +577,7 @@ mod tests {
     #[test]
     fn overflow_ids_cannot_alias_entities_and_have_no_navigation_target() {
         let overflow = EntityNodeData::Overflow { parent: id("root") };
-        let real = entity_data(target(&overflow.id().0), None);
+        let real = entity_data(overflow.id().0, None);
         assert_ne!(overflow.id(), real.id());
         assert!(overflow.target().is_none());
         assert_ne!(
@@ -611,7 +589,7 @@ mod tests {
     #[test]
     fn expansion_state_only_changes_the_affected_node_payload() {
         let mut graph =
-            EntityGraphExplorer::new(target("root"), GraphMode::Both, ExplorerLimits::default());
+            EntityGraphExplorer::new("root", GraphMode::Both, ExplorerLimits::default());
         graph.apply_expansion(&id("root"), fixture(&["a", "b"], "root"));
         let sibling = graph.model().node(&id("b")).unwrap().clone();
         graph.begin_expand(&id("a")).unwrap();
@@ -628,7 +606,7 @@ mod tests {
     #[test]
     fn replacement_preserves_payload_loading_and_expanded_state() {
         let mut graph =
-            EntityGraphExplorer::new(target("root"), GraphMode::Both, ExplorerLimits::default());
+            EntityGraphExplorer::new("root", GraphMode::Both, ExplorerLimits::default());
         graph.apply_expansion(&id("root"), fixture(&["a", "b"], "root"));
         graph.begin_expand(&id("a")).unwrap();
         graph.apply_expansion(&id("b"), fixture(&["a", "root"], "b"));

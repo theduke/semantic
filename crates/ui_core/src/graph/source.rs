@@ -1,18 +1,14 @@
-use std::collections::BTreeMap;
-
 use futures::future::LocalBoxFuture;
 use semantic_data::{
     attr::{ATTR_PARENT, ATTR_TITLE},
+    builtin::DEFAULT_COLLECTION,
     query::{BinaryOp, Expr, Operand, SelectQuery, SortDirection},
     value::{Object, Value},
 };
 use semantic_rpc::RpcClient;
 
-use crate::{
-    EntityTarget,
-    query_ast::{
-        RELATION_EDGES_COLLECTION, all, any, binary, field, order, query_payload, select, wildcard,
-    },
+use crate::query_ast::{
+    RELATION_EDGES_COLLECTION, all, any, binary, field, order, query_payload, select, wildcard,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,14 +37,12 @@ impl RelationEdgeRow {
 
 /// Local futures match the UI's single-threaded RPC and Dioxus runtime.
 pub trait GraphSource {
-    fn entities<'a>(
-        &'a self,
-        ids: &'a [EntityTarget],
-    ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>>;
+    fn entities<'a>(&'a self, ids: &'a [String])
+    -> LocalBoxFuture<'a, Result<Vec<Object>, String>>;
     /// Hierarchy children are entities in the default collection.
     fn children<'a>(
         &'a self,
-        parents: &'a [EntityTarget],
+        parents: &'a [String],
         limit: usize,
     ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>>;
     fn relation_edges<'a>(
@@ -85,18 +79,13 @@ impl RpcGraphSource {
 impl GraphSource for RpcGraphSource {
     fn entities<'a>(
         &'a self,
-        ids: &'a [EntityTarget],
+        ids: &'a [String],
     ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>> {
         Box::pin(async move {
             let mut rows = Vec::new();
-            for (collection, ids) in grouped_ids(ids) {
-                // Bound request size even when this source is used independently of the explorer.
-                for chunk in ids.chunks(50) {
-                    rows.extend(
-                        self.query(entities_query(&collection), ids_params(chunk))
-                            .await?,
-                    );
-                }
+            // Bound request size even when this source is used independently of the explorer.
+            for chunk in ids.chunks(50) {
+                rows.extend(self.query(entities_query(), ids_params(chunk)).await?);
             }
             Ok(rows)
         })
@@ -104,32 +93,20 @@ impl GraphSource for RpcGraphSource {
 
     fn children<'a>(
         &'a self,
-        parents: &'a [EntityTarget],
+        parents: &'a [String],
         limit: usize,
     ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>> {
         Box::pin(async move {
             let mut rows = Vec::new();
-            let parents = parents
-                .iter()
-                .map(|parent| EntityTarget::default_collection(&parent.id))
-                .collect::<Vec<_>>();
-            for (collection, ids) in grouped_ids(&parents) {
-                if rows.len() >= limit {
+            for chunk in parents.chunks(50) {
+                let remaining = limit.saturating_sub(rows.len());
+                if remaining == 0 {
                     break;
                 }
-                for chunk in ids.chunks(50) {
-                    let remaining = limit.saturating_sub(rows.len());
-                    if remaining == 0 {
-                        break;
-                    }
-                    rows.extend(
-                        self.query(
-                            children_query(&collection),
-                            limited_params(chunk, remaining),
-                        )
+                rows.extend(
+                    self.query(children_query(), limited_params(chunk, remaining))
                         .await?,
-                    );
-                }
+                );
             }
             Ok(rows)
         })
@@ -153,17 +130,6 @@ impl GraphSource for RpcGraphSource {
     }
 }
 
-fn grouped_ids(targets: &[EntityTarget]) -> BTreeMap<String, Vec<String>> {
-    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for target in targets {
-        groups
-            .entry(target.collection_or_default().into())
-            .or_default()
-            .push(target.id.clone());
-    }
-    groups
-}
-
 fn ids_params(ids: &[String]) -> Object {
     let mut params = Object::new();
     params.insert(
@@ -180,16 +146,16 @@ fn limited_params(ids: &[String], limit: usize) -> Object {
 fn membership(alias: &str, name: &str) -> Expr {
     binary(BinaryOp::In, field(&[alias, name]), Expr::parameter("ids"))
 }
-fn entities_query(collection: &str) -> SelectQuery {
+fn entities_query() -> SelectQuery {
     select("entity")
-        .with_collection(collection)
+        .with_collection(DEFAULT_COLLECTION)
         .with_projection(vec![wildcard("entity")])
         .with_predicate(membership("entity", "id"))
         .with_order_by(vec![order(&["entity", "id"], SortDirection::Asc)])
 }
-fn children_query(collection: &str) -> SelectQuery {
+fn children_query() -> SelectQuery {
     select("child")
-        .with_collection(collection)
+        .with_collection(DEFAULT_COLLECTION)
         .with_projection(vec![wildcard("child")])
         .with_predicate(membership("child", ATTR_PARENT))
         .with_order_by(vec![
@@ -239,6 +205,107 @@ mod tests {
         query::{DdlBatch, DdlCollectionKind, DdlOperation, IntegrityMode, QueryInput},
         value::{FromValue, IntoValue},
     };
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct RecordingClient {
+        requests: Arc<Mutex<Vec<Value>>>,
+        response_sizes: Arc<Mutex<std::collections::VecDeque<usize>>>,
+    }
+
+    impl semantic_rpc::RpcClientDyn for RecordingClient {
+        fn invoke_value(
+            &self,
+            command: String,
+            payload: Value,
+        ) -> futures::future::BoxFuture<'static, Result<Value, semantic_rpc_core::RpcClientError>>
+        {
+            assert_eq!(command, "semantic.db.query");
+            self.requests.lock().unwrap().push(payload);
+            let count = self.response_sizes.lock().unwrap().pop_front().unwrap_or(0);
+            let rows = (0..count)
+                .map(|index| {
+                    let mut row = Object::new();
+                    row.insert("id", Value::String(format!("child-{index}")));
+                    Value::Object(row)
+                })
+                .collect();
+            let mut response = Object::new();
+            response.insert("rows", Value::List(rows));
+            Box::pin(async move { Ok(Value::Object(response)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_entities_use_default_collection_and_scope_in_bounded_batches() {
+        let client = RecordingClient::default();
+        let source = RpcGraphSource::new(RpcClient::new(client.clone()), Some("scope".into()));
+        let ids = (0..101)
+            .map(|index| format!("entity-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entities_query().collection.as_deref(),
+            Some(DEFAULT_COLLECTION)
+        );
+        source.entities(&ids).await.unwrap();
+        let expected = ids
+            .chunks(50)
+            .map(|chunk| query_payload(entities_query(), Some("scope"), Some(ids_params(chunk))))
+            .collect::<Vec<_>>();
+        assert_eq!(*client.requests.lock().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn rpc_children_share_the_limit_across_default_collection_batches() {
+        let client = RecordingClient::default();
+        client.response_sizes.lock().unwrap().extend([2, 1]);
+        let source = RpcGraphSource::new(RpcClient::new(client.clone()), Some("scope".into()));
+        let ids = (0..101)
+            .map(|index| format!("parent-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            children_query().collection.as_deref(),
+            Some(DEFAULT_COLLECTION)
+        );
+        assert_eq!(source.children(&ids, 3).await.unwrap().len(), 3);
+        assert_eq!(
+            *client.requests.lock().unwrap(),
+            vec![
+                query_payload(
+                    children_query(),
+                    Some("scope"),
+                    Some(limited_params(&ids[..50], 3))
+                ),
+                query_payload(
+                    children_query(),
+                    Some("scope"),
+                    Some(limited_params(&ids[50..100], 1))
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_empty_or_zero_limit_requests_do_not_query_and_relations_keep_scope() {
+        let client = RecordingClient::default();
+        let source = RpcGraphSource::new(RpcClient::new(client.clone()), Some("scope".into()));
+        let ids = vec!["root".into()];
+        assert!(source.entities(&[]).await.unwrap().is_empty());
+        assert!(source.children(&[], 3).await.unwrap().is_empty());
+        assert!(source.children(&ids, 0).await.unwrap().is_empty());
+        assert!(source.relation_edges(&[], 3).await.unwrap().is_empty());
+        assert!(source.relation_edges(&ids, 0).await.unwrap().is_empty());
+        assert!(client.requests.lock().unwrap().is_empty());
+        source.relation_edges(&ids, 7).await.unwrap();
+        assert_eq!(
+            *client.requests.lock().unwrap(),
+            vec![query_payload(
+                relations_query(),
+                Some("scope"),
+                Some(limited_params(&ids, 7))
+            )]
+        );
+    }
 
     #[test]
     fn query_parameters_and_ast_round_trip() {
@@ -251,11 +318,7 @@ mod tests {
             ]))
         );
         assert_eq!(params.get("limit"), Some(&Value::U64(51)));
-        for query in [
-            entities_query("custom"),
-            children_query("custom"),
-            relations_query(),
-        ] {
+        for query in [entities_query(), children_query(), relations_query()] {
             let value = query.clone().into_value();
             assert_eq!(SelectQuery::from_value(value).unwrap(), query);
         }
@@ -296,7 +359,7 @@ mod tests {
         }
         let result = db
             .query(QueryInput::ast_with_params(
-                entities_query("graph_test"),
+                entities_query().with_collection("graph_test"),
                 ids_params(&["a".into(), "c".into()]).into_iter().collect(),
             ))
             .await
@@ -307,7 +370,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         let result = db
             .query(QueryInput::ast_with_params(
-                children_query("graph_test"),
+                children_query().with_collection("graph_test"),
                 limited_params(&["root".into()], 1).into_iter().collect(),
             ))
             .await
