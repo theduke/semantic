@@ -5,16 +5,17 @@ use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt, stream};
 use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::{FieldPath, Object, Value};
+use semantic_data::vdb::{AcceptedScan, FilterSupport, ScanPlan, ScanRequest};
 
+use super::{FederatedEngine, FederatedError, FederationSources, QuerySource, SourceScan};
 use crate::catalog::{Catalog, CollectionKind, IntegrityMode, LocalCollectionId, SharedCatalog};
 use crate::{
     AccessPath, AsyncPhysicalDataSource, Backend, Batch, BatchOperation, BatchOutcome, BatchStats,
     CoreResult, DEFAULT_EXECUTION_BATCH_SIZE, DbError, DdlBatch, DdlOutcome, DeleteQuery,
-    DeleteResult, DynObject, EntityRecord, ExecutionOptions, Expr, FieldRef, InsertQuery,
-    InsertResult, InsertSource, JoinSource, LogicalJoinPlan, LogicalPlan, Operand, OrderBy,
-    PackageRegistrationOutcome, Query, QueryExplain, QueryField, QueryPlan, QueryResult,
-    SelectQuery, SendableRecordBatchStream, SourceRef, StorageErrorKind, TextQueryInput,
-    UpdateQuery, UpdateResult, evaluate_filter_expr, execute_physical_plan_collect,
+    DeleteResult, DynObject, EntityRecord, Expr, FieldRef, InsertQuery, InsertResult, InsertSource,
+    JoinSource, LogicalJoinPlan, LogicalPlan, Operand, OrderBy, PackageRegistrationOutcome, Query,
+    QueryExplain, QueryField, QueryPlan, QueryResult, SelectQuery, SendableRecordBatchStream,
+    SourceRef, StorageErrorKind, TextQueryInput, UpdateQuery, UpdateResult, evaluate_filter_expr,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +318,7 @@ impl FederatedBackend {
         })
     }
 
+    #[allow(dead_code)]
     fn normalize_select(
         &self,
         registry: &SourceRegistry,
@@ -346,6 +348,7 @@ impl FederatedBackend {
         Ok((query, source))
     }
 
+    #[allow(dead_code)]
     fn plan_select(
         &self,
         registry: &SourceRegistry,
@@ -363,12 +366,76 @@ impl FederatedBackend {
 
     async fn query_select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
         let registry = self.registry_snapshot()?;
-        let pair = self.plan_select(&registry, &query)?;
-        let source = Arc::new(FederatedAsyncPhysicalDataSource { registry });
-        let context = crate::QueryContext::new(self.catalog.catalog_arc());
-        execute_physical_plan_collect(pair.physical, source, context, ExecutionOptions::default())
+        let (engine, query) = self.engine_select(&registry, query)?;
+        engine
+            .select(query, &BTreeMap::new())
             .await
-            .map_err(|err| DbError::InvalidQuery(err.to_string()))
+            .map_err(legacy_engine_error)
+    }
+
+    fn engine_select(
+        &self,
+        registry: &SourceRegistry,
+        query: SelectQuery,
+    ) -> Result<(FederatedEngine, semantic_data::query::SelectQuery), DbError> {
+        let normalize = |select: &mut semantic_data::query::SelectQuery| -> Result<(), DbError> {
+            let base = self.resolve_collection(registry, select.collection.as_deref())?;
+            select.collection = Some(format!("{}.{}", base.source, base.collection));
+            for join in &mut select.joins {
+                let old = JoinSource {
+                    collection: join.source.collection.clone(),
+                    class: join.source.class.clone(),
+                };
+                if let Some(collection) = federated_join_collection(registry, &old) {
+                    if join.alias.is_none() {
+                        join.alias = join.source.class.clone();
+                    }
+                    join.source.collection = Some(collection);
+                    join.source.class = None;
+                } else {
+                    let resolved =
+                        self.resolve_collection(registry, join.source.collection.as_deref())?;
+                    join.source.collection =
+                        Some(format!("{}.{}", resolved.source, resolved.collection));
+                }
+            }
+            Ok(())
+        };
+        let mut query = semantic_data::query::Query::Select(query.into());
+        if let semantic_data::query::Query::Select(select) = &mut query {
+            normalize(select)?;
+        }
+        query.visit_expressions_mut(&mut |expr| {
+            if let semantic_data::query::Expr::Subquery(select)
+            | semantic_data::query::Expr::Exists { query: select, .. } = expr
+            {
+                normalize(select)?;
+            }
+            Ok::<(), DbError>(())
+        })?;
+        let mut catalog = (*self.catalog.catalog_arc()).clone();
+        for collection in super::referenced_collections(&query) {
+            if catalog.collection_by_name(&collection).is_none() {
+                catalog.upsert_collection(
+                    collection,
+                    CollectionKind::Polymorphic,
+                    IntegrityMode::Permissive,
+                )?;
+            }
+        }
+        let semantic_data::query::Query::Select(query) = query else {
+            unreachable!()
+        };
+        let engine = FederatedEngine::new(
+            Arc::new(catalog),
+            FederationSources {
+                local: Arc::new(LegacyQuerySource {
+                    registry: registry.clone(),
+                }),
+                virtual_sources: BTreeMap::new(),
+            },
+        );
+        Ok((engine, query))
     }
 
     async fn query_insert(&self, query: InsertQuery) -> std::result::Result<InsertResult, DbError> {
@@ -581,10 +648,22 @@ impl Backend for FederatedBackend {
             ));
         };
         let registry = self.registry_snapshot()?;
-        let pair = self.plan_select(&registry, &select)?;
+        let (engine, select) = self.engine_select(&registry, select)?;
+        let explain = engine
+            .explain(select, &BTreeMap::new())
+            .await
+            .map_err(legacy_engine_error)?;
+        let logical =
+            resolve_logical_sources(&registry, self.default_source.as_deref(), explain.logical)?;
+        let overlay = super::planner::overlay_catalog(&self.catalog.catalog_arc(), &[])?;
+        let physical = crate::Optimizer::core().lower_to_physical(
+            &logical,
+            None,
+            &crate::QueryContext::new(Arc::new(overlay)),
+        );
         Ok(QueryExplain {
-            logical: pair.logical,
-            physical: pair.physical,
+            logical,
+            physical,
             access_path: AccessPath::FullScan,
             analyze: None,
         })
@@ -646,10 +725,114 @@ struct ResolvedCollection {
     federated_collection: Option<String>,
 }
 
+fn legacy_engine_error(error: FederatedError) -> DbError {
+    match error {
+        FederatedError::Db(error) => error,
+        FederatedError::SchemaChanged { collection } => {
+            DbError::InvalidQuery(format!("schema_changed: {collection}"))
+        }
+    }
+}
+
+struct LegacyQuerySource {
+    registry: SourceRegistry,
+}
+
+impl LegacyQuerySource {
+    fn request(&self, collection: &str) -> Result<SourceScanRequest, DbError> {
+        let (source, collection) =
+            split_source_collection(&self.registry, collection).ok_or_else(|| {
+                DbError::InvalidQuery(format!("unknown federated collection '{collection}'"))
+            })?;
+        Ok(SourceScanRequest::full_scan(source, collection))
+    }
+}
+
+#[async_trait]
+impl QuerySource for LegacyQuerySource {
+    async fn negotiate(
+        &self,
+        collection: &str,
+        request: &ScanRequest,
+    ) -> Result<ScanPlan, DbError> {
+        let scan = self.request(collection)?;
+        let capabilities = self.registry.source(&scan.source)?.capabilities;
+        let filters = vec![
+            if capabilities.supports_filter_pushdown {
+                FilterSupport::Exact
+            } else {
+                FilterSupport::Unsupported
+            };
+            request.filters.len()
+        ];
+        let ordered_prefix = if capabilities.supports_order_pushdown {
+            request.order_by.len() as u64
+        } else {
+            0
+        };
+        let complete = filters
+            .iter()
+            .all(|support| *support == FilterSupport::Exact)
+            && ordered_prefix == request.order_by.len() as u64;
+        Ok(ScanPlan::Accepted {
+            plan: AcceptedScan {
+                filters,
+                ordered_prefix,
+                limit_applied: capabilities.supports_limit_pushdown
+                    && complete
+                    && request.offset == 0
+                    && request.limit.is_some(),
+                offset_applied: false,
+                estimated_rows: None,
+                token: None,
+                schema_revision: "legacy".into(),
+            },
+        })
+    }
+
+    fn scan(self: Arc<Self>, scan: SourceScan) -> SendableRecordBatchStream {
+        let request = self.request(&scan.collection).and_then(|mut request| {
+            request.predicate = super::pushdown::combine_filters(
+                scan.request
+                    .filters
+                    .into_iter()
+                    .zip(&scan.plan.filters)
+                    .filter(|(_, support)| **support == FilterSupport::Exact)
+                    .map(|(expr, _)| expr.into()),
+            );
+            request.order_by = scan
+                .request
+                .order_by
+                .into_iter()
+                .take(scan.plan.ordered_prefix as usize)
+                .map(Into::into)
+                .collect();
+            // Legacy scans do not consistently enforce offsets. Negotiation
+            // keeps pagination on the host when an offset is present.
+            if scan.plan.limit_applied {
+                request.limit = scan
+                    .request
+                    .limit
+                    .map(|limit| Expr::Operand(Operand::Literal(Value::U64(limit))));
+            }
+            let source = self.registry.source(&request.source)?.backend.clone();
+            Ok((source, request))
+        });
+        match request {
+            Ok((source, request)) => source.scan_stream(request),
+            Err(error) => Box::pin(stream::once(async move {
+                Err(crate::CoreError::new(error.to_string()))
+            })),
+        }
+    }
+}
+
+#[allow(dead_code)]
 struct FederatedAsyncPhysicalDataSource {
     registry: SourceRegistry,
 }
 
+#[allow(dead_code)]
 impl FederatedAsyncPhysicalDataSource {
     fn request_for_source(&self, source: &SourceRef) -> CoreResult<SourceScanRequest> {
         let source_name = source.backend_tag.clone().ok_or_else(|| {
@@ -971,6 +1154,18 @@ fn resolve_source_ref(
     default_source: Option<&str>,
     source: SourceRef,
 ) -> std::result::Result<SourceRef, DbError> {
+    if source.backend_tag.as_deref() == Some(super::LOCAL_SOURCE_TAG)
+        && let Some((tag, collection)) = source
+            .source_name
+            .as_deref()
+            .and_then(|name| split_source_collection(registry, name))
+    {
+        return Ok(SourceRef {
+            source_name: Some(collection),
+            backend_tag: Some(tag),
+            ..source
+        });
+    }
     if source.backend_tag.is_some() {
         return Ok(source);
     }
@@ -1703,6 +1898,82 @@ mod tests {
         assert!(scan.projection.is_empty());
         assert!(scan.limit.is_none());
         assert!(scan.order_by.is_empty());
+    }
+
+    #[test]
+    fn engine_adapter_preserves_nested_defaults_and_registered_tags() {
+        let local = Arc::new(MockSource::new(
+            &["users"],
+            BTreeMap::from([
+                (
+                    "users".into(),
+                    vec![
+                        row(&[("id", Value::String("u1".into()))]),
+                        row(&[("id", Value::String("u2".into()))]),
+                    ],
+                ),
+                (
+                    crate::DEFAULT_COLLECTION.into(),
+                    vec![row(&[("id", Value::String("fallback".into()))])],
+                ),
+            ]),
+        ));
+        let remote = Arc::new(MockSource::new(
+            &["members"],
+            rows("members", vec![row(&[("id", Value::String("u2".into()))])]),
+        ));
+        let db = FederatedBackend::new(Some("home".into()));
+        register(&db, "home", local, SourceCapabilities::default());
+        register(&db, "crm", remote.clone(), SourceCapabilities::default());
+        let Query::Select(nested) = run_async(db.parse_query(TextQueryInput::sql(
+            "SELECT id FROM users WHERE id IN (SELECT m.id FROM crm.members m)",
+        )))
+        .unwrap() else {
+            panic!("expected select")
+        };
+        for (query, expected) in [(nested, "u2"), (SelectQuery::new(), "fallback")] {
+            let rows = run_async(db.query_select(query)).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].get("id"), Some(&Value::String(expected.into())));
+        }
+        let explain =
+            run_async(db.explain(TextQueryInput::sql("SELECT * FROM crm.members"))).unwrap();
+        let crate::PhysicalPlan::Source(crate::PhysicalSource::Scan { source }) = explain.physical
+        else {
+            panic!("expected scan")
+        };
+        assert_eq!(source.backend_tag.as_deref(), Some("crm"));
+        assert_eq!(source.source_name.as_deref(), Some("members"));
+    }
+
+    #[test]
+    fn engine_adapter_keeps_offset_pagination_on_host() {
+        let source = Arc::new(MockSource::new(
+            &["users"],
+            rows(
+                "users",
+                vec![
+                    row(&[("id", Value::String("u1".into()))]),
+                    row(&[("id", Value::String("u2".into()))]),
+                ],
+            ),
+        ));
+        let db = FederatedBackend::new(Some("home".into()));
+        let caps = SourceCapabilities {
+            supports_limit_pushdown: true,
+            supports_order_pushdown: true,
+            ..SourceCapabilities::default()
+        };
+        register(&db, "home", source.clone(), caps);
+        let QueryResult::Select(rows) = run_async(db.query(TextQueryInput::sql(
+            "SELECT id FROM users ORDER BY id LIMIT 1 OFFSET 1",
+        )))
+        .unwrap() else {
+            panic!("expected select")
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("id"), Some(&Value::String("u2".into())));
+        assert!(source.last_scan().unwrap().limit.is_none());
     }
 }
 
