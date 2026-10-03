@@ -3,6 +3,7 @@ mod controls;
 mod edges;
 mod keyboard;
 mod node;
+mod origin;
 mod pipeline;
 mod state;
 use background::GraphBackground;
@@ -24,11 +25,12 @@ use crate::{
     layout::LayoutConfig,
 };
 use dioxus::prelude::*;
-use futures::StreamExt;
 use indexmap::{IndexMap, IndexSet};
 use keyboard::{KeyboardAction, keyboard_action};
+use origin::{NativeInputs, OriginCache, OriginRefresh};
 use pipeline::{CanvasEffect, CanvasInput, CanvasPipeline};
 use state::SelectionEvent;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +104,9 @@ fn apply_canvas_input<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'st
     config: CanvasConfig,
     input: CanvasInput,
 ) {
+    if controller.geometry.peek().limits != config.limits {
+        controller.geometry.write().limits = config.limits;
+    }
     let effects = pipeline.write().reduce(&model.peek(), input);
     for effect in effects {
         match effect {
@@ -110,10 +115,11 @@ fn apply_canvas_input<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'st
                 let mut geometry = controller.geometry.write();
                 geometry.rects = pipeline.rects.clone();
                 geometry.revision = pipeline.revision;
-                if let Some(container) = pipeline.container {
-                    geometry.container = container;
+            }
+            CanvasEffect::ContainerChanged => {
+                if let Some(container) = pipeline.peek().container {
+                    controller.geometry.write().container = container;
                 }
-                geometry.limits = config.limits;
             }
             CanvasEffect::FitView => controller.fit_view(),
             CanvasEffect::ScheduleTimeout(batch) => {
@@ -193,9 +199,16 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
     props: GraphCanvasProps<N, E>,
 ) -> Element {
     let fallback = use_graph_controller();
-    let mut controller = props.controller.unwrap_or(fallback);
+    let controller = props.controller.unwrap_or(fallback);
     let model = props.model;
-    let pipeline = use_signal(|| CanvasPipeline::new(&model.peek(), props.layout.clone()));
+    let pipeline = use_signal(|| {
+        CanvasPipeline::new(
+            &model.peek(),
+            props.layout.clone(),
+            *controller.revision.peek(),
+            *controller.reset_revision.peek(),
+        )
+    });
     let mut gesture = use_signal(GestureState::default);
     let mut mounted = use_signal(|| None::<Rc<MountedData>>);
     let config = props.config.clone();
@@ -206,12 +219,13 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
     let layout = props.layout.clone();
     let config = props.config.clone();
     use_effect(use_reactive!(|layout, config| {
+        let _ = config; // Config changes must synchronize controller limits as well.
         let _current = model.read();
         let revision = (controller.revision)();
+        let reset_revision = (controller.reset_revision)();
         apply.call(CanvasInput::ModelChanged);
         apply.call(CanvasInput::LayoutChanged(layout.clone(), revision));
-        // Limits can change without a model or layout change.
-        controller.geometry.write().limits = config.limits;
+        apply.call(CanvasInput::ResetPositions(reset_revision));
     }));
     let offsets = use_memo(move || parallel_edge_offsets(&model.read()));
     let mut visibility = use_signal(|| CanvasVisibility {
@@ -318,25 +332,51 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
             }
         }
     });
-    let native_inputs = use_coroutine(
-        move |mut receiver: UnboundedReceiver<GestureInput>| async move {
-            let mut origin = Point::default();
-            while let Some(input) = receiver.next().await {
-                if let Some(element) = mounted.peek().clone()
-                    && let Ok(rect) = element.get_client_rect().await
-                {
-                    origin = Point::new(rect.origin.x, rect.origin.y);
+    let origin = use_hook(|| Rc::new(RefCell::new(OriginCache::default())));
+    let native = use_hook(|| Rc::new(RefCell::new(NativeInputs::default())));
+    let resized = use_callback(move |size| {
+        if pipeline.peek().container != Some(size) {
+            apply.call(CanvasInput::ContainerResized(size));
+        }
+    });
+    let refresh_origin = use_callback({
+        let refresh = OriginRefresh {
+            cache: origin.clone(),
+            inputs: native.clone(),
+            mounted,
+            gesture,
+            resized,
+            dispatch,
+        };
+        move |()| refresh.request()
+    });
+    use_hook(move || Rc::new(platform::listen_for_scroll(refresh_origin)));
+    let send_input = use_callback({
+        let origin = origin.clone();
+        let native = native.clone();
+        move |event: GestureInput| {
+            #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+            {
+                let needs_origin = gesture
+                    .peek()
+                    .requires_fresh_origin(&event, props.config.wheel_mode);
+                let gated = native.borrow().gated();
+                if needs_origin || gated {
+                    native.borrow_mut().push(event);
+                    if needs_origin {
+                        refresh_origin.call(());
+                    }
+                    return;
                 }
-                dispatch.call((input, origin));
             }
-        },
-    );
-    let send_input = use_callback(move |input| {
-        if let Some(origin) = platform::client_origin(mounted.peek().as_deref()) {
-            dispatch.call((input, origin));
-        } else {
-            // Native mounted queries are async: preserve input order while refreshing.
-            native_inputs.send(input);
+            #[cfg(all(feature = "web", target_arch = "wasm32"))]
+            let _ = &native;
+            if OriginCache::refresh_for_input(&event, props.config.wheel_mode) {
+                refresh_origin.call(());
+            }
+            // Ordinary pan/drag input uses the cache unless an earlier input is awaiting bounds.
+            let cached = origin.borrow().point();
+            dispatch.call((event, cached));
         }
     });
     let activate = use_callback(move |event: NodeEvent| {
@@ -367,15 +407,8 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
     });
     let on_mounted = move |event: MountedEvent| {
         let element = event.data();
-        mounted.set(Some(element.clone()));
-        spawn(async move {
-            if let Ok(rect) = element.get_client_rect().await {
-                apply.call(CanvasInput::ContainerResized(Size::new(
-                    rect.size.width,
-                    rect.size.height,
-                )));
-            }
-        });
+        mounted.set(Some(element));
+        refresh_origin.call(());
     };
     let on_resize = move |event: ResizeEvent| {
         if let Ok(size) = event.get_border_box_size() {
@@ -384,6 +417,7 @@ pub fn GraphCanvas<N: Clone + PartialEq + 'static, E: Clone + PartialEq + 'stati
                 size.height,
             )));
         }
+        refresh_origin.call(());
     };
     let on_pointer_down = move |event: PointerEvent| {
         send_input.call(input::pointer_down(

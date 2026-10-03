@@ -28,6 +28,8 @@ pub fn EntityGraphView(
     let key = session_key(&root, mode, scope.as_deref());
     // Dioxus uses keys when reconciling dynamic sibling lists. A statically
     // positioned child keeps its scope even if its VNode key changes.
+    // Upstream 0.7.9 keyed-fragment reconciliation:
+    // https://github.com/DioxusLabs/dioxus/blob/v0.7.9/packages/core/src/diff/iterator.rs#L8-L29
     rsx! {
         for key in [key] {
             EntityGraphSession {
@@ -59,13 +61,7 @@ impl GraphLoadContext {
         let Some(request) = explorer.write().begin_expand(&id) else {
             return;
         };
-        let known = explorer
-            .peek()
-            .model()
-            .nodes()
-            .filter_map(|node| node.data.target().cloned())
-            .collect::<Vec<_>>();
-        let result = load_expansion(&self.source, &request, &self.catalog, &known).await;
+        let result = load_expansion(&self.source, &request, &self.catalog).await;
         // Collapse can cancel an expansion while its request is still pending.
         if !explorer.peek().is_loading(&id) {
             return;
@@ -120,9 +116,9 @@ fn presentation_model(
         .map(|edge| edge.id.clone())
         .collect::<Vec<_>>();
     for id in edges {
-        if let Some(edge) = model.edge_mut(&id) {
-            edge.style.source_anchor = anchors.0;
-            edge.style.target_anchor = anchors.1;
+        if let Some(style) = model.edge_style_mut(&id) {
+            style.source_anchor = anchors.0;
+            style.target_anchor = anchors.1;
         }
     }
     model
@@ -134,7 +130,6 @@ fn node_title(data: &EntityNodeData, catalog: &UiCatalog) -> String {
             .as_ref()
             .map(|object| catalog.entity_title(object))
             .unwrap_or_else(|| target.id.clone()),
-        EntityNodeData::Ambiguous { id, .. } => id.clone(),
         EntityNodeData::Overflow { .. } => "More…".into(),
     }
 }
@@ -149,6 +144,8 @@ fn EntityGraphSession(
 ) -> Element {
     let catalog = use_ui_catalog();
     let source = RpcGraphSource::new(use_rpc_client(), use_active_scope_id());
+    let own_controller = dxgraph::use_graph_controller();
+    let controller = controller.unwrap_or(own_controller);
     let mut explorer =
         use_signal(|| EntityGraphExplorer::new(root.clone(), mode, ExplorerLimits::default()));
     let mut selected = use_signal(|| None::<NodeId>);
@@ -222,7 +219,6 @@ fn EntityGraphSession(
     });
     let select_node = move |event: NodeEvent| selected.set(Some(event.id));
     let activate_node = move |event: NodeEvent| on_toggle.call(event.id);
-    let pin_node = move |(id, position)| explorer.write().pin(&id, position);
     let select_nodes = move |ids: Vec<NodeId>| selected.set(ids.first().cloned());
     rsx! {
         style { {include_str!("graph.css")} }
@@ -275,7 +271,6 @@ fn EntityGraphSession(
                     controller,
                     on_node_click: select_node,
                     on_node_activate: activate_node,
-                    on_node_moved: pin_node,
                     on_selection_change: select_nodes,
                     if let Some((id, data)) = detail {
                         NoDrag {
@@ -345,10 +340,6 @@ fn EntityGraphSession(
                                                 "Open"
                                             }
                                         }
-                                    } else if matches!(data, EntityNodeData::Ambiguous { .. }) {
-                                        p {
-                                            "The relationship index does not identify a unique collection for this entity."
-                                        }
                                     } else {
                                         p { "More entities exist beyond the graph's display limit." }
                                     }
@@ -397,7 +388,6 @@ pub fn EntityGraphNode(
     let hue = hues[color as usize];
     let kind = match &data {
         EntityNodeData::Overflow { .. } => "overflow",
-        EntityNodeData::Ambiguous { .. } => "ambiguous",
         EntityNodeData::Entity { object: None, .. } => "unresolved",
         _ => "entity",
     };
@@ -434,8 +424,6 @@ pub fn EntityGraphNode(
                             }
                         }
                     }
-                } else if matches!(data, EntityNodeData::Ambiguous { .. }) {
-                    span { class: "semantic-graph-node__class", "Unresolved collection" }
                 }
             }
         }
@@ -495,6 +483,7 @@ mod tests {
                     target: node_id(&child),
                     kind: EntityEdgeKind::Parent,
                 }],
+                ..Default::default()
             },
         );
         assert_eq!(

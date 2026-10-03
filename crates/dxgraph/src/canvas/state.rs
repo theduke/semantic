@@ -42,21 +42,10 @@ impl CanvasState {
             _ => {}
         }
     }
-    /// Border-box sizes are unscaled. Small resize noise must not restart layout.
-    pub fn measure(&mut self, id: NodeId, size: Size) -> bool {
-        if !size.width.is_finite()
-            || !size.height.is_finite()
-            || size.width <= 0.0
-            || size.height <= 0.0
-        {
-            return false;
-        }
+    /// Store a validated Full-detail measurement; significance belongs to the pipeline.
+    pub fn measure(&mut self, id: NodeId, size: Size) {
         self.pending.shift_remove(&id);
-        let changed = self.measured.get(&id).is_none_or(|old| {
-            (old.width - size.width).abs() > 8.0 || (old.height - size.height).abs() > 8.0
-        });
         self.measured.insert(id, size);
-        changed
     }
 
     pub fn merge_positions<N, E>(
@@ -232,14 +221,6 @@ mod tests {
         assert!(reduce_selection(&selection, SelectionEvent::Clear).is_empty());
     }
     #[test]
-    fn small_measurements_are_retained_without_requesting_layout() {
-        let mut state = CanvasState::default();
-        assert!(state.measure("a".into(), Size::new(100.0, 50.0)));
-        assert!(!state.measure("a".into(), Size::new(107.0, 51.0)));
-        assert_eq!(state.measured[&NodeId::from("a")], Size::new(107.0, 51.0));
-        assert!(state.measure("a".into(), Size::new(116.0, 51.0)));
-    }
-    #[test]
     fn drag_effects_keep_position_and_mark_moved() {
         use crate::interaction::GestureEffect;
         let mut state = CanvasState::default();
@@ -303,7 +284,7 @@ mod tests {
     fn layout_signature_ignores_payload_changes() {
         let mut model = signature_fixture();
         let before = layout_signature(&model);
-        model.node_mut(&"a".into()).unwrap().data = "two".into();
+        *model.node_data_mut(&"a".into()).unwrap() = "two".into();
         assert_eq!(layout_signature(&model), before);
     }
 

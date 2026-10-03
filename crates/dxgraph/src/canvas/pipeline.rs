@@ -6,6 +6,7 @@ use crate::interaction::GestureEffect;
 use crate::layout::{LayoutConfig, LayoutEdge, LayoutInput, LayoutNode, run_layout};
 use crate::{GraphModel, NodeId, Rect, Size};
 use indexmap::IndexMap;
+use std::rc::Rc;
 
 pub(super) fn rects<N, E>(model: &GraphModel<N, E>, state: &CanvasState) -> IndexMap<NodeId, Rect> {
     model
@@ -89,6 +90,7 @@ pub(super) enum CanvasInput {
     Start,
     ModelChanged,
     LayoutChanged(LayoutConfig, u64),
+    ResetPositions(u64),
     Measured {
         id: NodeId,
         size: Size,
@@ -104,6 +106,7 @@ pub(super) enum CanvasInput {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum CanvasEffect {
     RectsChanged,
+    ContainerChanged,
     FitView,
     ScheduleTimeout(u64),
     ScheduleMeasurements(u64),
@@ -113,11 +116,12 @@ pub(super) enum CanvasEffect {
 /// The UI only applies effects and renders the stored rectangles.
 pub(super) struct CanvasPipeline {
     pub state: CanvasState,
-    pub rects: IndexMap<NodeId, Rect>,
+    pub rects: Rc<IndexMap<NodeId, Rect>>,
     pub revision: u64,
     pub container: Option<Size>,
     layout: LayoutConfig,
     layout_revision: u64,
+    reset_revision: u64,
     signature: Vec<String>,
     batch: u64,
     flush: u64,
@@ -130,14 +134,20 @@ pub(super) struct CanvasPipeline {
 }
 
 impl CanvasPipeline {
-    pub fn new<N, E>(model: &GraphModel<N, E>, layout: LayoutConfig) -> Self {
+    pub fn new<N, E>(
+        model: &GraphModel<N, E>,
+        layout: LayoutConfig,
+        layout_revision: u64,
+        reset_revision: u64,
+    ) -> Self {
         let mut pipeline = Self {
             state: CanvasState::default(),
-            rects: IndexMap::new(),
+            rects: Rc::default(),
             revision: 0,
             container: None,
             layout,
-            layout_revision: 0,
+            layout_revision,
+            reset_revision,
             signature: super::state::layout_signature(model),
             batch: 1,
             flush: 0,
@@ -184,6 +194,14 @@ impl CanvasPipeline {
                     self.restart_measurement(model, false, &mut effects);
                 }
             }
+            CanvasInput::ResetPositions(revision) => {
+                if self.reset_revision != revision {
+                    self.reset_revision = revision;
+                    self.state.moved.clear();
+                    self.state.stable.clear();
+                    self.restart_measurement(model, false, &mut effects);
+                }
+            }
             CanvasInput::Measured { id, size, detail } => {
                 // Measurements belong to Full detail, including the initial hidden pass.
                 if detail != NodeDetail::Full || model.node(&id).is_none() || !valid_size(size) {
@@ -221,7 +239,7 @@ impl CanvasPipeline {
             CanvasInput::ContainerResized(size) => {
                 if valid_size(size) && self.container != Some(size) {
                     self.container = Some(size);
-                    effects.push(CanvasEffect::RectsChanged);
+                    effects.push(CanvasEffect::ContainerChanged);
                 }
             }
             CanvasInput::Gesture(effect) => {
@@ -304,8 +322,8 @@ impl CanvasPipeline {
 
     fn refresh_rects<N, E>(&mut self, model: &GraphModel<N, E>, effects: &mut Vec<CanvasEffect>) {
         let rects = rects(model, &self.state);
-        if self.rects != rects {
-            self.rects = rects;
+        if *self.rects != rects {
+            self.rects = Rc::new(rects);
             self.revision += 1;
             effects.push(CanvasEffect::RectsChanged);
         }
@@ -364,6 +382,8 @@ mod tests {
         let pipeline = CanvasPipeline::new(
             &model,
             LayoutConfig::Custom(Rc::new(CountingLayout(count.clone()))),
+            0,
+            0,
         );
         (model, pipeline, count)
     }
@@ -621,6 +641,104 @@ mod tests {
         assert_eq!(other_count.get(), 1);
     }
 
+    #[test]
+    fn remount_starts_with_current_controller_revisions() {
+        let (model, _, count) = fixture();
+        let layout = LayoutConfig::Custom(Rc::new(CountingLayout(count.clone())));
+        let mut pipeline = CanvasPipeline::new(&model, layout.clone(), 7, 3);
+        let before = count.get();
+        pipeline.reduce(&model, CanvasInput::Start);
+        pipeline.reduce(&model, CanvasInput::LayoutChanged(layout, 7));
+        pipeline.reduce(&model, CanvasInput::ResetPositions(3));
+        assert_eq!(count.get(), before);
+    }
+
+    #[test]
+    fn container_resize_preserves_shared_rects_and_emits_only_container_change() {
+        let (model, mut pipeline, _) = fixture();
+        let rects = pipeline.rects.clone();
+        let revision = pipeline.revision;
+        let effects = pipeline.reduce(
+            &model,
+            CanvasInput::ContainerResized(Size::new(600.0, 400.0)),
+        );
+        assert_eq!(effects, vec![CanvasEffect::ContainerChanged]);
+        assert!(Rc::ptr_eq(&rects, &pipeline.rects));
+        assert_eq!(revision, pipeline.revision);
+        assert!(
+            pipeline
+                .reduce(
+                    &model,
+                    CanvasInput::ContainerResized(Size::new(600.0, 400.0))
+                )
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn resetting_positions_releases_dragged_nodes_for_automatic_layout() {
+        let (model, mut pipeline, count) = fixture();
+        settle(&mut pipeline, &model);
+        let original = pipeline.state.positions[&NodeId::from("a")];
+        pipeline.reduce(
+            &model,
+            CanvasInput::Gesture(GestureEffect::NodeDragEnd {
+                node: "a".into(),
+                position: Point::new(100.0, 200.0),
+            }),
+        );
+        let layout = pipeline.layout.clone();
+        pipeline.reduce(&model, CanvasInput::LayoutChanged(layout, 1));
+        assert_eq!(
+            pipeline.state.positions[&NodeId::from("a")],
+            Point::new(100.0, 200.0)
+        );
+        pipeline.reduce(&model, CanvasInput::ResetPositions(1));
+        assert!(pipeline.state.moved.is_empty());
+        assert!(pipeline.state.stable.is_empty());
+        assert_eq!(pipeline.state.positions[&NodeId::from("a")], original);
+        let before = count.get();
+        assert!(
+            pipeline
+                .reduce(&model, CanvasInput::ResetPositions(1))
+                .is_empty()
+        );
+        assert_eq!(count.get(), before);
+    }
+
+    #[test]
+    fn reset_and_relayout_keep_explicit_model_pins() {
+        let mut model = GraphModel::<(), ()>::default();
+        let mut pinned = GraphNode::new("a", ());
+        let pin = Point::new(700.0, 900.0);
+        pinned.position = Some(pin);
+        pinned.pinned = true;
+        model.insert_node(pinned).unwrap();
+        model.insert_node(GraphNode::new("b", ())).unwrap();
+        let mut pipeline = CanvasPipeline::new(&model, LayoutConfig::default(), 0, 0);
+        settle(&mut pipeline, &model);
+        assert_eq!(pipeline.state.positions[&NodeId::from("a")], pin);
+        let original = pipeline.state.positions[&NodeId::from("b")];
+        let dragged = Point::new(100.0, 200.0);
+        pipeline.reduce(
+            &model,
+            CanvasInput::Gesture(GestureEffect::NodeDragEnd {
+                node: "b".into(),
+                position: dragged,
+            }),
+        );
+        pipeline.reduce(
+            &model,
+            CanvasInput::LayoutChanged(pipeline.layout.clone(), 1),
+        );
+        assert_eq!(pipeline.state.positions[&NodeId::from("a")], pin);
+        assert_eq!(pipeline.state.positions[&NodeId::from("b")], dragged);
+        pipeline.reduce(&model, CanvasInput::ResetPositions(1));
+        assert!(pipeline.state.moved.is_empty());
+        assert_eq!(pipeline.state.positions[&NodeId::from("a")], pin);
+        assert_eq!(pipeline.state.positions[&NodeId::from("b")], original);
+        assert!(model.node(&"a".into()).unwrap().pinned);
+    }
     #[test]
     fn invalid_measurements_leave_initial_batch_pending() {
         let (model, mut pipeline, count) = fixture();

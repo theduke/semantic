@@ -99,6 +99,28 @@ pub struct GestureState {
     last_click: Option<Click>,
 }
 impl GestureState {
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    pub(crate) fn requires_fresh_origin(
+        &self,
+        input: &GestureInput,
+        wheel_mode: WheelMode,
+    ) -> bool {
+        match input {
+            GestureInput::Wheel { ctrl, .. } => *ctrl || wheel_mode == WheelMode::Zoom,
+            GestureInput::PointerDown {
+                pointer, primary, ..
+            } => *primary && self.pointers.len() == 1 && !self.pointers.contains_key(pointer),
+            GestureInput::PointerUp {
+                pointer, client, ..
+            } => {
+                matches!(&self.mode, Mode::Pending(press) if press.pointer == *pointer && press.target == GestureTarget::Background && press.client.distance(*client) <= DRAG_THRESHOLD)
+            }
+            _ => false,
+        }
+    }
+    pub(crate) fn active_pointers(&self) -> Vec<i32> {
+        self.pointers.keys().copied().collect()
+    }
     pub fn handle(&mut self, input: GestureInput, ctx: &GestureContext<'_>) -> Vec<GestureEffect> {
         let mut effects = Vec::new();
         match input {

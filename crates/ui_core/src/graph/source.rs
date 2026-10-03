@@ -45,8 +45,7 @@ pub trait GraphSource {
         &'a self,
         ids: &'a [EntityTarget],
     ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>>;
-    /// V1 hierarchy queries search each parent's own collection. An id-only
-    /// `semantic:parent` cannot identify cross-collection hierarchies safely.
+    /// Hierarchy children are entities in the default collection.
     fn children<'a>(
         &'a self,
         parents: &'a [EntityTarget],
@@ -110,7 +109,11 @@ impl GraphSource for RpcGraphSource {
     ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>> {
         Box::pin(async move {
             let mut rows = Vec::new();
-            for (collection, ids) in grouped_ids(parents) {
+            let parents = parents
+                .iter()
+                .map(|parent| EntityTarget::default_collection(&parent.id))
+                .collect::<Vec<_>>();
+            for (collection, ids) in grouped_ids(&parents) {
                 if rows.len() >= limit {
                     break;
                 }

@@ -22,6 +22,7 @@ use std::{
 struct PendingClient {
     requests: Arc<Mutex<Vec<Value>>>,
     cancelled: Arc<AtomicUsize>,
+    complete: bool,
 }
 
 struct PendingRequest(Arc<AtomicUsize>);
@@ -38,7 +39,33 @@ impl RpcClientDyn for PendingClient {
         payload: Value,
     ) -> futures::future::BoxFuture<'static, Result<Value, RpcClientError>> {
         assert_eq!(command, "semantic.db.query");
-        self.requests.lock().unwrap().push(payload);
+        self.requests.lock().unwrap().push(payload.clone());
+        if self.complete {
+            let Value::Object(payload) = payload else {
+                panic!("query payload")
+            };
+            let Some(Value::Object(params)) = payload.get("params") else {
+                panic!("query params")
+            };
+            let rows = if params.get("limit").is_some() {
+                Vec::new()
+            } else {
+                let Some(Value::List(ids)) = params.get("ids") else {
+                    panic!("query ids")
+                };
+                ids.iter()
+                    .map(|id| {
+                        let mut object = semantic_data::value::Object::new();
+                        object.insert("id", id.clone());
+                        object.insert("semantic:title", Value::String("Loaded root".into()));
+                        Value::Object(object)
+                    })
+                    .collect()
+            };
+            let mut response = semantic_data::value::Object::new();
+            response.insert("rows", Value::List(rows));
+            return Box::pin(async move { Ok(Value::Object(response)) });
+        }
         let request = PendingRequest(self.cancelled.clone());
         Box::pin(async move {
             let _request = request;
@@ -59,6 +86,8 @@ struct HarnessProps {
     client: PendingClient,
     inputs: Rc<Cell<Option<Signal<SessionInputs>>>>,
     scope: Rc<Cell<Option<Signal<Option<String>>>>>,
+    controller: Rc<Cell<Option<dxgraph::GraphController>>>,
+    supply_controller: bool,
 }
 
 fn view_harness(props: HarnessProps) -> Element {
@@ -68,6 +97,7 @@ fn view_harness(props: HarnessProps) -> Element {
         layout: LayoutConfig::Manual,
     });
     let scope = use_signal(|| Some("scope-a".to_string()));
+    let controller = dxgraph::use_graph_controller();
     let catalog = use_signal(|| Some(UiCatalog::empty()));
     use_context_provider(|| UiScopeContext::new(scope));
     use_context_provider(|| UiCatalogContext::new(catalog));
@@ -77,6 +107,7 @@ fn view_harness(props: HarnessProps) -> Element {
     use_hook(|| {
         props.inputs.set(Some(inputs));
         props.scope.set(Some(scope));
+        props.controller.set(Some(controller));
     });
     let inputs = inputs.read();
     rsx! {
@@ -84,6 +115,7 @@ fn view_harness(props: HarnessProps) -> Element {
             root: inputs.root.clone(),
             mode: inputs.mode,
             layout: inputs.layout.clone(),
+            controller: props.supply_controller.then_some(controller),
         }
     }
 }
@@ -94,12 +126,23 @@ struct Harness {
 }
 impl Harness {
     fn new() -> Self {
-        let props = HarnessProps::default();
+        Self::with_controller(false)
+    }
+    fn with_controller(supply_controller: bool) -> Self {
+        Self::with_props(HarnessProps {
+            supply_controller,
+            ..Default::default()
+        })
+    }
+    fn with_props(props: HarnessProps) -> Self {
         let mut dom = VirtualDom::new_with_props(view_harness, props.clone());
         dom.rebuild_in_place();
         let mut harness = Self { dom, props };
         harness.flush();
-        assert_eq!(harness.request_count(), 1);
+        assert_eq!(
+            harness.request_count(),
+            if harness.props.client.complete { 2 } else { 1 }
+        );
         harness
     }
     fn flush(&mut self) {
@@ -181,4 +224,53 @@ fn layout_change_preserves_the_entity_graph_session_and_pending_load() {
     harness.flush();
     assert_eq!(harness.request_count(), 1);
     assert_eq!(harness.cancelled(), 0);
+}
+
+#[test]
+fn supplied_controller_reset_preserves_the_entity_graph_session_and_pending_load() {
+    let mut harness = Harness::with_controller(true);
+    harness.props.controller.get().unwrap().reset_positions();
+    harness.flush();
+    assert_eq!(harness.request_count(), 1);
+    assert_eq!(harness.cancelled(), 0);
+}
+
+#[tokio::test]
+async fn loaded_fallback_controller_preserves_layout_updates_and_remounts_with_root() {
+    let mut harness = Harness::with_props(HarnessProps {
+        client: PendingClient {
+            complete: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let html = dioxus_ssr::render(&harness.dom);
+    assert!(html.contains("dxgraph-world"));
+    assert!(html.contains("Loaded root"));
+    harness.inputs().write().layout = LayoutConfig::default();
+    harness.flush();
+    assert_eq!(harness.request_count(), 2);
+    assert!(dioxus_ssr::render(&harness.dom).contains("root-a"));
+    harness.inputs().write().root = EntityTarget::default_collection("root-b");
+    harness.flush();
+    assert_eq!(harness.request_count(), 4);
+    let html = dioxus_ssr::render(&harness.dom);
+    assert!(html.contains("root-b"));
+    assert!(!html.contains("root-a"));
+}
+
+#[tokio::test]
+async fn loaded_supplied_controller_reset_preserves_the_session_and_loaded_entities() {
+    let mut harness = Harness::with_props(HarnessProps {
+        client: PendingClient {
+            complete: true,
+            ..Default::default()
+        },
+        supply_controller: true,
+        ..Default::default()
+    });
+    harness.props.controller.get().unwrap().reset_positions();
+    harness.flush();
+    assert_eq!(harness.request_count(), 2);
+    assert!(dioxus_ssr::render(&harness.dom).contains("Loaded root"));
 }

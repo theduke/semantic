@@ -152,6 +152,10 @@ pub fn GraphPage(
                     }
                 }
                 dxcomp::button::Button { onclick: move |_| controller.relayout(), "Re-layout" }
+                dxcomp::button::Button {
+                    onclick: move |_| controller.reset_positions(),
+                    "Reset positions"
+                }
                 dxcomp::button::Button { onclick: move |_| controller.fit_view(), "Fit" }
                 Link {
                     to: Route::BrowsePage {

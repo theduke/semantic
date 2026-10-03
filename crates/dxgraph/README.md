@@ -57,7 +57,9 @@ cycles become a spanning forest for tree layouts.
 
 The canvas keeps dragged positions for its lifetime and emits `on_node_moved`.
 The caller decides whether to persist the position and set the model node's
-`pinned` flag. Incremental expansion retains existing positions. Calling
+`pinned` flag. `controller.reset_positions()` clears canvas drag positions and
+returns them to automatic layout. Explicit model pins remain caller-owned and fixed.
+Incremental expansion retains existing positions. Calling
 `controller.relayout()` or changing `layout` requests
 a fresh layout, while user-moved and pinned nodes remain fixed.
 

@@ -3432,11 +3432,11 @@ dependencies = [
  "dioxus-sdk-time",
  "dioxus-ssr",
  "dxcomp",
- "futures",
  "indexmap",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "wasm-bindgen",
  "web-sys",
 ]
 

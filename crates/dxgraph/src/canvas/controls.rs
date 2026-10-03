@@ -1,6 +1,7 @@
 use crate::{NodeId, Point, Rect, Size, Viewport, ViewportLimits};
 use dioxus::prelude::*;
 use indexmap::IndexMap;
+use std::rc::Rc;
 
 const FIT_PADDING: f64 = 40.0;
 
@@ -8,7 +9,7 @@ const FIT_PADDING: f64 = 40.0;
 pub(crate) struct ControllerGeometry {
     pub revision: u64,
     pub container: Size,
-    pub rects: IndexMap<NodeId, Rect>,
+    pub rects: Rc<IndexMap<NodeId, Rect>>,
     pub limits: ViewportLimits,
 }
 impl Default for ControllerGeometry {
@@ -19,24 +20,27 @@ impl Default for ControllerGeometry {
                 width: 800.0,
                 height: 600.0,
             },
-            rects: IndexMap::new(),
+            rects: Rc::default(),
             limits: ViewportLimits::default(),
         }
     }
 }
 
-/// A canvas handle. Callers own durable positions; this handle owns the viewport.
+/// Controls the viewport and transient canvas drag positions.
+/// Callers own durable positions configured through model pins.
 #[derive(Clone, Copy, PartialEq)]
 pub struct GraphController {
     pub(crate) viewport: Signal<Viewport>,
     pub(crate) geometry: Signal<ControllerGeometry>,
     pub(crate) revision: Signal<u64>,
+    pub(crate) reset_revision: Signal<u64>,
 }
 pub fn use_graph_controller() -> GraphController {
     GraphController {
         viewport: use_signal(Viewport::default),
         geometry: use_signal(ControllerGeometry::default),
         revision: use_signal(|| 0),
+        reset_revision: use_signal(|| 0),
     }
 }
 impl GraphController {
@@ -96,6 +100,12 @@ impl GraphController {
             drop(geometry);
             self.viewport.set(viewport);
         }
+    }
+    /// Return canvas-owned dragged positions to automatic layout.
+    /// Explicit model pins remain fixed; callers own those durable positions.
+    pub fn reset_positions(mut self) {
+        let next = *self.reset_revision.peek() + 1;
+        self.reset_revision.set(next);
     }
     pub fn relayout(mut self) {
         let next = *self.revision.peek() + 1;

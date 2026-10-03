@@ -6,41 +6,11 @@ use super::{
 use crate::{EntityTarget, UiCatalog};
 use semantic_data::{
     attr::ATTR_PARENT,
+    builtin::DEFAULT_COLLECTION,
     schema::{RelationMode, RelationType},
     value::Value,
 };
-use std::collections::BTreeMap;
-
-/// Edge rows omit target collections. Only schema sources or unique known
-/// entities can identify an endpoint; unknown targets stay non-navigable.
-pub fn resolve_endpoint(
-    id: &str,
-    source: bool,
-    relation: Option<&RelationType>,
-    known: &[EntityTarget],
-) -> EntityNodeData {
-    if source && let Some(relation) = relation {
-        return entity_data(
-            EntityTarget::new(Some(relation.source_collection.clone()), id),
-            None,
-        );
-    }
-    let candidates = known
-        .iter()
-        .filter(|target| target.id == id)
-        .map(|target| (target.collection_or_default().to_owned(), target.clone()))
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect::<Vec<_>>();
-    if candidates.len() == 1 {
-        entity_data(candidates[0].clone(), None)
-    } else {
-        EntityNodeData::Ambiguous {
-            id: id.to_owned(),
-            candidates,
-        }
-    }
-}
+use std::collections::{BTreeMap, BTreeSet};
 
 fn embedded_parent(relation: &RelationType) -> bool {
     matches!(&relation.mode, RelationMode::Embedded { attribute } if attribute == ATTR_PARENT)
@@ -75,18 +45,18 @@ pub async fn load_expansion(
     source: &dyn GraphSource,
     request: &ExpansionRequest,
     catalog: &UiCatalog,
-    known: &[EntityTarget],
 ) -> Result<ExpansionResult, String> {
     let mut result = ExpansionResult::default();
-    if request.mode != GraphMode::Relations {
-        let objects = source
-            .children(std::slice::from_ref(&request.target), request.limit)
-            .await?;
+    if request.mode != GraphMode::Relations
+        && request.target.collection_or_default() == DEFAULT_COLLECTION
+    {
+        let parent = EntityTarget::default_collection(&request.target.id);
+        let objects = source.children(&[parent], request.limit).await?;
         for object in objects {
             let Some(id) = object.get("id").and_then(Value::as_str) else {
                 continue;
             };
-            let target = EntityTarget::new(request.target.collection.clone(), id);
+            let target = EntityTarget::default_collection(id);
             result.edges.push(ExpansionEdge {
                 source: request.node.clone(),
                 target: node_id(&target),
@@ -96,20 +66,10 @@ pub async fn load_expansion(
         }
     }
     if request.mode != GraphMode::Hierarchy {
-        let known = known
-            .iter()
-            .cloned()
-            .chain(
-                result
-                    .nodes
-                    .iter()
-                    .filter_map(|node| node.target().cloned()),
-            )
-            .collect::<Vec<_>>();
         let rows = source
             .relation_edges(std::slice::from_ref(&request.target.id), request.limit)
             .await?;
-        let mut targets = BTreeMap::new();
+        let mut targets = BTreeSet::new();
         for row in rows {
             let relation = catalog
                 .snapshot()
@@ -120,10 +80,10 @@ pub async fn load_expansion(
             if request.mode == GraphMode::Both && relation.is_some_and(embedded_parent) {
                 continue;
             }
-            let source_target = resolve_endpoint(&row.source, true, relation, &known);
-            let target = resolve_endpoint(&row.target, false, relation, &known);
-            // An id-only edge query can return another collection's entity with the same id.
-            if source_target.id() != request.node && target.id() != request.node {
+            let source = EntityTarget::default_collection(&row.source);
+            let target = EntityTarget::default_collection(&row.target);
+            // An id-only query can also match a non-entity root with the same id.
+            if node_id(&source) != request.node && node_id(&target) != request.node {
                 continue;
             }
             let label = relation
@@ -135,25 +95,22 @@ pub async fn load_expansion(
                         .unwrap_or_else(|| relation.name.clone())
                 })
                 .unwrap_or_else(|| row.relation.clone());
-            targets.insert(source_target.id(), source_target.clone());
-            targets.insert(target.id(), target.clone());
+            targets.insert(source.id.clone());
+            targets.insert(target.id.clone());
             result.edges.push(ExpansionEdge {
-                source: source_target.id(),
-                target: target.id(),
+                source: node_id(&source),
+                target: node_id(&target),
                 kind: EntityEdgeKind::Relation {
                     relation_id: row.relation,
                     label,
                 },
             });
         }
-        let entities = targets
-            .values()
-            .filter_map(|node| node.target().cloned())
+        let targets = targets
+            .into_iter()
+            .map(EntityTarget::default_collection)
             .collect::<Vec<_>>();
-        result.nodes.extend(load_nodes(source, &entities).await?);
-        result
-            .nodes
-            .extend(targets.into_values().filter(|node| node.target().is_none()));
+        result.nodes.extend(load_nodes(source, &targets).await?);
     }
     Ok(result)
 }
@@ -166,7 +123,11 @@ mod tests {
     use semantic_data::value::Object;
     #[derive(Default)]
     struct MockGraphSource {
-        fetched: std::cell::RefCell<Vec<EntityTarget>>,
+        fetched: std::cell::RefCell<Vec<Vec<EntityTarget>>>,
+        objects: BTreeMap<dxgraph::NodeId, Object>,
+        children: Vec<Object>,
+        children_requests: std::cell::RefCell<Vec<(Vec<EntityTarget>, usize)>>,
+        relation_requests: std::cell::RefCell<Vec<(Vec<String>, usize)>>,
     }
     impl GraphSource for MockGraphSource {
         fn entities<'a>(
@@ -174,116 +135,209 @@ mod tests {
             targets: &'a [EntityTarget],
         ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>> {
             Box::pin(async move {
-                self.fetched.borrow_mut().extend_from_slice(targets);
+                self.fetched.borrow_mut().push(targets.to_vec());
                 Ok(targets
                     .iter()
-                    .map(|target| {
-                        let mut row = Object::new();
-                        row.insert("id", Value::String(target.id.clone()));
-                        row
-                    })
+                    .filter_map(|target| self.objects.get(&node_id(target)).cloned())
                     .collect())
             })
         }
         fn children<'a>(
             &'a self,
-            _: &'a [EntityTarget],
-            _: usize,
+            parents: &'a [EntityTarget],
+            limit: usize,
         ) -> LocalBoxFuture<'a, Result<Vec<Object>, String>> {
-            Box::pin(async { Ok(Vec::new()) })
+            Box::pin(async move {
+                self.children_requests
+                    .borrow_mut()
+                    .push((parents.to_vec(), limit));
+                Ok(self.children.iter().take(limit).cloned().collect())
+            })
         }
         fn relation_edges<'a>(
             &'a self,
-            _: &'a [String],
-            _: usize,
+            ids: &'a [String],
+            limit: usize,
         ) -> LocalBoxFuture<'a, Result<Vec<RelationEdgeRow>, String>> {
-            Box::pin(async {
+            Box::pin(async move {
+                self.relation_requests
+                    .borrow_mut()
+                    .push((ids.to_vec(), limit));
                 Ok(vec![
                     RelationEdgeRow {
                         relation: "friend".into(),
                         source: "root".into(),
-                        target: "missing".into(),
+                        target: "outgoing".into(),
                     },
                     RelationEdgeRow {
                         relation: "friend".into(),
                         source: "other".into(),
                         target: "root".into(),
                     },
+                    RelationEdgeRow {
+                        relation: "friend".into(),
+                        source: "root".into(),
+                        target: "missing".into(),
+                    },
                 ])
             })
         }
     }
-    #[test]
-    fn resolver_preserves_ambiguity_without_guessing_default() {
-        assert!(resolve_endpoint("a", false, None, &[]).target().is_none());
-        let known = vec![
-            EntityTarget::new(Some("people".into()), "a"),
-            EntityTarget::new(Some("files".into()), "a"),
-        ];
-        assert_eq!(resolve_endpoint("a", false, None, &known).target(), None);
-        assert_eq!(
-            resolve_endpoint("a", false, None, &known[..1])
-                .target()
-                .unwrap()
-                .collection
-                .as_deref(),
-            Some("people")
-        );
-        let relation = RelationType {
-            id: "friend".into(),
-            name: "friend".into(),
-            source_collection: "people".into(),
-            mode: semantic_data::schema::RelationMode::External,
-            indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
-            meta: Default::default(),
+    fn catalog(collections: &[&str], source_collection: &str) -> UiCatalog {
+        use semantic_db_core::catalog::{
+            LocalCollectionId, LocalRelationId, StoredCollection, StoredRelationship,
         };
-        assert_eq!(
-            resolve_endpoint("a", true, Some(&relation), &known)
-                .target()
-                .unwrap()
-                .collection
-                .as_deref(),
-            Some("people")
+        let mut snapshot = UiCatalog::empty().snapshot().clone();
+        snapshot.collections = collections
+            .iter()
+            .enumerate()
+            .map(|(index, name)| StoredCollection {
+                lid: LocalCollectionId(index),
+                name: (*name).into(),
+                kind: None,
+                integrity_mode: semantic_data::query::IntegrityMode::Permissive,
+                internal: false,
+                field_ids: Vec::new(),
+            })
+            .collect();
+        snapshot.relationships.push(StoredRelationship {
+            lid: LocalRelationId(0),
+            relationship: RelationType {
+                id: "friend".into(),
+                name: "friend".into(),
+                source_collection: source_collection.into(),
+                mode: RelationMode::External,
+                indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
+                meta: Default::default(),
+            },
+        });
+        UiCatalog::builder(snapshot)
+            .with_config(crate::ui_catalog::UiCatalogConfig::default())
+            .build()
+    }
+    fn object(target: &EntityTarget) -> (dxgraph::NodeId, Object) {
+        let mut row = Object::new();
+        row.insert("id", Value::String(target.id.clone()));
+        row.insert(
+            "semantic:title",
+            Value::String(format!("Title {}", target.id)),
         );
+        (node_id(target), row)
     }
     #[tokio::test]
-    async fn mock_source_loads_both_directions_and_keeps_unresolved() {
+    async fn relation_endpoints_use_one_default_collection_batch_including_missing() {
         let root = EntityTarget::default_collection("root");
+        let outgoing = EntityTarget::default_collection("outgoing");
+        let incoming = EntityTarget::default_collection("other");
+        let missing = EntityTarget::default_collection("missing");
         let mut graph = EntityGraphExplorer::new(
             root.clone(),
             GraphMode::Relations,
             ExplorerLimits::default(),
         );
         let request = graph.begin_expand(&node_id(&root)).unwrap();
-        let source = MockGraphSource::default();
+        let source = MockGraphSource {
+            objects: [&root, &outgoing, &incoming]
+                .into_iter()
+                .map(object)
+                .collect(),
+            ..Default::default()
+        };
+        // Catalog collection metadata does not alter entity endpoint identities.
         let result = load_expansion(
             &source,
             &request,
-            &UiCatalog::empty(),
-            std::slice::from_ref(&root),
+            &catalog(&["entities", "people"], "people"),
         )
         .await
         .unwrap();
-        // The mock would return a real object for "missing" if asked. Its id
-        // also exists in the default collection, but no such fetch is allowed.
-        assert!(
-            source
-                .fetched
-                .borrow()
-                .iter()
-                .all(|target| target.id == "root")
+        assert_eq!(
+            source.fetched.borrow().as_slice(),
+            &[vec![
+                missing.clone(),
+                incoming.clone(),
+                outgoing.clone(),
+                root.clone()
+            ]]
+        );
+        assert_eq!(
+            source.relation_requests.borrow().as_slice(),
+            &[(vec![root.id.clone()], request.limit)]
         );
         graph.apply_expansion(&request.node, result);
-        assert_eq!(graph.model().edges().count(), 2);
-        assert!(graph.model().nodes().any(|node| matches!(
-            &node.data, EntityNodeData::Ambiguous { id, .. } if id == "missing"
-        )));
+        assert_eq!(graph.model().edges().count(), 3);
+        for target in [&outgoing, &incoming] {
+            let node = graph.model().node(&node_id(target)).unwrap();
+            assert_eq!(node.data.target(), Some(target));
+            assert!(node.data.object().is_some());
+            assert!(graph.begin_expand(&node_id(target)).is_some());
+        }
+        let unresolved = graph.model().node(&node_id(&missing)).unwrap();
+        assert_eq!(unresolved.data.target(), Some(&missing));
+        assert!(unresolved.data.object().is_none());
+        let mut resolved = Object::new();
+        resolved.insert("id", Value::String(missing.id.clone()));
+        graph.set_object(&missing, resolved);
         assert!(
             graph
                 .model()
-                .node(&node_id(&EntityTarget::default_collection("missing")))
-                .is_none()
+                .node(&node_id(&missing))
+                .unwrap()
+                .data
+                .object()
+                .is_some()
         );
+        assert_eq!(graph.model().edges().count(), 3);
+        assert!(graph.is_expanded(&request.node));
+    }
+
+    #[tokio::test]
+    async fn hierarchy_children_use_default_entities_and_preserve_request_limit() {
+        let root = EntityTarget::default_collection("root");
+        let child = EntityTarget::default_collection("child");
+        let mut graph = EntityGraphExplorer::new(
+            root.clone(),
+            GraphMode::Hierarchy,
+            ExplorerLimits::default(),
+        );
+        let request = graph.begin_expand(&node_id(&root)).unwrap();
+        let source = MockGraphSource {
+            children: vec![object(&child).1],
+            ..Default::default()
+        };
+        let result = load_expansion(&source, &request, &UiCatalog::empty())
+            .await
+            .unwrap();
+        assert_eq!(
+            source.children_requests.borrow().as_slice(),
+            &[(
+                vec![EntityTarget::default_collection("root")],
+                request.limit
+            )]
+        );
+        assert_eq!(result.nodes[0].target(), Some(&child));
+        assert_eq!(result.edges[0].source, node_id(&root));
+        assert_eq!(result.edges[0].target, node_id(&child));
+        assert!(source.fetched.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn nondefault_root_does_not_attach_default_entities_with_the_same_raw_id() {
+        let root = EntityTarget::new(Some("other_collection".into()), "root");
+        let mut graph =
+            EntityGraphExplorer::new(root.clone(), GraphMode::Both, ExplorerLimits::default());
+        let request = graph.begin_expand(&node_id(&root)).unwrap();
+        let source = MockGraphSource {
+            children: vec![object(&EntityTarget::default_collection("child")).1],
+            ..Default::default()
+        };
+        let result = load_expansion(&source, &request, &UiCatalog::empty())
+            .await
+            .unwrap();
+        assert!(result.nodes.is_empty());
+        assert!(result.edges.is_empty());
+        assert!(source.children_requests.borrow().is_empty());
+        assert!(source.fetched.borrow().is_empty());
     }
 
     #[test]

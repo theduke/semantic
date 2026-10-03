@@ -151,8 +151,8 @@ impl<N, E> GraphModel<N, E> {
     pub fn node(&self, id: &NodeId) -> Option<&GraphNode<N>> {
         self.nodes.get(id)
     }
-    pub fn node_mut(&mut self, id: &NodeId) -> Option<&mut GraphNode<N>> {
-        self.nodes.get_mut(id)
+    pub fn node_data_mut(&mut self, id: &NodeId) -> Option<&mut N> {
+        self.nodes.get_mut(id).map(|node| &mut node.data)
     }
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = &GraphNode<N>> {
         self.nodes.values()
@@ -165,8 +165,8 @@ impl<N, E> GraphModel<N, E> {
         self.edges.get(id)
     }
 
-    pub fn edge_mut(&mut self, id: &EdgeId) -> Option<&mut GraphEdge<E>> {
-        self.edges.get_mut(id)
+    pub fn edge_style_mut(&mut self, id: &EdgeId) -> Option<&mut EdgeStyle> {
+        self.edges.get_mut(id).map(|edge| &mut edge.style)
     }
 
     pub fn contains_edge(&self, id: &EdgeId) -> bool {
@@ -191,16 +191,38 @@ impl<N, E> GraphModel<N, E> {
         neighbors.into_iter()
     }
     pub fn set_position(&mut self, id: &NodeId, position: Point) -> Result<(), GraphError> {
-        self.node_mut(id)
+        self.nodes
+            .get_mut(id)
             .ok_or_else(|| GraphError::UnknownNode(id.clone()))?
             .position = Some(position);
         Ok(())
     }
     pub fn set_pinned(&mut self, id: &NodeId, pinned: bool) -> Result<(), GraphError> {
-        self.node_mut(id)
+        self.nodes
+            .get_mut(id)
             .ok_or_else(|| GraphError::UnknownNode(id.clone()))?
             .pinned = pinned;
         Ok(())
+    }
+
+    pub fn set_layout_parent(
+        &mut self,
+        id: &NodeId,
+        parent: Option<NodeId>,
+    ) -> Result<(), GraphError> {
+        self.nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?
+            .layout_parent = parent;
+        Ok(())
+    }
+
+    /// Return every node to automatic layout without changing graph topology.
+    pub fn reset_positions(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.pinned = false;
+            node.position = None;
+        }
     }
     pub fn retain_nodes(&mut self, mut predicate: impl FnMut(&GraphNode<N>) -> bool) {
         let removed: Vec<_> = self
@@ -247,13 +269,50 @@ mod tests {
             vec![NodeId::from("b"), NodeId::from("c")]
         );
         assert!(model.contains_edge(&"ab".into()));
-        model.edge_mut(&"ab".into()).unwrap().label = Some("label".into());
-        assert_eq!(
-            model.edge(&"ab".into()).unwrap().label.as_deref(),
-            Some("label")
-        );
+        model.edge_style_mut(&"ab".into()).unwrap().dashed = true;
+        assert!(model.edge(&"ab".into()).unwrap().style.dashed);
+        assert_eq!(model.edge(&"ab".into()).unwrap().source, NodeId::from("a"));
+        assert_eq!(model.edge(&"ab".into()).unwrap().target, NodeId::from("b"));
         assert!(model.edge(&"unknown".into()).is_none());
     }
+    #[test]
+    fn payload_and_position_updates_preserve_node_identity_and_topology() {
+        let mut model = GraphModel::default();
+        model.insert_node(GraphNode::new("a", "old")).unwrap();
+        model.insert_node(GraphNode::new("b", "other")).unwrap();
+        model
+            .insert_edge(GraphEdge::new("ab", "a", "b", ()))
+            .unwrap();
+        *model.node_data_mut(&"a".into()).unwrap() = "new";
+        model
+            .set_layout_parent(&"b".into(), Some("a".into()))
+            .unwrap();
+        for id in ["a", "b"] {
+            model
+                .set_position(&id.into(), Point::new(42.0, 24.0))
+                .unwrap();
+            model.set_pinned(&id.into(), true).unwrap();
+        }
+        model.reset_positions();
+        assert_eq!(model.node(&"a".into()).unwrap().id, NodeId::from("a"));
+        assert_eq!(model.node(&"a".into()).unwrap().data, "new");
+        assert_eq!(
+            model.node(&"b".into()).unwrap().layout_parent,
+            Some("a".into())
+        );
+        assert!(
+            model
+                .nodes()
+                .all(|node| !node.pinned && node.position.is_none())
+        );
+        assert_eq!(model.edge(&"ab".into()).unwrap().source, NodeId::from("a"));
+        assert_eq!(model.edge(&"ab".into()).unwrap().target, NodeId::from("b"));
+        assert_eq!(
+            model.set_layout_parent(&"missing".into(), None),
+            Err(GraphError::UnknownNode("missing".into()))
+        );
+    }
+
     #[test]
     fn mutation_invariants() {
         let mut graph = GraphModel::<(), ()>::default();
@@ -293,7 +352,9 @@ mod tests {
             graph.bounds(&IndexMap::new()).unwrap().size,
             Size::new(160.0, 64.0)
         );
-        graph.node_mut(&"b".into()).unwrap().layout_parent = Some("a".into());
+        graph
+            .set_layout_parent(&"b".into(), Some("a".into()))
+            .unwrap();
         graph.remove_node(&"a".into());
         assert_eq!(graph.edges().count(), 0);
         assert_eq!(graph.node(&"b".into()).unwrap().layout_parent, None);
