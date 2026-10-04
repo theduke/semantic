@@ -425,7 +425,7 @@ fn contains_unsupported(expr: &Expr) -> bool {
 }
 
 /// Top-level conjuncts of `predicate`, flattened like the logical passes do.
-fn conjuncts(predicate: Expr) -> Vec<Expr> {
+pub(crate) fn conjuncts(predicate: Expr) -> Vec<Expr> {
     let mut out = Vec::new();
     collect_binary_terms(flatten_boolean_expr(predicate), BinaryOp::And, &mut out);
     out

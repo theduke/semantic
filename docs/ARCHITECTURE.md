@@ -18,12 +18,26 @@ implementations. Concrete backend crates include `semantic_db_kv`,
 `semantic_db_redb`, and `semantic_db_postgres`; test helpers live in
 `semantic_db_test`, and `semantic_db_cli` provides command-line access.
 
+The federation engine in `semantic_db_core` plans reads over `QuerySource`
+collections using an in-memory overlay catalog. Each source negotiates its
+filter, ordering and pagination guarantees; the shared executor applies the
+remaining query operations and combines local and virtual rows. Overlay schema
+definitions and collections never enter the persisted database catalog.
+
 ## App Layer
 
 `semantic_app` is the standalone application layer. It owns principals,
 sessions, request contexts, database scope management, provider-based database
 opening, command registration, and built-in app/database commands. It is
 transport-independent and can be used directly by non-RPC frontends or tools.
+
+`semantic_vdb` supplies the plugin-author `VirtualDatabase` API and its
+`semantic.vdb/v1` interface adapter, plugin-bound query sources, row validation,
+and per-scope runtime schema cache. The app routes reads that reference a virtual
+collection through federation while local-only requests retain their original
+path. Virtual collections are read-only, resolved lazily from plugin activations,
+and surfaced through separate VDB list, schema and explain commands. See the
+[plugin virtual database guide](plugin-virtual-databases.md).
 
 ## RPC Layer
 

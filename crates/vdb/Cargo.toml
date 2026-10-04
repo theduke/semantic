@@ -1,0 +1,25 @@
+[package]
+name = "semantic_vdb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+testing = []
+
+[dependencies]
+semantic_data.workspace = true
+semantic_db_core = { path = "../db_core" }
+semantic_plugin = { path = "../plugin" }
+semantic_rpc = { path = "../rpc" }
+semantic_rpc_core = { path = "../rpc_core" }
+async-trait = "0.1.89"
+async-stream = "0.3.6"
+futures-util = "0.3.31"
+tokio = { workspace = true, features = ["sync", "macros", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-std", "test-util"] }
+semantic_jobs = { path = "../jobs" }
+semantic_rpc = { path = "../rpc", features = ["plugin-stdio"] }
+serde_json.workspace = true

@@ -5,6 +5,7 @@ pub mod components;
 mod navigation_guard;
 mod query_ast;
 pub mod views;
+mod virtual_collections;
 
 #[cfg(feature = "desktop")]
 pub use app::launch_with_client_file_api_and_config;

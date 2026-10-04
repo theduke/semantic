@@ -1,8 +1,10 @@
 mod aggregate;
+mod join_batch;
 mod sort;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::Hash;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::{
@@ -146,6 +148,24 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
             )
         }))
         .boxed()
+    }
+
+    /// Opt in to bounded outer-row batches for inner equality joins.
+    /// Local sources retain their existing many-lookup behavior by default.
+    fn index_lookup_batch_size(&self, _source: &SourceRef) -> Option<NonZeroUsize> {
+        None
+    }
+
+    /// Probe one bounded key set. The default preserves any specialized
+    /// many-lookup implementation, including embedded index ID deduplication.
+    fn index_lookup_batch_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        values: Vec<Value>,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        self.index_lookup_many_stream(source, field, values, residual_predicate)
     }
 
     /// Rows of an index scan: exactly the rows of `scan.source` matching
@@ -999,6 +1019,17 @@ fn execute_index_nested_loop_join_stream(
     options: ExecutionOptions,
     metrics: OperatorMetrics,
 ) -> RecordBatchStream<'_> {
+    if join.join_type == JoinType::Inner
+        && matches!(join.condition, PhysicalJoinCondition::Eq { .. })
+        && let Some(size) = join
+            .index_probe
+            .as_ref()
+            .and_then(|probe| source.index_lookup_batch_size(&probe.source))
+    {
+        return join_batch::execute_batched_index_join(
+            join, source, context, options, metrics, size,
+        );
+    }
     stream::once(async move {
         let left_rows = collect_dyn_stream(execute_physical_dyn_stream(
             *join.left.clone(),
@@ -1438,6 +1469,21 @@ impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
     ) -> SendableRecordBatchStream {
         self.inner
             .index_lookup_many_stream(source, field, values, residual_predicate)
+    }
+
+    fn index_lookup_batch_size(&self, source: &SourceRef) -> Option<NonZeroUsize> {
+        self.inner.index_lookup_batch_size(source)
+    }
+
+    fn index_lookup_batch_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        values: Vec<Value>,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        self.inner
+            .index_lookup_batch_stream(source, field, values, residual_predicate)
     }
 
     fn index_range_stream(&self, scan: PhysicalIndexScan) -> SendableRecordBatchStream {
@@ -3000,6 +3046,7 @@ mod tests {
                 collection_id: None,
                 binding: None,
                 backend_tag: None,
+                occurrence_id: None,
             },
             FieldRef::Path(FieldPath::from_fields(["id"])),
             Value::I64(7),
@@ -3021,6 +3068,7 @@ mod tests {
                         collection_id: None,
                         binding: None,
                         backend_tag: None,
+                        occurrence_id: None,
                     },
                 }),
                 Arc::new(EmptyBatchSource),
@@ -3046,6 +3094,7 @@ mod tests {
                             collection_id: None,
                             binding: None,
                             backend_tag: None,
+                            occurrence_id: None,
                         },
                     })),
                     predicate: Expr::Binary {
@@ -3091,6 +3140,7 @@ mod tests {
                     collection_id: None,
                     binding: Some("i".to_string()),
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             projection: vec![PhysicalProjectionField {
@@ -3392,6 +3442,7 @@ mod tests {
             collection_id: None,
             binding: None,
             backend_tag: None,
+            occurrence_id: None,
         };
 
         let filtered = run_async(execute_physical_plan_collect(
@@ -3445,6 +3496,7 @@ mod tests {
             collection_id: None,
             binding: Some("r".to_string()),
             backend_tag: None,
+            occurrence_id: None,
         };
         let plan = PhysicalPlan::Join(PhysicalJoinPlan {
             left: Box::new(PhysicalPlan::Values { values: left_rows }),
@@ -3520,6 +3572,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             right: Box::new(PhysicalPlan::Source(PhysicalSource::Scan {
@@ -3528,6 +3581,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             join_type: JoinType::Inner,
@@ -3571,6 +3625,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })
         };
@@ -3702,6 +3757,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             subquery: Box::new(PhysicalPlan::Source(PhysicalSource::FilteredScan {
@@ -3710,6 +3766,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
                 predicate: Expr::Binary {
                     op: semantic_data::query::BinaryOp::Eq,
@@ -3746,6 +3803,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             projection: vec![PhysicalProjectionField {
@@ -3798,6 +3856,7 @@ mod tests {
                     collection_id: None,
                     binding: None,
                     backend_tag: None,
+                    occurrence_id: None,
                 },
             })),
             predicate: Expr::Binary {

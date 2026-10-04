@@ -48,17 +48,16 @@ impl AppRequestContext {
         &self,
         scope_id: Option<DbScopeId>,
     ) -> std::result::Result<Arc<dyn SemanticDb>, AppError> {
-        let session_scope = match (&scope_id, &self.request_scope, &self.session) {
-            (Some(_), _, _) => None,
-            (None, Some(_), _) => None,
-            (None, None, Some(session)) => session.current_scope().await,
-            (None, None, None) => None,
-        };
-        let requested_scope = scope_id.or_else(|| self.request_scope.clone());
-        self.app
+        let scope_id = self.resolve_scope_id(scope_id).await?;
+        let inner = self
+            .app
             .scopes()
-            .resolve_scope(&self.principal, requested_scope, session_scope)
-            .await
+            .resolve_scope(&self.principal, Some(scope_id.clone()), None)
+            .await?;
+        Ok(Arc::new(crate::vdb::FederatedScopeDb::new(
+            inner,
+            crate::vdb::VdbAccess::new(self.app.clone(), self.principal.clone(), scope_id),
+        )))
     }
 
     pub(crate) async fn resolve_object_store(

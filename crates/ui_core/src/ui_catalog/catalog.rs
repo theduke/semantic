@@ -77,6 +77,32 @@ impl UiCatalog {
         &self.inner.snapshot
     }
 
+    /// Build a read-only rendering catalog without changing the local catalog.
+    pub fn with_virtual_schema(
+        &self,
+        collection: &str,
+        schema: &semantic_data::vdb::DatabaseSchema,
+    ) -> Result<Self, String> {
+        use semantic_db_core::catalog::Catalog;
+        let local = Catalog::from_storage_snapshot(self.snapshot().clone())
+            .map_err(|error| error.to_string())?;
+        let ddl = schema.to_ddl_batch();
+        let overlay = semantic_db_core::virtual_overlay(&local, &[(collection, &ddl)])?;
+        let rebuilt = Self::from_snapshot(overlay.to_storage_snapshot());
+        let mut catalog = self.clone();
+        let inner = Rc::make_mut(&mut catalog.inner);
+        inner.snapshot = rebuilt.inner.snapshot.clone();
+        inner.attributes_by_id = rebuilt.inner.attributes_by_id.clone();
+        inner.attributes_by_name = rebuilt.inner.attributes_by_name.clone();
+        inner.classes_by_id = rebuilt.inner.classes_by_id.clone();
+        inner.classes_by_name = rebuilt.inner.classes_by_name.clone();
+        inner.collections_by_name = rebuilt.inner.collections_by_name.clone();
+        inner.entity_actions.clear();
+        inner.entity_navigation = EntityNavigation::default();
+        inner.render_settings.enable_label_editor = false;
+        Ok(catalog)
+    }
+
     pub fn render_registry(&self) -> &RenderRegistry {
         &self.inner.render_registry
     }
@@ -390,6 +416,100 @@ mod tests {
         assert_eq!(
             catalog.listing_excluded_type_values(false),
             vec!["example:internal", "internal"]
+        );
+    }
+
+    #[test]
+    fn virtual_rendering_schema_is_isolated_and_read_only() {
+        use semantic_data::schema::{
+            AttributeRef, AttributeType, ClassAttribute, Meta, StringType, Type, TypeDef, TypeKind,
+        };
+        let local = semantic_db_core::catalog::Catalog::new();
+        let mut catalog = UiCatalog::from_snapshot(local.to_storage_snapshot());
+        catalog.render_settings_mut().file_api_prefix = "/custom/files".into();
+        let mut class = semantic_data::filestore::file_class();
+        class.id = "virtual:Item".into();
+        class.name = "VirtualItem".into();
+        class.inherits = None;
+        class.extends.clear();
+        class.constraints.clear();
+        class.attributes = std::collections::BTreeMap::from([(
+            "virtual:title".into(),
+            ClassAttribute {
+                attribute: AttributeRef {
+                    id: "virtual:title".into(),
+                },
+                required: true,
+                ui_order: None,
+                computed: None,
+                default: None,
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        )]);
+        class.meta.title = Some("Virtual item".into());
+        let string = Type::new(TypeKind::String(StringType {
+            format: None,
+            normalization: None,
+        }));
+        let schema = semantic_data::vdb::DatabaseSchema {
+            types: vec![TypeDef {
+                name: "virtual:Text".into(),
+                module: None,
+                params: vec![],
+                visibility: semantic_data::schema::Visibility::Public,
+                ty: string.clone(),
+                meta: Meta::default(),
+            }],
+            attributes: vec![AttributeType {
+                id: "virtual:title".into(),
+                name: "VirtualTitle".into(),
+                ty: string,
+                constraints: vec![],
+                meta: Meta {
+                    title: Some("Virtual title".into()),
+                    ..Meta::default()
+                },
+            }],
+            classes: vec![class],
+            relationships: vec![],
+        };
+        let before = catalog.snapshot().clone();
+        let virtual_catalog = catalog.with_virtual_schema("fx", &schema).unwrap();
+        assert_eq!(catalog.snapshot(), &before);
+        assert!(catalog.attribute_by_id("virtual:title").is_none());
+        assert_eq!(
+            virtual_catalog.attribute_title("virtual:title"),
+            "Virtual title"
+        );
+        assert_eq!(
+            virtual_catalog
+                .class_by_id("virtual:Item")
+                .unwrap()
+                .meta
+                .title
+                .as_deref(),
+            Some("Virtual item")
+        );
+        assert!(
+            virtual_catalog
+                .snapshot()
+                .type_defs
+                .iter()
+                .any(|ty| ty.type_def.name == "virtual:Text")
+        );
+        assert_eq!(
+            virtual_catalog.render_settings().file_api_prefix,
+            "/custom/files"
+        );
+        assert!(catalog.render_settings().enable_label_editor);
+        assert!(!virtual_catalog.render_settings().enable_label_editor);
+        assert!(virtual_catalog.entity_actions().is_empty());
+        assert!(virtual_catalog.entity_navigation().href.is_none());
+        assert!(
+            virtual_catalog
+                .with_virtual_schema("other", &schema)
+                .is_err()
         );
     }
 

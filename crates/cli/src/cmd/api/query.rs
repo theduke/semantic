@@ -83,7 +83,7 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     args.output.print(&response)
 }
 
-fn query_payload(
+pub(super) fn query_payload(
     query: &str,
     format: QueryFormat,
     params: Option<&str>,
@@ -143,7 +143,7 @@ fn encode_ast(ast: &Value, pretty: bool) -> Result<String, CliError> {
     })
 }
 
-fn read_query(args: &QuerySource) -> std::result::Result<String, CliError> {
+pub(super) fn read_query(args: &QuerySource) -> std::result::Result<String, CliError> {
     if let Some(query) = &args.query {
         return Ok(query.clone());
     }

@@ -985,6 +985,7 @@ impl<'a> RefPathJoinLifter<'a> {
                     collection_id: right_source.collection_id,
                     binding: Some(right_binding.clone()),
                     backend_tag: None,
+                    occurrence_id: None,
                 },
                 pushed_predicate: ref_target_type_predicate(right_class),
             };
@@ -2158,6 +2159,7 @@ mod tests {
                 collection_id: None,
                 binding: Some(binding.to_string()),
                 backend_tag: None,
+                occurrence_id: None,
             },
             pushed_predicate: None,
         }

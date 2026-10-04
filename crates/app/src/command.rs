@@ -71,6 +71,17 @@ pub struct SemanticAppBuilder {
 }
 
 impl SemanticApp {
+    pub(crate) fn has_native_virtual_databases(&self) -> bool {
+        self.inner.plugins.manifests().iter().any(|manifest| {
+            manifest.exports.iter().any(|export| {
+                export.interface.package == semantic_vdb::PACKAGE_NAME
+                    && export.interface.module == semantic_vdb::MODULE_NAME
+                    && export.interface.contract.is_none()
+                    && export.interface.name == semantic_vdb::INTERFACE_NAME
+            })
+        })
+    }
+
     pub async fn plugins(
         &self,
         principal: &crate::Principal,
@@ -337,6 +348,7 @@ impl SemanticAppBuilder {
         self.registry.register(FileAnalyzeCommand)?;
         crate::jobs::register_commands(&mut self.registry)?;
         crate::import_commands::register(&mut self.registry)?;
+        crate::vdb_commands::register(&mut self.registry)?;
         crate::command_introspection::register(&mut self.registry)?;
         crate::capabilities::register(&mut self.registry)?;
         Ok(self)
@@ -385,6 +397,7 @@ impl SemanticAppBuilder {
         self.packages.push(semantic_data::filestore::package());
         self.packages.push(import_package);
         self.packages.push(semantic_data::bundles::query::package());
+        self.packages.push(semantic_data::vdb::package());
         self.packages.extend(packages);
         let scopes = ScopeManager::with_packages(self.providers, self.idle_ttl, self.packages);
         let object_stores = ObjectStoreManager::new(Vec::new());
@@ -674,7 +687,7 @@ impl<T: FromValue> FromValue for CommandDictionary<T> {
 }
 
 /// An untagged query AST or the existing query text input.
-enum QueryArgument {
+pub(crate) enum QueryArgument {
     Ast(semantic_data::query::Query),
     Text(String),
 }

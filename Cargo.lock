@@ -8851,6 +8851,7 @@ dependencies = [
  "semantic_plugin",
  "semantic_rpc",
  "semantic_rpc_core",
+ "semantic_vdb",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -9335,6 +9336,23 @@ dependencies = [
  "tokio",
  "tracing",
  "web-sys",
+]
+
+[[package]]
+name = "semantic_vdb"
+version = "0.0.1"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "futures-util",
+ "semantic_data",
+ "semantic_db_core",
+ "semantic_jobs",
+ "semantic_plugin",
+ "semantic_rpc",
+ "semantic_rpc_core",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
