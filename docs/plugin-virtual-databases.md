@@ -101,10 +101,11 @@ scan plan.
 Queries and schema requests prepare only their referenced virtual collections;
 list prepares all exports concurrently. Descriptions are shared across
 concurrent snapshots and retained through local catalog changes, which only
-revalidate the cached schema. Transient invocation failures have a five-second
-retry backoff. Permanent describe/descriptor-codec failures remain cached until
-generation replacement. Overlay validation failures are rechecked when the
-local catalog changes; explicit revision invalidation refreshes descriptions.
+revalidate the cached schema. Every describe invocation failure has a five-second
+retry backoff, regardless of its error code. Invalid descriptor output shapes
+and decoding failures remain cached until generation replacement. Overlay
+validation failures are rechecked when the local catalog changes; explicit
+revision invalidation refreshes descriptions.
 If negotiation reports
 a revision different from the query's snapshot, the app invalidates that
 **observed old revision**, refreshes `describe`, and retries the query once. An

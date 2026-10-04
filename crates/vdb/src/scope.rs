@@ -98,8 +98,8 @@ impl ScopeVdbs {
     }
 
     /// Describe all active exports concurrently for a complete listing.
-    /// Descriptors survive local catalog changes; transient invocation failures
-    /// retry after five seconds, while permanent failures last for the generation.
+    /// Descriptors survive local catalog changes. Invocation failures retry after
+    /// five seconds; malformed descriptor responses last for the generation.
     pub async fn snapshot(
         &self,
         bindings: Vec<PluginBinding>,
@@ -305,19 +305,14 @@ fn key(binding: &PluginBinding) -> VdbKey {
     )
 }
 
-// Descriptions are independent of the local catalog. Transient invocation
-// failures back off; permanent failures stay cached for the generation.
+// Descriptions are independent of the local catalog. Invocation failures back
+// off; malformed descriptor responses stay cached for the generation.
 async fn describe(binding: &PluginBinding) -> Description {
     let output = match binding.invoke("describe", vec![]).await {
         Ok(output) => output,
         Err(error) => {
             return Description {
-                retry_at: (crate::source::is_unavailable(&error.code)
-                    || matches!(
-                        error.code.as_str(),
-                        "temporary_failure" | "timeout" | "rate_limited" | "cancelled"
-                    ))
-                .then(|| Instant::now() + DESCRIBE_RETRY_BACKOFF),
+                retry_at: Some(Instant::now() + DESCRIBE_RETRY_BACKOFF),
                 result: Err(format!("{}: {}", error.code, error.message)),
             };
         }
@@ -778,10 +773,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn permanent_describe_failure_waits_for_generation_replacement() {
+    async fn cached_invalid_descriptor_waits_for_generation_replacement() {
         let database = TestDb::new();
-        database.fail_next.store(true, Ordering::SeqCst);
-        *database.failure_code.lock().unwrap() = "invalid_schema";
+        database.descriptor.lock().unwrap().schema.classes[0]
+            .attributes
+            .insert("missing".into(), class_attribute("missing:attribute"));
         let (runtime, jobs, mut activation) = runtime(database.clone(), &["database"]).await;
         let scope = ScopeVdbs::new();
         let local = local();
@@ -792,8 +788,9 @@ mod tests {
                     .await,
                 "fx"
             )
-            .contains("invalid_schema")
+            .contains("missing:attribute")
         );
+        *database.descriptor.lock().unwrap() = descriptor();
         tokio::time::advance(Duration::from_secs(60)).await;
         assert!(
             scope
@@ -819,7 +816,12 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn invocation_failure_backs_off_then_recovers() {
-        for code in ["temporary_failure", "cancelled"] {
+        for code in [
+            "temporary_failure",
+            "cancelled",
+            "network_error",
+            "invalid_schema",
+        ] {
             let database = TestDb::new();
             database.fail_next.store(true, Ordering::SeqCst);
             *database.failure_code.lock().unwrap() = code;
@@ -840,7 +842,16 @@ mod tests {
                 .await;
             assert!(reason(&set, "fx").contains("retry describe"));
             assert_eq!(database.calls.load(Ordering::SeqCst), 1);
-            tokio::time::advance(Duration::from_secs(5)).await;
+            tokio::time::advance(Duration::from_secs(4)).await;
+            assert!(
+                scope
+                    .snapshot(runtime.bindings().await, local.clone())
+                    .await
+                    .get_available("fx")
+                    .is_none()
+            );
+            assert_eq!(database.calls.load(Ordering::SeqCst), 1);
+            tokio::time::advance(Duration::from_secs(1)).await;
             assert!(
                 scope
                     .snapshot(runtime.bindings().await, local)

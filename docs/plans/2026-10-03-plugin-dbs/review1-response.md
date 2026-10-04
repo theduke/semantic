@@ -4,6 +4,10 @@ The reviewer input in `review1.md` is unchanged. This follow-up fixes the
 confirmed correctness and availability problems and removes duplicate work,
 while retaining the existing backend and plugin contracts.
 
+The later [review 2 follow-up](review2-response.md) corrects the failure policy:
+every describe invocation error retries after the same backoff; only invalid
+descriptor output shapes and decoding failures remain generation-cached.
+
 ## Changes
 
 | Review item | Resolution |
