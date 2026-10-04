@@ -18,6 +18,13 @@ categories = []
 
 version = "0.0.1"
 
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [workspace.dependencies]
 
 # Repo-local
